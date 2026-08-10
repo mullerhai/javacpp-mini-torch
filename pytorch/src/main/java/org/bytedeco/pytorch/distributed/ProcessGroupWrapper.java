@@ -83,6 +83,7 @@ public final class ProcessGroupWrapper implements AutoCloseable {
     private final boolean debugWrapped;
     private final DistributedStore store;
     private final Options options;
+    private volatile boolean closed;
 
     public ProcessGroupWrapper(Options options, int rank, int worldSize, DistributedStore store) {
         Objects.requireNonNull(options, "options");
@@ -643,6 +644,26 @@ public final class ProcessGroupWrapper implements AutoCloseable {
     public Backend getBackend() { return backend; }
 
     /**
+     * Initialize the process group (called automatically by constructor).
+     * Use this for explicit initialization control.
+     */
+    public void init() {
+        // Constructor handles all initialization
+        // This method exists for API symmetry with destroy()
+        System.out.printf(
+                "[Rank %d] ProcessGroupWrapper.init() called%n",
+                rank);
+    }
+
+    /**
+     * Destroy and release all resources.
+     * Alias for {@link #close()}.
+     */
+    public void destroy() {
+        close();
+    }
+
+    /**
      * c10d {@link ProcessGroup} container — required by {@link Reducer}.
      * May lack a successfully installed backend if {@code setBackend} failed;
      * trainers must handle FALLBACK.
@@ -665,26 +686,35 @@ public final class ProcessGroupWrapper implements AutoCloseable {
 
     @Override
     public void close() {
+        if (closed) return;
+        closed = true;
+
         try {
             if (collectiveBackend != null
                     && ("nccl".equalsIgnoreCase(backendName) || backendName.startsWith("nccl"))) {
                 collectiveBackend.waitForPendingWorks();
             }
-        } catch (Throwable ignored) {
+        } catch (Throwable t) {
+            System.err.println("[ProcessGroupWrapper] waitForPendingWorks failed: " + t.getMessage());
         }
         try {
             if (collectiveBackend != null) {
                 collectiveBackend.shutdown();
             }
-        } catch (Throwable ignored) {
+        } catch (Throwable t) {
+            System.err.println("[ProcessGroupWrapper] backend.shutdown failed: " + t.getMessage());
         }
         try {
             if (processGroup != null) {
                 processGroup.shutdown();
             }
-        } catch (Throwable ignored) {
+        } catch (Throwable t) {
+            System.err.println("[ProcessGroupWrapper] processGroup.shutdown failed: " + t.getMessage());
         }
         INSTANCES.remove(this);
+        if (debugWrapped) {
+            System.out.printf("[Rank %d] ProcessGroupWrapper destroyed%n", rank);
+        }
     }
 
     @Override

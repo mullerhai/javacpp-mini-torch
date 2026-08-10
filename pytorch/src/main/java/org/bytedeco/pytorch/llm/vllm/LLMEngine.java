@@ -58,7 +58,14 @@ public final class LLMEngine implements AutoCloseable {
 
     private final Map<Long, Sequence> activeSeqs = new HashMap<>();
     private final List<RequestOutput> finishedOutputs = new ArrayList<>();
-    private boolean closed;
+    private volatile boolean closed;
+
+    // Performance metrics
+    private long totalStepTimeMs;
+    private long totalPrefillTimeMs;
+    private long totalDecodeTimeMs;
+    private long totalSchedulingTimeMs;
+    private int totalSteps;
 
     public LLMEngine(EngineConfig config, ModelRunner runner, CacheEngine cache,
                    FastTokenizer tokenizer) {
@@ -108,9 +115,11 @@ public final class LLMEngine implements AutoCloseable {
         if (!hasPending()) return;
 
         long stepStart = System.currentTimeMillis();
+        long schedulingStart = stepStart;
 
         // 1. Schedule (also harvests seqs finished on a prior step)
         SchedulerOutput sched = scheduler.schedule();
+        long schedulingTime = System.currentTimeMillis() - schedulingStart;
 
         // Always free previously-finished seqs, even when this step has no new work.
         // Otherwise generateAll() can hang: last sample marks FINISHED, next schedule
@@ -127,6 +136,9 @@ public final class LLMEngine implements AutoCloseable {
         }
         if (!sched.hasWork()) {
             long stepMs = System.currentTimeMillis() - stepStart;
+            totalStepTimeMs += stepMs;
+            totalSchedulingTimeMs += schedulingTime;
+            totalSteps++;
             metrics.recordStep(stepMs);
             return;
         }
@@ -138,9 +150,12 @@ public final class LLMEngine implements AutoCloseable {
         for (int i = 0; i < allSeqs.size(); i++) cacheIds[i] = allSeqs.get(i).cacheSeqId();
 
         // 3. Forward (prefill + decode sequentially per seq)
+        long prefillStart = System.currentTimeMillis();
         List<Tensor> logitsList = runner.forwardBatch(sched.prefillSeqs, sched.decodeSeqs, cacheIds);
+        long prefillTime = System.currentTimeMillis() - prefillStart;
 
         // 4. Sample
+        long decodeStart = System.currentTimeMillis();
         int li = 0;
         for (Sequence seq : sched.prefillSeqs) {
             if (!seq.isFinished()) {
@@ -163,8 +178,14 @@ public final class LLMEngine implements AutoCloseable {
                 li++;
             }
         }
+        long decodeTime = System.currentTimeMillis() - decodeStart;
 
         long stepMs = System.currentTimeMillis() - stepStart;
+        totalStepTimeMs += stepMs;
+        totalPrefillTimeMs += prefillTime;
+        totalDecodeTimeMs += decodeTime;
+        totalSchedulingTimeMs += schedulingTime;
+        totalSteps++;
         metrics.recordStep(stepMs);
     }
 
@@ -197,7 +218,95 @@ public final class LLMEngine implements AutoCloseable {
     public void close() {
         if (closed) return;
         closed = true;
+
+        // Abort all pending requests
+        for (Long requestId : new ArrayList<>(activeSeqs.keySet())) {
+            abortRequest(requestId);
+        }
+
+        // Close sub-components
+        try { scheduler.close(); } catch (Throwable ignored) {}
         try { runner.close(); } catch (Throwable ignored) {}
         try { cache.close(); } catch (Throwable ignored) {}
+
+        // Print final stats
+        System.out.printf(
+                "[LLMEngine] Closed: totalSteps=%d, totalTime=%.2fs, " +
+                "prefillTime=%.2fs, decodeTime=%.2fs, schedulingTime=%.2fs%n",
+                totalSteps, totalStepTimeMs / 1000.0,
+                totalPrefillTimeMs / 1000.0, totalDecodeTimeMs / 1000.0,
+                totalSchedulingTimeMs / 1000.0);
+    }
+
+    /**
+     * Check if engine is closed.
+     */
+    public boolean isClosed() { return closed; }
+
+    /**
+     * Get engine statistics.
+     */
+    public EngineStats getStats() {
+        return new EngineStats(
+                totalSteps, totalStepTimeMs, totalPrefillTimeMs,
+                totalDecodeTimeMs, totalSchedulingTimeMs,
+                metrics.numRequests.longValue(),
+                metrics.numFinished.longValue(),
+                metrics.numTokens.longValue(),
+                metrics.numPrefillTokens.longValue(),
+                metrics.numDecodeTokens.longValue()
+        );
+    }
+
+    /**
+     * Engine performance statistics.
+     */
+    public static final class EngineStats {
+        public final int totalSteps;
+        public final long totalStepTimeMs;
+        public final long totalPrefillTimeMs;
+        public final long totalDecodeTimeMs;
+        public final long totalSchedulingTimeMs;
+        public final long totalRequests;
+        public final long totalFinished;
+        public final long totalTokens;
+        public final long totalPrefillTokens;
+        public final long totalDecodeTokens;
+
+        public EngineStats(int totalSteps, long totalStepTimeMs, long totalPrefillTimeMs,
+                         long totalDecodeTimeMs, long totalSchedulingTimeMs,
+                         long totalRequests, long totalFinished,
+                         long totalTokens, long totalPrefillTokens, long totalDecodeTokens) {
+            this.totalSteps = totalSteps;
+            this.totalStepTimeMs = totalStepTimeMs;
+            this.totalPrefillTimeMs = totalPrefillTimeMs;
+            this.totalDecodeTimeMs = totalDecodeTimeMs;
+            this.totalSchedulingTimeMs = totalSchedulingTimeMs;
+            this.totalRequests = totalRequests;
+            this.totalFinished = totalFinished;
+            this.totalTokens = totalTokens;
+            this.totalPrefillTokens = totalPrefillTokens;
+            this.totalDecodeTokens = totalDecodeTokens;
+        }
+
+        public double avgStepTimeMs() {
+            return totalSteps > 0 ? (double) totalStepTimeMs / totalSteps : 0;
+        }
+
+        public double avgThroughputTokensPerSec() {
+            return totalStepTimeMs > 0 ? totalTokens * 1000.0 / totalStepTimeMs : 0;
+        }
+
+        @Override
+        public String toString() {
+            return String.format(
+                    "EngineStats{steps=%d, requests=%d, finished=%d, " +
+                    "tokens=%d (prefill=%d, decode=%d), " +
+                    "avgStepTime=%.2fms, throughput=%.1f tok/s",
+                    totalSteps, totalRequests, totalFinished,
+                    totalTokens, totalPrefillTokens, totalDecodeTokens,
+                    avgStepTimeMs(), avgThroughputTokensPerSec()
+            );
+        }
     }
 }

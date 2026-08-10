@@ -33,7 +33,7 @@ import org.bytedeco.pytorch.distributed.NativeFSDPTrainer;
 import org.bytedeco.pytorch.distributed.ProcessGroupWrapper;
 import org.bytedeco.pytorch.nn.Module;
 import org.bytedeco.pytorch.optim.Optimizer;
-import org.bytedeco.pytorch.quantizer.AutocastContext;
+import org.bytedeco.pytorch.amp.AutocastContext;
 import org.bytedeco.pytorch.llm.accelerate.plugins.DeepSpeedPlugin;
 import org.bytedeco.pytorch.llm.accelerate.plugins.FullyShardedDataParallelPlugin;
 import org.bytedeco.pytorch.llm.accelerate.utils.MultiProcessLauncher;
@@ -79,7 +79,7 @@ public final class Accelerator implements AutoCloseable {
 
     static { Loader.load(org.bytedeco.pytorch.presets.torch.class); }
 
-    public static final String VERSION = "2.0";
+    public static final String VERSION = "3.0";
 
     private final Device device;
     private final String mixedPrecision;
@@ -90,6 +90,7 @@ public final class Accelerator implements AutoCloseable {
     private final DeepSpeedPlugin deepSpeedPlugin;
     private final FullyShardedDataParallelPlugin fsdpPlugin;
     private final Map<String, Object> state = new HashMap<>();
+    private volatile boolean closed;
 
     private Module model;
     private Optimizer optimizer;
@@ -102,6 +103,12 @@ public final class Accelerator implements AutoCloseable {
     private boolean prepared;
     private double lastGradNorm;
     private boolean syncGradients = true;
+
+    // Performance metrics
+    private long totalBackwardTimeMs;
+    private long totalStepTimeMs;
+    private long totalPrepareTimeMs;
+    private int totalSteps;
 
     private Accelerator(Builder b) {
         this.mixedPrecision = b.mixedPrecision == null ? "no" : b.mixedPrecision;
@@ -167,6 +174,7 @@ public final class Accelerator implements AutoCloseable {
     }
 
     public void prepare(Module model, Optimizer optimizer) {
+        long startTime = System.currentTimeMillis();
         this.model = Objects.requireNonNull(model, "model");
         this.optimizer = optimizer;
         if (deepSpeedPlugin != null) {
@@ -189,6 +197,7 @@ public final class Accelerator implements AutoCloseable {
             this.model.to(device, false);
         }
         this.prepared = true;
+        this.totalPrepareTimeMs += System.currentTimeMillis() - startTime;
         state.put("prepared_at", System.currentTimeMillis());
         state.put("device", String.valueOf(device));
         state.put("mixed_precision", mixedPrecision);
@@ -213,25 +222,28 @@ public final class Accelerator implements AutoCloseable {
 
     public void backward(Tensor loss) {
         Objects.requireNonNull(loss, "loss");
+        if (closed) throw new IllegalStateException("Accelerator closed");
+        long startTime = System.currentTimeMillis();
         if (deepSpeedEngine != null) {
             deepSpeedEngine.backward(loss);
             microStep = deepSpeedEngine.microStep();
-            return;
-        }
-        Tensor scaled = loss;
-        if (gradientAccumulationSteps > 1) {
-            scaled = loss.div(new Scalar(gradientAccumulationSteps));
-        }
-        if (isAutocastEnabled()) {
-            try (AutocastContext ignored = openAutocast()) {
-                // loss already computed; enter for bookkeeping parity with torch.autocast
+        } else {
+            Tensor scaled = loss;
+            if (gradientAccumulationSteps > 1) {
+                scaled = loss.div(new Scalar(gradientAccumulationSteps));
+            }
+            if (isAutocastEnabled()) {
+                try (AutocastContext ignored = openAutocast()) {
+                    // loss already computed; enter for bookkeeping parity with torch.autocast
+                }
+            }
+            scaled.backward();
+            microStep++;
+            if (syncGradients && microStep % gradientAccumulationSteps == 0) {
+                syncGradients();
             }
         }
-        scaled.backward();
-        microStep++;
-        if (syncGradients && microStep % gradientAccumulationSteps == 0) {
-            syncGradients();
-        }
+        totalBackwardTimeMs += System.currentTimeMillis() - startTime;
     }
 
     public void step(Optimizer opt) {
@@ -401,15 +413,98 @@ public final class Accelerator implements AutoCloseable {
 
     @Override
     public void close() {
-        if (deepSpeedEngine != null) {
-            try { deepSpeedEngine.close(); } catch (Exception ignored) {}
+        if (closed) return;
+        closed = true;
+
+        // Close sub-components in reverse order
+        if (nativeDdpTrainer != null) {
+            try { nativeDdpTrainer.close(); } catch (Throwable ignored) {}
+            nativeDdpTrainer = null;
+        }
+        if (nativeFsdpTrainer != null) {
+            try { nativeFsdpTrainer.close(); } catch (Throwable ignored) {}
+            nativeFsdpTrainer = null;
         }
         if (fsdpTrainer != null) {
-            try { fsdpTrainer.close(); } catch (Exception ignored) {}
+            try { fsdpTrainer.close(); } catch (Throwable ignored) {}
+            fsdpTrainer = null;
         }
+        if (deepSpeedEngine != null) {
+            try { deepSpeedEngine.close(); } catch (Exception ignored) {}
+            deepSpeedEngine = null;
+        }
+
         model = null;
         optimizer = null;
         prepared = false;
+
+        System.out.printf(
+                "[Accelerator] Closed: steps=%d, prepareTime=%.2fs, " +
+                "backwardTime=%.2fs, stepTime=%.2fs%n",
+                totalSteps, totalPrepareTimeMs / 1000.0,
+                totalBackwardTimeMs / 1000.0, totalStepTimeMs / 1000.0);
+    }
+
+    public boolean isClosed() { return closed; }
+
+    /**
+     * Get accelerator statistics.
+     */
+    public AcceleratorStats getStats() {
+        return new AcceleratorStats(
+                totalSteps, totalPrepareTimeMs, totalBackwardTimeMs, totalStepTimeMs,
+                stepCount, microStep, lastGradNorm,
+                mixedPrecision, numProcesses(), device.toString()
+        );
+    }
+
+    /**
+     * Accelerator performance statistics.
+     */
+    public static final class AcceleratorStats {
+        public final int totalSteps;
+        public final long totalPrepareTimeMs;
+        public final long totalBackwardTimeMs;
+        public final long totalStepTimeMs;
+        public final long stepCount;
+        public final long microStep;
+        public final double lastGradNorm;
+        public final String mixedPrecision;
+        public final int numProcesses;
+        public final String device;
+
+        public AcceleratorStats(int totalSteps, long totalPrepareTimeMs,
+                              long totalBackwardTimeMs, long totalStepTimeMs,
+                              long stepCount, long microStep, double lastGradNorm,
+                              String mixedPrecision, int numProcesses, String device) {
+            this.totalSteps = totalSteps;
+            this.totalPrepareTimeMs = totalPrepareTimeMs;
+            this.totalBackwardTimeMs = totalBackwardTimeMs;
+            this.totalStepTimeMs = totalStepTimeMs;
+            this.stepCount = stepCount;
+            this.microStep = microStep;
+            this.lastGradNorm = lastGradNorm;
+            this.mixedPrecision = mixedPrecision;
+            this.numProcesses = numProcesses;
+            this.device = device;
+        }
+
+        public double avgStepTimeMs() {
+            return totalSteps > 0 ? (double) totalStepTimeMs / totalSteps : 0;
+        }
+
+        public double avgBackwardTimeMs() {
+            return totalSteps > 0 ? (double) totalBackwardTimeMs / totalSteps : 0;
+        }
+
+        @Override
+        public String toString() {
+            return String.format(
+                    "AcceleratorStats{steps=%d, avgStep=%.2fms, avgBackward=%.2fms, " +
+                    "devices=%d, precision=%s, device=%s}",
+                    totalSteps, avgStepTimeMs(), avgBackwardTimeMs(),
+                    numProcesses, mixedPrecision, device);
+        }
     }
 
     public static final class GradientAccumulation implements AutoCloseable {

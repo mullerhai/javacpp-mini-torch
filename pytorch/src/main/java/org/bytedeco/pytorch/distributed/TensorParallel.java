@@ -178,6 +178,7 @@ public final class TensorParallel {
         private final DeviceMesh tpMesh;
         private final ModuleForward forward;
         private long steps;
+        private boolean closed;
 
         public TPTrainer(Module model, ProcessGroupWrapper pg, DeviceMesh tpMesh) {
             this.model = Objects.requireNonNull(model, "model");
@@ -231,6 +232,12 @@ public final class TensorParallel {
         public long getSteps() { return steps; }
 
         @Override
-        public void close() {}
+        public void close() {
+            if (closed) return;
+            closed = true;
+            if (model != null) {
+                try { model.close(); } catch (Throwable ignored) {}
+            }
+        }
     }
 }

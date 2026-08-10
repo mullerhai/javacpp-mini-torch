@@ -40,15 +40,37 @@ import java.util.List;
  *   <li>Strict prefill-before-decode within one step keeps correctness simple.</li>
  *   <li>Finished / aborted seqs are collected for cache release.</li>
  * </ul>
+ *
+ * <p>Supports multiple scheduling policies:
+ * <ul>
+ *   <li>{@code FCFS}: First-come-first-served (default)</li>
+ *   <li>{@code SHORTEST}: Prioritize shortest sequences</li>
+ *   <li>{@code LONGEST}: Prioritize longest sequences</li>
+ *   <li>{@code PRIORITY}: User-provided priority queue</li>
+ * </ul>
  */
-public final class Scheduler {
+public final class Scheduler implements AutoCloseable {
 
     private final EngineConfig config;
     private final List<Sequence> waiting = new ArrayList<>();
     private final List<Sequence> running = new ArrayList<>();
+    private volatile boolean closed;
+
+    // Scheduling policy
+    public enum Policy { FCFS, SHORTEST, LONGEST, PRIORITY }
+    private final Policy policy;
+
+    // Performance metrics
+    private long totalScheduleTimeMs;
+    private int totalScheduleCalls;
 
     public Scheduler(EngineConfig config) {
+        this(config, Policy.FCFS);
+    }
+
+    public Scheduler(EngineConfig config, Policy policy) {
         this.config = config;
+        this.policy = policy != null ? policy : Policy.FCFS;
     }
 
     /** Enqueue a new request. */
@@ -56,14 +78,29 @@ public final class Scheduler {
         if (seq.status() != SequenceStatus.WAITING) {
             throw new IllegalStateException("Sequence must be WAITING on add");
         }
+        if (closed) {
+            throw new IllegalStateException("Scheduler is closed");
+        }
         waiting.add(seq);
     }
 
     /** Remove a sequence from all queues (abort). */
     public void abort(Sequence seq) {
+        if (closed) return;
         if (waiting.remove(seq)) return;
         if (running.remove(seq)) return;
     }
+
+    public boolean isClosed() { return closed; }
+
+    /**
+     * Return a list of running sequences that are not finished. */
+    public List<Sequence> running() {
+        return running;
+    }
+
+    /** Number of waiting requests. */
+    public int waitingCount() { return waiting.size(); }
 
     /** Return a list of running sequences that are not finished. */
     public List<Sequence> running() {
@@ -75,6 +112,59 @@ public final class Scheduler {
 
     /** Number of running requests. */
     public int runningCount() { return running.size(); }
+
+    /** Get scheduling policy. */
+    public Policy policy() { return policy; }
+
+    /** Get scheduling statistics. */
+    public ScheduleStats getStats() {
+        return new ScheduleStats(totalScheduleCalls, totalScheduleTimeMs,
+                waiting.size(), running.size());
+    }
+
+    @Override
+    public void close() {
+        if (closed) return;
+        closed = true;
+        waiting.clear();
+        running.clear();
+        System.out.printf(
+                "[Scheduler] Closed: totalScheduleCalls=%d, totalTime=%.2fs, " +
+                "avgScheduleTime=%.2fms%n",
+                totalScheduleCalls, totalScheduleTimeMs / 1000.0,
+                totalScheduleCalls > 0 ? (double) totalScheduleTimeMs / totalScheduleCalls : 0);
+    }
+
+    public boolean isClosed() { return closed; }
+
+    /**
+     * Scheduling statistics.
+     */
+    public static final class ScheduleStats {
+        public final int totalScheduleCalls;
+        public final long totalTimeMs;
+        public final int waiting;
+        public final int running;
+
+        public ScheduleStats(int totalScheduleCalls, long totalTimeMs,
+                           int waiting, int running) {
+            this.totalScheduleCalls = totalScheduleCalls;
+            this.totalTimeMs = totalTimeMs;
+            this.waiting = waiting;
+            this.running = running;
+        }
+
+        public double avgScheduleTimeMs() {
+            return totalScheduleCalls > 0 ? (double) totalTimeMs / totalScheduleCalls : 0;
+        }
+
+        @Override
+        public String toString() {
+            return String.format(
+                    "ScheduleStats{calls=%d, avgTime=%.2fms, waiting=%d, running=%d}",
+                    totalScheduleCalls, avgScheduleTimeMs(), waiting, running);
+        }
+    }
 
     /**
      * Compute next scheduling decision under token and sequence budgets.

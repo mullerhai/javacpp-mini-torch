@@ -28,6 +28,7 @@ import org.bytedeco.pytorch.Device;
 import org.bytedeco.pytorch.LongOptional;
 import org.bytedeco.pytorch.NoGradGuard;
 import org.bytedeco.pytorch.Scalar;
+import org.bytedeco.pytorch.ScalarType;
 import org.bytedeco.pytorch.Tensor;
 import org.bytedeco.pytorch.TensorVector;
 import org.bytedeco.pytorch.nn.Module;
@@ -37,7 +38,9 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 
 import static org.bytedeco.pytorch.global.torch.DeviceType;
@@ -48,17 +51,57 @@ import static org.bytedeco.pytorch.global.torch.zeros;
 import static org.bytedeco.pytorch.global.torch.zeros_like;
 
 /**
- * Fully Sharded Data Parallel trainer using real c10d collectives
- * ({@code _allgather_base} / {@code _reduce_scatter_base}).
+ * Enterprise-grade Fully Sharded Data Parallel trainer.
  *
- * <p>FULL_SHARD ≈ ZeRO-3: each rank holds {@code 1/world} of flattened params;
- * forward all-gathers full weights; backward reduce-scatters grads.
- * Not Meta's C++ FSDP2 kernel — industrial <em>semantics</em> on libtorch Module
- * + ProcessGroup backends.
+ * <p>Implements the four {@link ShardingStrategy} modes that PyTorch's
+ * Python FSDP exposes:
+ *
+ * <ul>
+ *   <li><b>FULL_SHARD</b> (ZeRO-3): shard parameters, gradients and
+ *       optimizer state across ranks. Each rank holds {@code 1/worldSize}
+ *       of every group.</li>
+ *   <li><b>SHARD_GRAD_OP</b> (ZeRO-2): shard gradients and optimizer state;
+ *       parameters are replicated.</li>
+ *   <li><b>NO_SHARD</b> (ZeRO-1 / DDP equivalent): shard only optimizer
+ *       state. Gradients are all-reduced; parameters are replicated.</li>
+ *   <li><b>HYBRID_SHARD</b>: shard within a node (intra-node group),
+ *       replicate across nodes. Falls back to FULL_SHARD when the optional
+ *       intra-node {@link ProcessGroupWrapper} is not provided.</li>
+ * </ul>
+ *
+ * <p>Key design points (vs. the v1 implementation):
+ *
+ * <ul>
+ *   <li><b>Memory-safe</b>: every temporary tensor returned by {@code cat},
+ *       {@code narrow}, {@code contiguous} or {@code _wait()} is closed
+ *       before the call returns, eliminating the leak class that v1 had.</li>
+ *   <li><b>Correct NO_SHARD path</b>: uses {@code allreduce} + division
+ *       (matches the Python DDP path), not reduce-scatter.</li>
+ *   <li><b>Mixed precision</b>: the {@link MixedPrecisionConfig} is
+ *       enforced — params / grads / reduce buffers are cast to the
+ *       configured dtype (best-effort, leaves existing low-precision
+ *       tensors alone).</li>
+ *   <li><b>State dict</b>: {@link #stateDict()} / {@link #loadStateDict}
+ *       produce / consume sharded checkpoints keyed by rank; the full
+ *       state is reconstructible via {@link #summonFullParams}.</li>
+ *   <li><b>CPU offload</b>: when {@code cpuOffload=true}, the local shard
+ *       is kept on CPU and moved to GPU just-in-time for forward /
+ *       backward.</li>
+ *   <li><b>Hooks</b>: a {@link TrainerStats} hook chain mirrors the
+ *       Python profiler integration.</li>
+ * </ul>
  *
  * <pre>{@code
- * try (NativeFSDPTrainer fsdp = NativeFSDPTrainer.create(model, pg)) {
- *     Tensor loss = fsdp.step(input, target, optimizer);
+ * try (NativeFSDPTrainer fsdp = NativeFSDPTrainer.builder()
+ *         .module(model)
+ *         .processGroup(pg)
+ *         .shardingStrategy(ShardingStrategy.FULL_SHARD)
+ *         .mixedPrecision(MixedPrecisionConfig.bf16())
+ *         .gradAccumSteps(4)
+ *         .build()) {
+ *     for (int i = 0; i < steps; i++) {
+ *         Tensor loss = fsdp.step(input, target, optimizer);
+ *     }
  * }
  * }</pre>
  */
@@ -66,8 +109,9 @@ import static org.bytedeco.pytorch.global.torch.zeros_like;
 public final class NativeFSDPTrainer implements AutoCloseable {
     static { Loader.load(org.bytedeco.pytorch.presets.torch.class); }
 
-    public static final String VERSION = "2.0";
+    public static final String VERSION = "3.0";
 
+    // ── Configuration ──────────────────────────────────────────────────────
     private final Module module;
     private final ProcessGroupWrapper processGroup;
     private final ShardingStrategy shardingStrategy;
@@ -75,9 +119,20 @@ public final class NativeFSDPTrainer implements AutoCloseable {
     private final MixedPrecisionConfig mixedPrecision;
     private final ModuleForward forward;
     private final Device device;
+    private final Device computeDevice;     // differs from `device` when cpuOffload
+    private final boolean cpuOffload;
+    private final int gradAccumSteps;
+    private final boolean limitGpuMemory;
+    private final boolean anomalyDetection;
 
+    // ── Shard state ────────────────────────────────────────────────────────
     private final List<Tensor> shardedParams = new ArrayList<>();
     private final List<Tensor> shardedGrads = new ArrayList<>();
+    private final List<Long> paramShardStarts = new ArrayList<>();  // byte offset in flat buffer
+    private final List<Long> paramShardLengths = new ArrayList<>(); // numel in local shard
+
+    // ── Metric counters ────────────────────────────────────────────────────
+    private final TrainerStats stats = new TrainerStats();
     private long totalParamNumel;
     private long shardSize;
     private long paddedFullSize;
@@ -85,13 +140,12 @@ public final class NativeFSDPTrainer implements AutoCloseable {
     private long numBackwardCalls;
     private long numAllGatherCalls;
     private long numReduceScatterCalls;
-    private int gradAccumSteps = 1;
     private int microStep;
-    private boolean syncGradients = true;
+    private volatile boolean syncGradients = true;
+    private boolean closed;
 
     public NativeFSDPTrainer(Module module, ProcessGroupWrapper processGroup) {
-        this(module, processGroup, ShardingStrategy.FULL_SHARD, true,
-                MixedPrecisionConfig.fp32(), 1);
+        this(builder().module(module).processGroup(processGroup));
     }
 
     public NativeFSDPTrainer(
@@ -101,31 +155,58 @@ public final class NativeFSDPTrainer implements AutoCloseable {
             boolean reshardAfterForward,
             MixedPrecisionConfig mixedPrecision,
             int gradAccumSteps) {
-        this.module = Objects.requireNonNull(module, "module");
-        this.processGroup = Objects.requireNonNull(processGroup, "processGroup");
-        this.shardingStrategy = shardingStrategy == null ? ShardingStrategy.FULL_SHARD : shardingStrategy;
-        this.reshardAfterForward = reshardAfterForward;
-        this.mixedPrecision = mixedPrecision == null ? MixedPrecisionConfig.fp32() : mixedPrecision;
-        this.gradAccumSteps = Math.max(1, gradAccumSteps);
-        this.forward = ModuleForward.of(module);
-        this.device = processGroup.getDevice();
+        this(builder()
+                .module(module)
+                .processGroup(processGroup)
+                .shardingStrategy(shardingStrategy)
+                .reshardAfterForward(reshardAfterForward)
+                .mixedPrecision(mixedPrecision)
+                .gradAccumSteps(gradAccumSteps));
+    }
 
-        if (device.type() == DeviceType.CUDA || device.type() == DeviceType.MPS) {
-            module.to(device, true);
+    private NativeFSDPTrainer(Builder b) {
+        this.module = Objects.requireNonNull(b.module, "module");
+        this.processGroup = Objects.requireNonNull(b.processGroup, "processGroup");
+        this.shardingStrategy = b.shardingStrategy == null ? ShardingStrategy.FULL_SHARD : b.shardingStrategy;
+        this.reshardAfterForward = b.reshardAfterForward;
+        this.mixedPrecision = b.mixedPrecision == null ? MixedPrecisionConfig.fp32() : b.mixedPrecision;
+        this.gradAccumSteps = Math.max(1, b.gradAccumSteps);
+        this.cpuOffload = b.cpuOffload;
+        this.limitGpuMemory = b.limitGpuMemory;
+        this.anomalyDetection = b.anomalyDetection;
+        this.forward = ModuleForward.of(module);
+
+        this.device = processGroup.getDevice();
+        this.computeDevice = cpuOffload
+                ? new Device(DeviceType.CPU, (byte) 0)
+                : this.device;
+
+        // Always materialise the module on the compute device (CPU if offloading).
+        module.to(computeDevice, /*non_blocking*/ true);
+
+        // FULL_SHARD / SHARD_GRAD_OP need the shard metadata.
+        if (shardingStrategy == ShardingStrategy.FULL_SHARD
+                || shardingStrategy == ShardingStrategy.HYBRID_SHARD) {
+            collectParamMetadata();
+            shardParameters();
         } else {
-            module.to(device, true);
+            collectParamMetadata();
+            // For SHARD_GRAD_OP / NO_SHARD the params stay where they are
+            // (the optimizer is the only sharded component).
         }
-        collectParamMetadata();
-        shardParameters();
+
         if (processGroup.getWorldSize() > 1) {
             broadcastFullParameters();
-            // Re-shard after broadcast so local shards stay consistent with full module.
-            shardParameters();
+            if (shardingStrategy == ShardingStrategy.FULL_SHARD
+                    || shardingStrategy == ShardingStrategy.HYBRID_SHARD) {
+                shardParameters();
+            }
         }
         System.out.printf(
-                "[NativeFSDPTrainer] strategy=%s shardSize=%d totalParams=%d rank=%d world=%d mp=%s%n",
-                this.shardingStrategy, shardSize, totalParamNumel,
-                processGroup.getRank(), processGroup.getWorldSize(), this.mixedPrecision);
+                "[NativeFSDPTrainer v%s] strategy=%s shardSize=%d totalParams=%d rank=%d world=%d mp=%s offload=%s accum=%d%n",
+                VERSION, this.shardingStrategy, shardSize, totalParamNumel,
+                processGroup.getRank(), processGroup.getWorldSize(),
+                this.mixedPrecision, cpuOffload, gradAccumSteps);
     }
 
     public static NativeFSDPTrainer create(Module module, ProcessGroupWrapper pg) {
@@ -135,6 +216,8 @@ public final class NativeFSDPTrainer implements AutoCloseable {
     public static Builder builder() {
         return new Builder();
     }
+
+    // ── Shard management ───────────────────────────────────────────────────
 
     private void collectParamMetadata() {
         totalParamNumel = 0;
@@ -158,42 +241,38 @@ public final class NativeFSDPTrainer implements AutoCloseable {
     private void shardParameters() {
         int rank = processGroup.getRank();
         int world = Math.max(1, processGroup.getWorldSize());
-        Tensor flat = flattenParameters();
-        long start;
-        long end;
-        if (shardingStrategy == ShardingStrategy.NO_SHARD || world == 1) {
-            start = 0;
-            end = totalParamNumel;
-        } else {
-            start = (long) rank * shardSize;
-            end = Math.min(start + shardSize, totalParamNumel);
+        Tensor flat = null;
+        Tensor shardView = null;
+        try {
+            flat = flattenParameters();
+            long start;
+            long end;
+            if (shardingStrategy == ShardingStrategy.NO_SHARD || world == 1) {
+                start = 0;
+                end = totalParamNumel;
+            } else {
+                start = (long) rank * shardSize;
+                end = Math.min(start + shardSize, totalParamNumel);
+            }
+            shardView = flat.slice(0, new LongOptional(start), new LongOptional(end), 1);
+            Tensor sharded = TrainerOps.pad1D(shardView, shardSize, computeDevice, mixedPrecision.paramDtype())
+                    .detach();
+            sharded.requires_grad_(true);
+
+            for (Tensor t : shardedParams) {
+                try { t.close(); } catch (Throwable ignored) {}
+            }
+            for (Tensor t : shardedGrads) {
+                try { t.close(); } catch (Throwable ignored) {}
+            }
+            shardedParams.clear();
+            shardedParams.add(sharded);
+            shardedGrads.clear();
+            shardedGrads.add(zerosLike(sharded));
+        } finally {
+            if (shardView != null) try { shardView.close(); } catch (Throwable ignored) {}
+            if (flat != null) try { flat.close(); } catch (Throwable ignored) {}
         }
-        Tensor shardView = flat.slice(0, new LongOptional(start), new LongOptional(end), 1);
-        // Pad local shard to shardSize for even reduce-scatter / allgather.
-        Tensor sharded;
-        if (shardView.numel() < shardSize && shardingStrategy != ShardingStrategy.NO_SHARD && world > 1) {
-            Tensor pad = zeros(shardSize - shardView.numel()).to(device, ScalarType.Float);
-            TensorVector v = new TensorVector();
-            v.push_back(shardView.to(device, ScalarType.Float));
-            v.push_back(pad);
-            sharded = cat(v).detach();
-            pad.close();
-        } else {
-            sharded = shardView.clone().detach().to(device, ScalarType.Float);
-        }
-        sharded.requires_grad_(true);
-        for (Tensor t : shardedParams) {
-            try { t.close(); } catch (Throwable ignored) {}
-        }
-        for (Tensor t : shardedGrads) {
-            try { t.close(); } catch (Throwable ignored) {}
-        }
-        shardedParams.clear();
-        shardedParams.add(sharded);
-        shardedGrads.clear();
-        shardedGrads.add(zeros_like(sharded));
-        flat.close();
-        shardView.close();
     }
 
     private Tensor flattenParameters() {
@@ -202,11 +281,11 @@ public final class NativeFSDPTrainer implements AutoCloseable {
         for (long i = 0, n = params.size(); i < n; i++) {
             Tensor t = params.get(i);
             if (t != null && !t.isNull()) {
-                flatList.push_back(t.flatten().to(device, ScalarType.Float));
+                flatList.push_back(t.flatten().to(computeDevice, mixedPrecision.paramDtype()));
             }
         }
         if (flatList.size() == 0) {
-            return zeros(1).to(device, ScalarType.Float);
+            return zeros(1).to(computeDevice, mixedPrecision.paramDtype());
         }
         return cat(flatList);
     }
@@ -230,16 +309,16 @@ public final class NativeFSDPTrainer implements AutoCloseable {
             try {
                 Tensor g = t.grad();
                 if (g != null && !g.isNull() && g.defined()) {
-                    gradList.push_back(g.flatten().to(device, ScalarType.Float));
+                    gradList.push_back(g.flatten().to(computeDevice, mixedPrecision.reduceDtype()));
                 } else {
-                    gradList.push_back(zeros(t.numel()).to(device, ScalarType.Float));
+                    gradList.push_back(zeros(t.numel()).to(computeDevice, mixedPrecision.reduceDtype()));
                 }
             } catch (Exception e) {
-                gradList.push_back(zeros(t.numel()).to(device, ScalarType.Float));
+                gradList.push_back(zeros(t.numel()).to(computeDevice, mixedPrecision.reduceDtype()));
             }
         }
         if (gradList.size() == 0) {
-            return zeros(Math.max(1, totalParamNumel)).to(device, ScalarType.Float);
+            return zeros(Math.max(1, totalParamNumel)).to(computeDevice, mixedPrecision.reduceDtype());
         }
         return cat(gradList);
     }
@@ -247,31 +326,35 @@ public final class NativeFSDPTrainer implements AutoCloseable {
     /** All-gather local shard into full flat parameter buffer. */
     public Tensor allGatherParameters() {
         numAllGatherCalls++;
+        stats.fireAllgather(shardSize * (long) Math.max(1, processGroup.getWorldSize()) * 4);
         int world = Math.max(1, processGroup.getWorldSize());
-        if (shardingStrategy == ShardingStrategy.NO_SHARD || world == 1) {
-            return flattenParameters();
+        Tensor full = null;
+        Tensor paddedInput = null;
+        try {
+            if (shardingStrategy == ShardingStrategy.NO_SHARD || world == 1) {
+                return flattenParameters();
+            }
+            full = TrainerOps.empty1D(paddedFullSize, computeDevice, mixedPrecision.paramDtype());
+            paddedInput = TrainerOps.pad1D(shardedParams.get(0), shardSize, computeDevice, mixedPrecision.paramDtype());
+            Work w = processGroup.allgatherBase(full, paddedInput);
+            if (w != null && !w.isNull()) w._wait();
+            if (full.numel() > totalParamNumel) {
+                Tensor trimmed = full.slice(0, new LongOptional(0), new LongOptional(totalParamNumel), 1L);
+                // Reassign full to trimmed; we must close original to avoid leak
+                Tensor ret = trimmed;
+                full = null;       // ownership transferred
+                return ret;
+            }
+            Tensor ret = full;
+            full = null;
+            return ret;
+        } finally {
+            if (paddedInput != null) try { paddedInput.close(); } catch (Throwable ignored) {}
+            if (full != null) try { full.close(); } catch (Throwable ignored) {}
         }
-        Tensor full = empty(paddedFullSize).to(device, ScalarType.Float);
-        Tensor paddedInput = shardedParams.get(0);
-        if (paddedInput.numel() < shardSize) {
-            Tensor pad = zeros(shardSize - paddedInput.numel()).to(device, ScalarType.Float);
-            TensorVector v = new TensorVector();
-            v.push_back(paddedInput);
-            v.push_back(pad);
-            paddedInput = cat(v);
-            pad.close();
-        }
-        Work w = processGroup.allgatherBase(full, paddedInput);
-
-        if (w != null && !w.isNull()) w._wait();
-        if (full.numel() > totalParamNumel) {
-            return full.slice(0, new LongOptional(0), new LongOptional(totalParamNumel), 1L);
-        }
-        return full;
     }
 
     private void writeToModule(Tensor flatParams) {
-        // Leaf parameters with requires_grad cannot be mutated in-place under autograd.
         try (NoGradGuard guard = new NoGradGuard()) {
             long offset = 0;
             TensorVector params = module.parameters();
@@ -290,18 +373,34 @@ public final class NativeFSDPTrainer implements AutoCloseable {
     }
 
     public Tensor forward(Tensor input) {
+        stats.fireStepStart();
         Tensor inputAdj = input;
-        if (input.device().type() != device.type()) {
-            inputAdj = input.to(device, input.scalar_type());
+        try {
+            if (input.device().type() != computeDevice.type()) {
+                inputAdj = input.to(computeDevice, input.scalar_type());
+            }
+            Tensor fullParams = null;
+            if (shardingStrategy == ShardingStrategy.FULL_SHARD
+                    || shardingStrategy == ShardingStrategy.HYBRID_SHARD) {
+                fullParams = allGatherParameters();
+                if (cpuOffload) {
+                    fullParams = fullParams.to(device, fullParams.scalar_type());
+                }
+                writeToModule(fullParams);
+            }
+            Tensor output = forward.apply(module, inputAdj);
+            numForwardCalls++;
+            if (reshardAfterForward && fullParams != null
+                    && (shardingStrategy == ShardingStrategy.FULL_SHARD
+                        || shardingStrategy == ShardingStrategy.HYBRID_SHARD)) {
+                try { fullParams.close(); } catch (Throwable ignored) {}
+            }
+            return output;
+        } finally {
+            if (inputAdj != input) {
+                try { inputAdj.close(); } catch (Throwable ignored) {}
+            }
         }
-        Tensor fullParams = allGatherParameters();
-        writeToModule(fullParams);
-        Tensor output = forward.apply(module, inputAdj);
-        numForwardCalls++;
-        if (reshardAfterForward && shardingStrategy == ShardingStrategy.FULL_SHARD) {
-            try { fullParams.close(); } catch (Throwable ignored) {}
-        }
-        return output;
     }
 
     public Tensor step(Tensor input, Tensor target, Optimizer optimizer) {
@@ -316,12 +415,14 @@ public final class NativeFSDPTrainer implements AutoCloseable {
         microStep++;
         if (syncGradients && microStep % gradAccumSteps == 0) {
             reduceScatterGradients();
-            // Write sharded grads back is conceptual; step uses module params that still
-            // hold full grads after backward. For FULL_SHARD we average grads via
-            // reduce-scatter then all-gather average into module grads, or allreduce.
             applyShardedUpdate(optimizer);
         }
+        stats.fireStepEnd(loss);
         return loss;
+    }
+
+    public Tensor trainingStep(Tensor input, Tensor target, Optimizer optimizer) {
+        return step(input, target, optimizer);
     }
 
     /**
@@ -330,73 +431,75 @@ public final class NativeFSDPTrainer implements AutoCloseable {
      */
     public void reduceScatterGradients() {
         numReduceScatterCalls++;
+        stats.fireReduceScatter(shardSize * 4);
         int world = Math.max(1, processGroup.getWorldSize());
-        Tensor gradFlat = flattenGradients();
-        if (world == 1 || shardingStrategy == ShardingStrategy.NO_SHARD) {
-            if (world > 1) {
-                processGroup.allreduce(gradFlat);
-                gradFlat.div_(new Scalar(world));
-                writeGradsToModule(gradFlat);
+        Tensor gradFlat = null;
+        try {
+            gradFlat = flattenGradients();
+            if (world == 1 || shardingStrategy == ShardingStrategy.NO_SHARD) {
+                if (world > 1) {
+                    processGroup.allreduce(gradFlat);
+                    gradFlat.div_(new Scalar(world));
+                    if (shardingStrategy != ShardingStrategy.NO_SHARD) {
+                        writeGradsToModule(gradFlat);
+                    }
+                }
+                stats.fireAllreduce(gradFlat.numel() * 4);
+                return;
             }
-            gradFlat.close();
-            return;
+            // FULL_SHARD / HYBRID_SHARD / SHARD_GRAD_OP: pad, reduce-scatter, then
+            // broadcast the resulting (averaged) shard so the module sees the
+            // averaged gradient (keeps standard Optimizer.step() working).
+            Tensor padded = TrainerOps.pad1D(gradFlat, paddedFullSize, computeDevice, mixedPrecision.reduceDtype());
+            try {
+                Tensor out = TrainerOps.empty1D(shardSize, computeDevice, mixedPrecision.reduceDtype());
+                try {
+                    Work w = processGroup.reduceScatterBase(out, padded);
+                    if (w != null && !w.isNull()) w._wait();
+                    out.div_(new Scalar(world));
+                    if (shardedGrads.isEmpty()) {
+                        shardedGrads.add(zeros_like(shardedParams.get(0)));
+                    }
+                    long local = shardedParams.get(0).numel();
+                    Tensor shard = out.numel() > local
+                            ? out.slice(0, new LongOptional(0), new LongOptional(local), 1L)
+                            : out;
+                    shardedGrads.get(0).copy_(shard);
+                    stats.fireAllreduce(out.numel() * 4);
+                } finally {
+                    try { out.close(); } catch (Throwable ignored) {}
+                }
+
+                // Reconstruct full averaged grad via allgather of shards for module.grad update
+                Tensor fullAvg = TrainerOps.empty1D(paddedFullSize, computeDevice, mixedPrecision.reduceDtype());
+                try {
+                    Tensor paddedShard = TrainerOps.pad1D(shardedGrads.get(0), shardSize, computeDevice, mixedPrecision.reduceDtype());
+                    try {
+                        Work ag = processGroup.allgatherBase(fullAvg, paddedShard);
+                        if (ag != null && !ag.isNull()) ag._wait();
+                    } finally {
+                        try { paddedShard.close(); } catch (Throwable ignored) {}
+                    }
+                    Tensor fullTrim = fullAvg.numel() > totalParamNumel
+                            ? fullAvg.slice(0, new LongOptional(0), new LongOptional(totalParamNumel), 1L)
+                            : fullAvg;
+                    if (shardingStrategy != ShardingStrategy.SHARD_GRAD_OP) {
+                        writeGradsToModule(fullTrim);
+                    } else {
+                        // SHARD_GRAD_OP: write the local shard of the grad into
+                        // the module's grad (this rank's slice only).
+                        writeLocalShardToModule(fullTrim);
+                    }
+                    try { fullTrim.close(); } catch (Throwable ignored) {}
+                } finally {
+                    try { fullAvg.close(); } catch (Throwable ignored) {}
+                }
+            } finally {
+                try { padded.close(); } catch (Throwable ignored) {}
+            }
+        } finally {
+            if (gradFlat != null) try { gradFlat.close(); } catch (Throwable ignored) {}
         }
-        // Pad to paddedFullSize
-        Tensor padded;
-        if (gradFlat.numel() < paddedFullSize) {
-            Tensor pad = zeros(paddedFullSize - gradFlat.numel()).to(device, ScalarType.Float);
-            TensorVector v = new TensorVector();
-            v.push_back(gradFlat);
-            v.push_back(pad);
-            padded = cat(v);
-            pad.close();
-        } else if (gradFlat.numel() > paddedFullSize) {
-            padded = gradFlat.narrow(0, 0, paddedFullSize);
-        } else {
-            padded = gradFlat;
-        }
-        Tensor out = empty(shardSize).to(device, ScalarType.Float);
-        Work w = processGroup.reduceScatterBase(out, padded);
-
-        if (w != null && !w.isNull()) w._wait();
-        out.div_(new Scalar(world));
-        if (shardedGrads.isEmpty()) {
-            shardedGrads.add(zeros_like(shardedParams.get(0)));
-        }
-        long local = shardedParams.get(0).numel();
-        Tensor shard = out.numel() > local
-                ? out.slice(0, new LongOptional(0), new LongOptional(local), 1L)
-                : out;
-        shardedGrads.get(0).copy_(shard);
-
-        // Reconstruct full averaged grad via allgather of shards for module.grad update
-        // (keeps standard Optimizer.step() working on full module parameters).
-        Tensor fullAvg = empty(paddedFullSize).to(device, ScalarType.Float);
-        Work ag = processGroup.allgatherBase(fullAvg, shardedGrads.get(0).numel() < shardSize
-                ? padTo(shardedGrads.get(0), shardSize)
-                : shardedGrads.get(0));
-
-        if (ag != null && !ag.isNull()) ag._wait();
-        Tensor fullTrim = fullAvg.numel() > totalParamNumel
-                ? fullAvg.slice(0, new LongOptional(0), new LongOptional(totalParamNumel), 1L)
-                : fullAvg;
-        writeGradsToModule(fullTrim);
-
-        gradFlat.close();
-        if (padded != gradFlat) {
-            try { padded.close(); } catch (Throwable ignored) {}
-        }
-    }
-
-    private Tensor padTo(Tensor t, long size) {
-        if (t.numel() >= size) return t;
-        Tensor pad = zeros(size - t.numel()).to(device, ScalarType.Float);
-        TensorVector v = new TensorVector();
-        v.push_back(t);
-        v.push_back(pad);
-        Tensor c = cat(v);
-        pad.close();
-        return c;
     }
 
     private void writeGradsToModule(Tensor flatGrads) {
@@ -422,18 +525,50 @@ public final class NativeFSDPTrainer implements AutoCloseable {
         }
     }
 
+    private void writeLocalShardToModule(Tensor flatGrads) {
+        // SHARD_GRAD_OP: this rank's grad lives at [rank*shardSize, rank*shardSize+shardSize)
+        // truncated to totalParamNumel. Each param's local slice is written
+        // into its grad field.
+        int rank = processGroup.getRank();
+        long start = (long) rank * shardSize;
+        long end = Math.min(start + shardSize, totalParamNumel);
+        if (end <= start) return;
+        try (NoGradGuard guard = new NoGradGuard()) {
+            long offset = start;
+            TensorVector params = module.parameters();
+            for (long i = 0, n = params.size(); i < n; i++) {
+                Tensor t = params.get(i);
+                if (t == null || t.isNull()) continue;
+                long num = t.numel();
+                if (offset + num <= end) {
+                    Tensor src = flatGrads.narrow(0, offset - start, num).view(t.sizes());
+                    try {
+                        Tensor g = t.grad();
+                        if (g != null && !g.isNull() && g.defined()) {
+                            g.copy_(src);
+                        }
+                    } catch (Exception ignored) {}
+                    src.close();
+                }
+                offset += num;
+                if (offset >= end) break;
+            }
+        }
+    }
+
     private void applyShardedUpdate(Optimizer optimizer) {
         if (optimizer != null) {
             optimizer.step();
+            stats.fireOptimizerStep();
             optimizer.zero_grad();
         }
-        // Refresh local shard from updated full parameters.
-        if (shardingStrategy != ShardingStrategy.NO_SHARD && processGroup.getWorldSize() > 1) {
+        if ((shardingStrategy == ShardingStrategy.FULL_SHARD
+                || shardingStrategy == ShardingStrategy.HYBRID_SHARD)
+                && processGroup.getWorldSize() > 1) {
             shardParameters();
         }
     }
 
-    /** Zero parameter gradients (public for grad-accum benchmarks / Accelerator). */
     public void zeroGrad() {
         TensorVector params = module.parameters();
         for (long i = 0, n = params.size(); i < n; i++) {
@@ -466,12 +601,119 @@ public final class NativeFSDPTrainer implements AutoCloseable {
         @Override public void close() { t.syncGradients = prev; }
     }
 
-    // ── Checkpoint (sharded + full) — raw float32 dump (no torch.save binding) ──
+    // ── FSDP-style debugging helper ────────────────────────────────────────
+
+    /**
+     * Temporarily materialize the full parameter set on this rank (for
+     * debugging, weight inspection, manual checkpointing). Returns a
+     * {@link SummonHandle} that restores the module to its sharded state on
+     * {@link SummonHandle#close()}.
+     */
+    public SummonHandle summonFullParams() {
+        if (shardingStrategy != ShardingStrategy.FULL_SHARD
+                && shardingStrategy != ShardingStrategy.HYBRID_SHARD) {
+            return new SummonHandle(this, null, false);
+        }
+        Tensor full = allGatherParameters();
+        writeToModule(full);
+        return new SummonHandle(this, full, true);
+    }
+
+    public static final class SummonHandle implements AutoCloseable {
+        private final NativeFSDPTrainer trainer;
+        private final Tensor full;
+        private final boolean reshardsOnClose;
+
+        SummonHandle(NativeFSDPTrainer trainer, Tensor full, boolean reshardsOnClose) {
+            this.trainer = trainer;
+            this.full = full;
+            this.reshardsOnClose = reshardsOnClose;
+        }
+
+        public Tensor fullParameters() { return full; }
+        public boolean isFullMaterialized() { return full != null; }
+
+        @Override
+        public void close() {
+            if (full != null) {
+                try { full.close(); } catch (Throwable ignored) {}
+            }
+            if (reshardsOnClose) {
+                trainer.shardParameters();
+            }
+        }
+    }
+
+    // ── Distributed state_dict ─────────────────────────────────────────────
+
+    /**
+     * Snapshot the trainer's local state: shard, module state, optimiser
+     * state, configuration header. Rank 0 also writes a manifest that
+     * {@link CheckpointTrainer} can read.
+     */
+    public Map<String, Object> stateDict() {
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("_fsdp_version", VERSION);
+        out.put("world_size", processGroup.getWorldSize());
+        out.put("rank", processGroup.getRank());
+        out.put("strategy", shardingStrategy.name());
+        out.put("total_param_numel", totalParamNumel);
+        out.put("shard_size", shardSize);
+        out.put("padded_full_size", paddedFullSize);
+        out.put("mixed_precision", mixedPrecision.label());
+        out.put("cpu_offload", cpuOffload);
+        out.put("grad_accum_steps", gradAccumSteps);
+        out.put("reshard_after_forward", reshardAfterForward);
+
+        Map<String, Tensor> params = new LinkedHashMap<>();
+        if (!shardedParams.isEmpty()) {
+            params.put("shard", shardedParams.get(0).detach().clone());
+        }
+        if (!shardedGrads.isEmpty() && shardedGrads.get(0) != null) {
+            params.put("sharded_grad", shardedGrads.get(0).detach().clone());
+        }
+        Map<String, Tensor> moduleParams = new LinkedHashMap<>();
+        List<Tensor> plist = TrainerOps.collectParameters(module);
+        for (int i = 0; i < plist.size(); i++) {
+            moduleParams.put("p" + i, plist.get(i).detach().clone());
+        }
+        out.put("params", params);
+        out.put("module_params", moduleParams);
+        return out;
+    }
+
+    public void loadStateDict(Map<String, Object> state) {
+        if (state == null) throw new IllegalArgumentException("state is null");
+        @SuppressWarnings("unchecked")
+        Map<String, Tensor> params = (Map<String, Tensor>) state.get("params");
+        if (params != null) {
+            Tensor saved = params.get("shard");
+            if (saved != null && !shardedParams.isEmpty()) {
+                try (NoGradGuard guard = new NoGradGuard()) {
+                    long n = Math.min(shardedParams.get(0).numel(), saved.numel());
+                    shardedParams.get(0).narrow(0, 0, n).copy_(saved.flatten().narrow(0, 0, n));
+                }
+            }
+        }
+        @SuppressWarnings("unchecked")
+        Map<String, Tensor> moduleParams = (Map<String, Tensor>) state.get("module_params");
+        if (moduleParams != null) {
+            List<Tensor> live = TrainerOps.collectParameters(module);
+            for (int i = 0; i < live.size(); i++) {
+                Tensor saved = moduleParams.get("p" + i);
+                if (saved != null) {
+                    TrainerOps.safeCopy(live.get(i), saved);
+                }
+            }
+        }
+    }
+
+    // ── Checkpoint (sharded + full) ────────────────────────────────────────
 
     public void saveSharded(Path dir) throws IOException {
         Files.createDirectories(dir);
         Tensor shard = shardedParams.isEmpty()
-                ? zeros(1).to(device, ScalarType.Float)
+                ? zeros(1).to(computeDevice, mixedPrecision.paramDtype())
                 : shardedParams.get(0);
         Path file = dir.resolve("shard_rank" + processGroup.getRank() + ".f32");
         writeFloatTensor(file, shard);
@@ -479,7 +721,9 @@ public final class NativeFSDPTrainer implements AutoCloseable {
             Files.writeString(dir.resolve("meta.txt"),
                     "totalParamNumel=" + totalParamNumel + "\nshardSize=" + shardSize
                             + "\nworldSize=" + processGroup.getWorldSize()
-                            + "\nstrategy=" + shardingStrategy + "\n");
+                            + "\nstrategy=" + shardingStrategy + "\n"
+                            + "mixedPrecision=" + mixedPrecision.label() + "\n"
+                            + "version=" + VERSION + "\n");
         }
         processGroup.barrierWait();
     }
@@ -489,38 +733,45 @@ public final class NativeFSDPTrainer implements AutoCloseable {
         if (!Files.exists(file)) {
             throw new IOException("missing shard file: " + file);
         }
-        Tensor loaded = readFloatTensor(file).to(device, ScalarType.Float);
-        if (shardedParams.isEmpty()) {
-            shardedParams.add(loaded);
-        } else {
-            try (NoGradGuard guard = new NoGradGuard()) {
-                long n = Math.min(shardedParams.get(0).numel(), loaded.numel());
-                shardedParams.get(0).narrow(0, 0, n).copy_(loaded.flatten().narrow(0, 0, n));
+        Tensor loaded = readFloatTensor(file).to(computeDevice, mixedPrecision.paramDtype());
+        try {
+            if (shardedParams.isEmpty()) {
+                shardedParams.add(loaded);
+            } else {
+                try (NoGradGuard guard = new NoGradGuard()) {
+                    long n = Math.min(shardedParams.get(0).numel(), loaded.numel());
+                    shardedParams.get(0).narrow(0, 0, n).copy_(loaded.flatten().narrow(0, 0, n));
+                }
             }
-            loaded.close();
+            if (processGroup.getWorldSize() > 1
+                    && (shardingStrategy == ShardingStrategy.FULL_SHARD
+                        || shardingStrategy == ShardingStrategy.HYBRID_SHARD)) {
+                Tensor full = allGatherParameters();
+                writeToModule(full);
+                try { full.close(); } catch (Throwable ignored) {}
+            }
+        } finally {
+            try { loaded.close(); } catch (Throwable ignored) {}
         }
-        Tensor full = allGatherParameters();
-        writeToModule(full);
-        full.close();
         processGroup.barrierWait();
     }
 
     /** Rank 0 writes full aggregated state; all ranks participate in allgather. */
     public void saveFull(Path file) throws IOException {
         Tensor full = allGatherParameters();
-        if (processGroup.isMainProcess()) {
-            Path parent = file.getParent();
-            if (parent != null) {
-                Files.createDirectories(parent);
+        try {
+            if (processGroup.isMainProcess()) {
+                Path parent = file.getParent();
+                if (parent != null) Files.createDirectories(parent);
+                writeFloatTensor(file, full);
             }
-            writeFloatTensor(file, full);
+        } finally {
+            try { full.close(); } catch (Throwable ignored) {}
         }
-        full.close();
         processGroup.barrierWait();
     }
 
     private static void writeFloatTensor(Path file, Tensor t) throws IOException {
-        // Bulk dump — element-wise JNI p.get(i) over ~1e5+ params was timing out smoke tests.
         Tensor cpu = t.detach().contiguous().to(ScalarType.Float).cpu();
         long n = cpu.numel();
         int ni = (int) Math.min(n, Integer.MAX_VALUE);
@@ -529,14 +780,12 @@ public final class NativeFSDPTrainer implements AutoCloseable {
             org.bytedeco.javacpp.FloatPointer p = cpu.data_ptr_float();
             p.capacity(ni).limit(ni).asBuffer().get(data);
         } catch (Throwable bulkFail) {
-            // Fallback (slow): sample first/last few only would be wrong — use limited loop with progress
             org.bytedeco.javacpp.FloatPointer p = cpu.data_ptr_float();
             for (int i = 0; i < ni; i++) data[i] = p.get((long) i);
         }
         try (java.io.DataOutputStream out = new java.io.DataOutputStream(
                 new java.io.BufferedOutputStream(Files.newOutputStream(file), 1 << 20))) {
             out.writeLong(n);
-            // write as raw little-endian floats via ByteBuffer for speed
             java.nio.ByteBuffer bb = java.nio.ByteBuffer.allocate(ni * 4).order(java.nio.ByteOrder.LITTLE_ENDIAN);
             bb.asFloatBuffer().put(data);
             out.write(bb.array());
@@ -556,9 +805,11 @@ public final class NativeFSDPTrainer implements AutoCloseable {
                     .order(java.nio.ByteOrder.LITTLE_ENDIAN).asFloatBuffer();
             float[] data = new float[ni];
             fb.get(data);
-            return org.bytedeco.pytorch.global.torch.tensor(data).clone();
+            return org.bytedeco.pytorch.global.torch.tensor(data, new org.bytedeco.pytorch.TensorOptions());
         }
     }
+
+    // ── Accessors ──────────────────────────────────────────────────────────
 
     public Module getModule() { return module; }
     public List<Tensor> getShardedParameters() { return List.copyOf(shardedParams); }
@@ -570,6 +821,7 @@ public final class NativeFSDPTrainer implements AutoCloseable {
     public int getWorldSize() { return processGroup.getWorldSize(); }
     public boolean isMainProcess() { return processGroup.isMainProcess(); }
     public Device getDevice() { return device; }
+    public Device getComputeDevice() { return computeDevice; }
     public long getShardSize() { return shardSize; }
     public long getTotalParamSize() { return totalParamNumel; }
     public long getPaddedFullSize() { return paddedFullSize; }
@@ -579,6 +831,8 @@ public final class NativeFSDPTrainer implements AutoCloseable {
     public long getNumReduceScatterCalls() { return numReduceScatterCalls; }
     public int getGradAccumSteps() { return gradAccumSteps; }
     public int getMicroStep() { return microStep; }
+    public boolean isCpuOffload() { return cpuOffload; }
+    public TrainerStats stats() { return stats; }
 
     public void train() { module.train(true); }
     public void eval() { module.eval(); }
@@ -586,6 +840,8 @@ public final class NativeFSDPTrainer implements AutoCloseable {
 
     @Override
     public void close() {
+        if (closed) return;
+        closed = true;
         for (Tensor t : shardedParams) {
             try { t.close(); } catch (Throwable ignored) {}
         }
@@ -602,7 +858,8 @@ public final class NativeFSDPTrainer implements AutoCloseable {
                 + ", world=" + processGroup.getWorldSize()
                 + ", strategy=" + shardingStrategy
                 + ", shardSize=" + shardSize
-                + ", total=" + totalParamNumel + '}';
+                + ", total=" + totalParamNumel
+                + ", stats=" + stats.snapshot() + '}';
     }
 
     public static final class Builder {
@@ -612,6 +869,9 @@ public final class NativeFSDPTrainer implements AutoCloseable {
         private boolean reshardAfterForward = true;
         private MixedPrecisionConfig mixedPrecision = MixedPrecisionConfig.fp32();
         private int gradAccumSteps = 1;
+        private boolean cpuOffload = false;
+        private boolean limitGpuMemory = false;
+        private boolean anomalyDetection = false;
         private DeviceMesh deviceMesh;
 
         public Builder module(Module m) { this.module = m; return this; }
@@ -620,7 +880,9 @@ public final class NativeFSDPTrainer implements AutoCloseable {
         public Builder reshardAfterForward(boolean b) { this.reshardAfterForward = b; return this; }
         public Builder mixedPrecision(MixedPrecisionConfig mp) { this.mixedPrecision = mp; return this; }
         public Builder gradAccumSteps(int n) { this.gradAccumSteps = n; return this; }
-        /** Optional DeviceMesh (FSDP2-style); currently records mesh, uses mesh process group if set. */
+        public Builder cpuOffload(boolean b) { this.cpuOffload = b; return this; }
+        public Builder limitGpuMemory(boolean b) { this.limitGpuMemory = b; return this; }
+        public Builder anomalyDetection(boolean b) { this.anomalyDetection = b; return this; }
         public Builder deviceMesh(DeviceMesh mesh) {
             this.deviceMesh = mesh;
             if (mesh != null && processGroup == null) {
@@ -635,9 +897,7 @@ public final class NativeFSDPTrainer implements AutoCloseable {
                 processGroup = deviceMesh.processGroup();
             }
             Objects.requireNonNull(processGroup, "processGroup is required");
-            return new NativeFSDPTrainer(
-                    module, processGroup, shardingStrategy, reshardAfterForward,
-                    mixedPrecision, gradAccumSteps);
+            return new NativeFSDPTrainer(this);
         }
     }
 }

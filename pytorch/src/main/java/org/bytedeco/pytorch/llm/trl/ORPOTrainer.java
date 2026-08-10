@@ -54,6 +54,7 @@ public final class ORPOTrainer extends BaseTrainer {
     private final LlmForward policyForward;
     private final ORPOConfig orpoConfig;
     private final TensorVector params;
+    private volatile boolean closed;
 
     public ORPOTrainer(
             Module policy,
@@ -130,4 +131,14 @@ public final class ORPOTrainer extends BaseTrainer {
         }
         return t;
     }
+
+    @Override
+    public void close() {
+        if (closed) return;
+        closed = true;
+        super.close();
+        System.out.println("[ORPOTrainer] Closed");
+    }
+
+    public boolean isClosed() { return closed; }
 }

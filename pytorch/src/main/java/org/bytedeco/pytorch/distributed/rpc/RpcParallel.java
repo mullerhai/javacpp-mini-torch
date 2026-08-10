@@ -102,6 +102,7 @@ public final class RpcParallel implements AutoCloseable {
     private final RpcSurface rpcSurface;
     private long pullCount;
     private long pushCount;
+    private boolean closed;
 
     public RpcParallel(Module model, ProcessGroupWrapper pg) {
         this(model, pg, TRANSPORT_RPC);
@@ -398,7 +399,12 @@ public final class RpcParallel implements AutoCloseable {
 
     @Override
     public void close() {
+        if (closed) return;
+        closed = true;
         // Do not clear global RpcAgent — may be shared.
+        System.out.printf(
+                "[RpcParallel] Closed: rank=%d, pulls=%d, pushes=%d%n",
+                pg.getRank(), pullCount, pushCount);
     }
 
     @Override

@@ -59,6 +59,9 @@ import static org.bytedeco.pytorch.global.torch.zeros_like;
 public final class PPOTrainer extends BaseTrainer {
     static { Loader.load(org.bytedeco.pytorch.presets.torch.class); }
 
+    private volatile boolean closed;
+    private long numTrainingSteps;
+
     /**
      * Policy + value head forward for online PPO.
      *
@@ -255,4 +258,16 @@ public final class PPOTrainer extends BaseTrainer {
         }
         return t;
     }
+
+    @Override
+    public void close() {
+        if (closed) return;
+        closed = true;
+        super.close();
+        System.out.printf(
+                "[PPOTrainer] Closed: trainingSteps=%d%n",
+                numTrainingSteps);
+    }
+
+    public boolean isClosed() { return closed; }
 }

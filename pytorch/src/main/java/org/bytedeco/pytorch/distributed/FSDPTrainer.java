@@ -26,6 +26,7 @@ import org.bytedeco.javacpp.Loader;
 import org.bytedeco.javacpp.annotation.Properties;
 import org.bytedeco.pytorch.Device;
 import org.bytedeco.pytorch.LongOptional;
+import org.bytedeco.pytorch.NoGradGuard;
 import org.bytedeco.pytorch.optim.Optimizer;
 import org.bytedeco.pytorch.Scalar;
 import org.bytedeco.pytorch.Tensor;
@@ -60,7 +61,7 @@ import static org.bytedeco.pytorch.global.torch.zeros_like;
 public final class FSDPTrainer implements AutoCloseable {
     static { Loader.load(org.bytedeco.pytorch.presets.torch.class); }
 
-    public static final String VERSION = "1.0";
+    public static final String VERSION = "2.0";
 
     private final Module module;
     private final ProcessGroupWrapper processGroup;
@@ -76,6 +77,7 @@ public final class FSDPTrainer implements AutoCloseable {
     private long numForwardCalls;
     private long numBackwardCalls;
     private boolean useFullPrecision;
+    private boolean closed;
 
     public FSDPTrainer(Module module, ProcessGroupWrapper processGroup) {
         this(module, processGroup, ShardingStrategy.FULL_SHARD, true, true);
@@ -129,18 +131,26 @@ public final class FSDPTrainer implements AutoCloseable {
 
     private void shardParameters() {
         int rank = processGroup.getRank();
-        Tensor flat = flattenParameters();
-        long start = rank * shardSize;
-        long end = Math.min(start + shardSize, totalParamNumel);
-        Tensor shard = flat.slice(0, new LongOptional(start), new LongOptional(end), 1);
-        Tensor sharded = shard.clone().detach();
-        sharded.requires_grad_(true);
-        shardedParams.clear();
-        shardedParams.add(sharded);
-        shardedGrads.clear();
-        shardedGrads.add(zeros_like(sharded));
-        flat.close();
-        shard.close();
+        Tensor flat = null;
+        Tensor shard = null;
+        try {
+            flat = flattenParameters();
+            long start = rank * shardSize;
+            long end = Math.min(start + shardSize, totalParamNumel);
+            shard = flat.slice(0, new LongOptional(start), new LongOptional(end), 1);
+            Tensor sharded = shard.clone().detach();
+            sharded.requires_grad_(true);
+
+            shardedParams.forEach(t -> { try { t.close(); } catch (Throwable ignored) {} });
+            shardedGrads.forEach(t -> { try { t.close(); } catch (Throwable ignored) {} });
+            shardedParams.clear();
+            shardedParams.add(sharded);
+            shardedGrads.clear();
+            shardedGrads.add(zeros_like(sharded));
+        } finally {
+            if (shard != null) { try { shard.close(); } catch (Throwable ignored) {} }
+            if (flat != null) { try { flat.close(); } catch (Throwable ignored) {} }
+        }
     }
 
     private Tensor flattenParameters() {
@@ -191,30 +201,44 @@ public final class FSDPTrainer implements AutoCloseable {
         return cat(gradList);
     }
 
+    /**
+     * All-gather local shard into full parameter buffer.
+     * Returns a tensor that caller MUST close to prevent memory leaks.
+     */
     private Tensor allGatherParameters() {
         int world = processGroup.getWorldSize();
         long fullSize = shardSize * world;
         Tensor full = empty(fullSize).to(device, ScalarType.Float);
 
-        Tensor padded = shardedParams.get(0);
-        Tensor paddedInput;
-        if (padded.numel() < shardSize) {
-            Tensor pad = zeros(shardSize - padded.numel()).to(device, ScalarType.Float);
-            TensorVector v = new TensorVector();
-            v.push_back(padded);
-            v.push_back(pad);
-            paddedInput = cat(v);
-        } else if (padded.device().type() != device.type()) {
-            paddedInput = padded.to(device, ScalarType.Float);
-        } else {
-            paddedInput = padded;
-        }
+        Tensor paddedInput = null;
+        try {
+            Tensor padded = shardedParams.get(0);
+            if (padded.numel() < shardSize) {
+                Tensor pad = zeros(shardSize - padded.numel()).to(device, ScalarType.Float);
+                TensorVector v = new TensorVector();
+                v.push_back(padded);
+                v.push_back(pad);
+                paddedInput = cat(v);
+                pad.close();  // pad is now part of paddedInput
+            } else if (padded.device().type() != device.type()) {
+                paddedInput = padded.to(device, ScalarType.Float);
+            } else {
+                paddedInput = padded;
+            }
 
-        processGroup.allgatherBase(full, paddedInput)._wait();
-        if (full.numel() > totalParamNumel) {
-            return full.slice(0, new LongOptional(0), new LongOptional(totalParamNumel), 1L);
+            Work w = processGroup.allgatherBase(full, paddedInput);
+            if (w != null && !w.isNull()) w._wait();
+
+            if (full.numel() > totalParamNumel) {
+                Tensor ret = full.slice(0, new LongOptional(0), new LongOptional(totalParamNumel), 1L);
+                return ret;
+            }
+            return full;
+        } finally {
+            if (paddedInput != null && paddedInput != shardedParams.get(0)) {
+                try { paddedInput.close(); } catch (Throwable ignored) {}
+            }
         }
-        return full;
     }
 
     public Tensor forward(Tensor input) {
@@ -223,13 +247,19 @@ public final class FSDPTrainer implements AutoCloseable {
             inputAdj = input.to(device, ScalarType.Float);
         }
         Tensor fullParams = allGatherParameters();
-        writeToModule(fullParams);
-        Tensor output = forward.apply(module, inputAdj);
-        numForwardCalls++;
-        if (reshardAfterForward) {
-            fullParams.close();
+        try {
+            writeToModule(fullParams);
+            Tensor output = forward.apply(module, inputAdj);
+            numForwardCalls++;
+            return output;
+        } finally {
+            if (fullParams != null) {
+                try { fullParams.close(); } catch (Throwable ignored) {}
+            }
+            if (inputAdj != input) {
+                try { inputAdj.close(); } catch (Throwable ignored) {}
+            }
         }
-        return output;
     }
 
     public Tensor forward(Tensor input, Tensor target) {
@@ -257,54 +287,69 @@ public final class FSDPTrainer implements AutoCloseable {
     }
 
     private void reduceScatterGradients() {
-        Tensor gradFlat = flattenGradients();
-        if (gradFlat == null) {
-            return;
-        }
-        int world = processGroup.getWorldSize();
-        long fullSize = shardSize * world;
-        // Pad to fullSize so reduce_scatter_base can split evenly.
-        Tensor padded;
-        if (gradFlat.numel() < fullSize) {
-            Tensor pad = zeros(fullSize - gradFlat.numel()).to(device, ScalarType.Float);
-            TensorVector v = new TensorVector();
-            v.push_back(gradFlat);
-            v.push_back(pad);
-            padded = cat(v);
-        } else {
-            padded = gradFlat;
-        }
-        Tensor out = empty(shardSize).to(device, ScalarType.Float);
-        processGroup.reduceScatterBase(out, padded)._wait();
-        if (shardedGrads.isEmpty()) {
-            shardedGrads.add(zeros_like(shardedParams.get(0)));
-        }
-        long local = shardedParams.get(0).numel();
-        Tensor shard = out.numel() > local
-                ? out.slice(0, new LongOptional(0), new LongOptional(local), 1L)
-                : out;
-        shardedGrads.get(0).data().copy_(shard.div(new Scalar((float) world)));
-        gradFlat.close();
-        if (padded != gradFlat) {
-            padded.close();
+        Tensor gradFlat = null;
+        Tensor padded = null;
+        Tensor out = null;
+        try {
+            gradFlat = flattenGradients();
+            if (gradFlat == null || gradFlat.isNull()) {
+                return;
+            }
+            int world = processGroup.getWorldSize();
+            long fullSize = shardSize * world;
+            // Pad to fullSize so reduce_scatter_base can split evenly.
+            if (gradFlat.numel() < fullSize) {
+                Tensor pad = zeros(fullSize - gradFlat.numel()).to(device, ScalarType.Float);
+                TensorVector v = new TensorVector();
+                v.push_back(gradFlat);
+                v.push_back(pad);
+                padded = cat(v);
+                pad.close();  // pad is now part of padded
+            } else {
+                padded = gradFlat;
+            }
+
+            out = empty(shardSize).to(device, ScalarType.Float);
+            Work w = processGroup.reduceScatterBase(out, padded);
+            if (w != null && !w.isNull()) w._wait();
+
+            if (shardedGrads.isEmpty()) {
+                shardedGrads.add(zeros_like(shardedParams.get(0)));
+            }
+            long local = shardedParams.get(0).numel();
+            Tensor shard = out.numel() > local
+                    ? out.slice(0, new LongOptional(0), new LongOptional(local), 1L)
+                    : out;
+            shardedGrads.get(0).data().copy_(shard.div(new Scalar((float) world)));
+            if (shard != out) {
+                try { shard.close(); } catch (Throwable ignored) {}
+            }
+        } finally {
+            if (out != null) { try { out.close(); } catch (Throwable ignored) {} }
+            if (padded != null && padded != gradFlat) {
+                try { padded.close(); } catch (Throwable ignored) {}
+            }
+            if (gradFlat != null) { try { gradFlat.close(); } catch (Throwable ignored) {} }
         }
     }
 
     private void writeToModule(Tensor flatParams) {
-        long offset = 0;
-        TensorVector params = module.parameters();
-        for (long i = 0, n = params.size(); i < n; i++) {
-            Tensor t = params.get(i);
-            if (t == null || t.isNull()) {
-                continue;
+        try (NoGradGuard guard = new NoGradGuard()) {
+            long offset = 0;
+            TensorVector params = module.parameters();
+            for (long i = 0, n = params.size(); i < n; i++) {
+                Tensor t = params.get(i);
+                if (t == null || t.isNull()) {
+                    continue;
+                }
+                long num = t.numel();
+                if (offset + num <= flatParams.numel()) {
+                    Tensor src = flatParams.narrow(0, offset, num);
+                    t.copy_(src.view(t.sizes()));
+                    try { src.close(); } catch (Throwable ignored) {}
+                }
+                offset += num;
             }
-            long num = t.numel();
-            if (offset + num <= flatParams.numel()) {
-                Tensor src = flatParams.narrow(0, offset, num);
-                t.copy_(src.view(t.sizes()));
-                src.close();
-            }
-            offset += num;
         }
     }
 
@@ -327,8 +372,8 @@ public final class FSDPTrainer implements AutoCloseable {
     }
 
     public Module getModule() { return module; }
-    public List<Tensor> getShardedParameters() { return shardedParams; }
-    public List<Tensor> getShardedGradients() { return shardedGrads; }
+    public List<Tensor> getShardedParameters() { return List.copyOf(shardedParams); }
+    public List<Tensor> getShardedGradients() { return List.copyOf(shardedGrads); }
 
     public List<Tensor> parameters() {
         List<Tensor> list = new ArrayList<>();
@@ -361,13 +406,18 @@ public final class FSDPTrainer implements AutoCloseable {
 
     @Override
     public void close() {
-        for (Tensor t : shardedParams) {
-            t.close();
+        if (closed) return;
+        closed = true;
+
+        shardedParams.forEach(t -> { try { t.close(); } catch (Throwable ignored) {} });
+        shardedParams.clear();
+
+        shardedGrads.forEach(t -> { try { t.close(); } catch (Throwable ignored) {} });
+        shardedGrads.clear();
+
+        if (module != null) {
+            try { module.close(); } catch (Throwable ignored) {}
         }
-        for (Tensor t : shardedGrads) {
-            t.close();
-        }
-        module.close();
     }
 
     @Override

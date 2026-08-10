@@ -49,10 +49,12 @@ import static org.bytedeco.pytorch.global.torch.zeros;
  * {@code ΔW = B @ A * scaling} into the base weight for faster inference.
  */
 @Properties(inherit = org.bytedeco.pytorch.presets.torch.class)
-public class LoraLinear extends Module {
+public class LoraLinear extends Module implements AutoCloseable {
     static {
         Loader.load(org.bytedeco.pytorch.presets.torch.class);
     }
+
+    public static final String VERSION = "2.0";
 
     private final LinearImpl base;
     private final LoraConfig config;
@@ -68,6 +70,7 @@ public class LoraLinear extends Module {
     private boolean merged;
     /** Cached ΔW used by {@link #unmerge()} (detached clone). */
     private Tensor mergedDelta;
+    private volatile boolean closed;
 
     /**
      * Wrap an existing {@link LinearImpl}. Base weights are optionally frozen.
@@ -285,4 +288,31 @@ public class LoraLinear extends Module {
         outShape[outShape.length - 1] = out;
         return out2d.reshape(outShape);
     }
+
+    @Override
+    public void close() {
+        if (closed) return;
+        closed = true;
+
+        // Unmerge if necessary
+        if (merged) {
+            unmerge();
+        }
+
+        // Close LoRA tensors
+        if (loraA != null && loraA.defined()) {
+            try { loraA.close(); } catch (Throwable ignored) {}
+            loraA = null;
+        }
+        if (loraB != null && loraB.defined()) {
+            try { loraB.close(); } catch (Throwable ignored) {}
+            loraB = null;
+        }
+        if (mergedDelta != null && mergedDelta.defined()) {
+            try { mergedDelta.close(); } catch (Throwable ignored) {}
+            mergedDelta = null;
+        }
+    }
+
+    public boolean isClosed() { return closed; }
 }

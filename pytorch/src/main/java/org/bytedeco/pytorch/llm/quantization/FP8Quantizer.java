@@ -51,6 +51,16 @@ import static org.bytedeco.pytorch.global.torch.tensor;
 public final class FP8Quantizer implements AutoCloseable {
     static { Loader.load(org.bytedeco.pytorch.presets.torch.class); }
 
+    public static final String VERSION = "2.0";
+
+    private volatile boolean closed;
+
+    // Performance metrics
+    private int quantizeCount;
+    private int dequantizeCount;
+    private long totalQuantizeTimeMs;
+    private long totalDequantizeTimeMs;
+
     public enum FP8Type {
         /** 1 sign + 4 exp + 3 mantissa — preferred for inference. */
         E4M3FN(ScalarType.Float8_e4m3fn, 448.0f),
@@ -87,12 +97,25 @@ public final class FP8Quantizer implements AutoCloseable {
     public static FP8Quantizer e5m2() { return new FP8Quantizer(FP8Type.E5M2); }
 
     public Tensor quantize(Tensor input) {
-        return input.to(fp8Type.toScalarType());
+        long start = System.currentTimeMillis();
+        Tensor result = input.to(fp8Type.toScalarType());
+        quantizeCount++;
+        totalQuantizeTimeMs += System.currentTimeMillis() - start;
+        return result;
     }
 
     public Tensor dequantize(Tensor input) {
-        return input.to(ScalarType.Float);
+        long start = System.currentTimeMillis();
+        Tensor result = input.to(ScalarType.Float);
+        dequantizeCount++;
+        totalDequantizeTimeMs += System.currentTimeMillis() - start;
+        return result;
     }
+
+    public int getQuantizeCount() { return quantizeCount; }
+    public int getDequantizeCount() { return dequantizeCount; }
+    public long getTotalQuantizeTimeMs() { return totalQuantizeTimeMs; }
+    public long getTotalDequantizeTimeMs() { return totalDequantizeTimeMs; }
 
     /** Observe min/max for optional calibration bookkeeping. */
     public void observe(Tensor t) {
@@ -130,8 +153,12 @@ public final class FP8Quantizer implements AutoCloseable {
 
     @Override
     public void close() {
+        if (closed) return;
+        closed = true;
         scaleHistory.clear();
     }
+
+    public boolean isClosed() { return closed; }
 
     /** Linear layer with FP8 weights; dequantizes to float for matmul. */
     public static final class FP8Linear implements AutoCloseable {

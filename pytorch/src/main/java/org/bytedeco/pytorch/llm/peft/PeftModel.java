@@ -59,16 +59,19 @@ import java.util.Objects;
  * <p>Also supports offline state-dict merge via {@link #applyLoraToStateDict}.
  */
 @Properties(inherit = org.bytedeco.pytorch.presets.torch.class)
-public final class PeftModel {
+public final class PeftModel implements AutoCloseable {
     static {
         Loader.load(org.bytedeco.pytorch.presets.torch.class);
     }
+
+    public static final String VERSION = "2.0";
 
     private final LoraConfig config;
     private final Map<String, LoraLinear> adapters = new LinkedHashMap<>();
     private Module root; // optional outer module when user registers adapters under it
     private boolean merged;
     private long totalBaseParams = -1L;
+    private volatile boolean closed;
 
     public PeftModel(LoraConfig config) {
         this.config = Objects.requireNonNull(config, "config");
@@ -516,6 +519,38 @@ public final class PeftModel {
     public int numAdapters() {
         return adapters.size();
     }
+
+    @Override
+    public void close() {
+        if (closed) return;
+        closed = true;
+
+        // Unmerge all adapters first to restore base weights
+        if (merged) {
+            unmergeAll();
+        }
+
+        // Close all LoRA adapters
+        for (LoraLinear adapter : adapters.values()) {
+            try {
+                // Close LoRA tensors
+                if (adapter.loraA() != null && adapter.loraA().defined()) {
+                    adapter.loraA().close();
+                }
+                if (adapter.loraB() != null && adapter.loraB().defined()) {
+                    adapter.loraB().close();
+                }
+            } catch (Throwable ignored) {}
+        }
+
+        adapters.clear();
+
+        System.out.printf(
+                "[PeftModel] Closed: adapters=%d, r=%d, alpha=%.1f, merged=%b%n",
+                numAdapters(), config.r(), config.alpha(), merged);
+    }
+
+    public boolean isClosed() { return closed; }
 
     @Override
     public String toString() {

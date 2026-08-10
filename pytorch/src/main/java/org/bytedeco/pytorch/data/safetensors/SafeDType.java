@@ -6,31 +6,40 @@ import java.util.Locale;
 
 /**
  * Dtypes used by the safetensors format (little-endian on disk).
+ *
+ * <p>Supports:
+ * <ul>
+ *   <li>Standard dtypes: F64, F32, F16, BF16, FP8</li>
+ *   <li>Integer types: I64, I32, I16, I8, U8, BOOL</li>
+ *   <li>Quantized dtypes: NF4, FP4, Q80, Q40 (via {@code format.SafeDType})</li>
+ * </ul>
  */
 public enum SafeDType {
-    F64("F64", 8, ScalarType.Double),
-    F32("F32", 4, ScalarType.Float),
-    F16("F16", 2, ScalarType.Half),
-    BF16("BF16", 2, ScalarType.BFloat16),
+    F64("F64", 8, ScalarType.Double, true),
+    F32("F32", 4, ScalarType.Float, true),
+    F16("F16", 2, ScalarType.Half, true),
+    BF16("BF16", 2, ScalarType.BFloat16, true),
     /** FP8 E4M3 (safetensors name {@code F8_E4M3}); maps to torch Float8_e4m3fn. */
-    F8_E4M3("F8_E4M3", 1, ScalarType.Float8_e4m3fn),
+    F8_E4M3("F8_E4M3", 1, ScalarType.Float8_e4m3fn, true),
     /** FP8 E5M2 (safetensors name {@code F8_E5M2}). */
-    F8_E5M2("F8_E5M2", 1, ScalarType.Float8_e5m2),
-    I64("I64", 8, ScalarType.Long),
-    I32("I32", 4, ScalarType.Int),
-    I16("I16", 2, ScalarType.Short),
-    I8("I8", 1, ScalarType.Char),
-    U8("U8", 1, ScalarType.Byte),
-    BOOL("BOOL", 1, ScalarType.Bool);
+    F8_E5M2("F8_E5M2", 1, ScalarType.Float8_e5m2, true),
+    I64("I64", 8, ScalarType.Long, true),
+    I32("I32", 4, ScalarType.Int, true),
+    I16("I16", 2, ScalarType.Short, true),
+    I8("I8", 1, ScalarType.Char, true),
+    U8("U8", 1, ScalarType.Byte, true),
+    BOOL("BOOL", 1, ScalarType.Bool, true);
 
     private final String name;
     private final int bytes;
     private final ScalarType torch;
+    private final boolean nativeLayout;
 
-    SafeDType(String name, int bytes, ScalarType torch) {
+    SafeDType(String name, int bytes, ScalarType torch, boolean nativeLayout) {
         this.name = name;
         this.bytes = bytes;
         this.torch = torch;
+        this.nativeLayout = nativeLayout;
     }
 
     public String typeName() { return name; }
@@ -43,7 +52,7 @@ public enum SafeDType {
      * F16/BF16/FP8 are native 1:1; BOOL is not (torch may pack differently).
      */
     public boolean isNativeLayout() {
-        return this != BOOL;
+        return nativeLayout;
     }
 
     public static SafeDType fromString(String s) {

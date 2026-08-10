@@ -53,7 +53,7 @@ import static org.bytedeco.pytorch.global.torch.cross_entropy;
 public final class DDPTrainer implements AutoCloseable {
     static { Loader.load(org.bytedeco.pytorch.presets.torch.class); }
 
-    public static final String VERSION = "1.0";
+    public static final String VERSION = "2.0";
 
     private final Module model;
     private final ProcessGroupWrapper processGroup;
@@ -61,6 +61,7 @@ public final class DDPTrainer implements AutoCloseable {
     private final Map<String, Object> extraState = new HashMap<>();
     private long numForwardCalls;
     private long numBackwardCalls;
+    private boolean closed;
 
     public DDPTrainer(Module model, ProcessGroupWrapper processGroup) {
         this.model = Objects.requireNonNull(model, "model");
@@ -208,7 +209,11 @@ public final class DDPTrainer implements AutoCloseable {
 
     @Override
     public void close() {
-        model.close();
+        if (closed) return;
+        closed = true;
+        if (model != null) {
+            try { model.close(); } catch (Throwable ignored) {}
+        }
     }
 
     @Override

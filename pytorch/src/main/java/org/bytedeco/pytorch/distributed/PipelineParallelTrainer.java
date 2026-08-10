@@ -68,6 +68,7 @@ public final class PipelineParallelTrainer implements AutoCloseable {
     private final ModuleForward[] forwards;
     private long numMicroBatches;
     private long numSteps;
+    private boolean closed;
 
     /**
      * @param stages   one module per pipeline stage (size should match worldSize for multi-rank PP,
@@ -279,7 +280,16 @@ public final class PipelineParallelTrainer implements AutoCloseable {
     public boolean isLastStage() { return isLast; }
 
     @Override
-    public void close() {}
+    public void close() {
+        if (closed) return;
+        closed = true;
+        for (Module m : stages) {
+            try { m.close(); } catch (Throwable ignored) {}
+        }
+        System.out.printf(
+                "[PipelineParallelTrainer] Closed: stageId=%d, totalSteps=%d, totalMicroBatches=%d%n",
+                stageId, numSteps, numMicroBatches);
+    }
 
     @Override
     public String toString() {

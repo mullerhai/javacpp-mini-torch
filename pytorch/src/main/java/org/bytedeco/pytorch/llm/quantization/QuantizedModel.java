@@ -41,9 +41,12 @@ import java.util.Objects;
 public final class QuantizedModel implements AutoCloseable {
     static { Loader.load(org.bytedeco.pytorch.presets.torch.class); }
 
+    public static final String VERSION = "2.0";
+
     private final Module source;
     private final Map<String, QuantizedLinear> quantizedModules;
     private final TensorQuantizer quantizer;
+    private volatile boolean closed;
 
     public QuantizedModel(
             Module source,
@@ -70,10 +73,16 @@ public final class QuantizedModel implements AutoCloseable {
 
     @Override
     public void close() {
+        if (closed) return;
+        closed = true;
         for (QuantizedLinear ql : quantizedModules.values()) {
-            ql.close();
+            try { ql.close(); } catch (Throwable ignored) {}
         }
+        System.out.printf("[QuantizedModel] Closed: modules=%d, dtype=%s, mode=%s%n",
+                quantizedModules.size(), quantizer.getDtype(), quantizer.getMode());
     }
+
+    public boolean isClosed() { return closed; }
 
     @Override
     public String toString() {

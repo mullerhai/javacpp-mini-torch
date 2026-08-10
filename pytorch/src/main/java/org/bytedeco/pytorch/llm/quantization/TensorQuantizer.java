@@ -58,6 +58,10 @@ import static org.bytedeco.pytorch.global.torch.tensor;
 public final class TensorQuantizer implements AutoCloseable {
     static { Loader.load(org.bytedeco.pytorch.presets.torch.class); }
 
+    public static final String VERSION = "2.0";
+
+    private volatile boolean closed;
+
     public enum Mode {
         DYNAMIC, STATIC, WEIGHT_ONLY, FP8, AWQ, GPTQ
     }
@@ -290,6 +294,8 @@ public final class TensorQuantizer implements AutoCloseable {
 
     @Override
     public void close() {
+        if (closed) return;
+        closed = true;
         for (Tensor t : calibrationData) {
             t.close();
         }
@@ -299,4 +305,6 @@ public final class TensorQuantizer implements AutoCloseable {
             scale = null;
         }
     }
+
+    public boolean isClosed() { return closed; }
 }

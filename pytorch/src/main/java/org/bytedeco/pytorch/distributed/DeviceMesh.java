@@ -62,7 +62,7 @@ public final class DeviceMesh implements AutoCloseable {
     private final int sliceDim;          // -1 if root
     private final int[] globalRanks;     // ranks belonging to this (sub)mesh
 
-    private DeviceMesh(
+    protected DeviceMesh(
             ProcessGroupWrapper processGroup,
             int[] meshShape,
             String[] dimNames,

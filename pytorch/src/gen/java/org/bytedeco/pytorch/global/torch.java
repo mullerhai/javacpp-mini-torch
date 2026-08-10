@@ -75512,7 +75512,7 @@ apis for specific fusers.
 //
 // DO NOT put the macros for CUDA libraries in this file; they belong in cuda/CUDAConfig.h
 
-// #define AT_MKLDNN_ENABLED() 0
+// #define AT_MKLDNN_ENABLED() 1
 // #define AT_MKLDNN_ACL_ENABLED() 0
 // #define AT_MKL_ENABLED() 0
 // #define AT_MKL_SEQUENTIAL() 0
@@ -75521,11 +75521,11 @@ apis for specific fusers.
 // #define CAFFE2_STATIC_LINK_CUDA() 0
 // #define AT_BUILD_WITH_BLAS() 1
 // #define AT_BUILD_WITH_LAPACK() 1
-public static final int AT_PARALLEL_OPENMP = 0;
-public static final int AT_PARALLEL_NATIVE = 1;
+public static final int AT_PARALLEL_OPENMP = 1;
+public static final int AT_PARALLEL_NATIVE = 0;
 // #define AT_BLAS_F2C() 0
 // #define AT_BLAS_USE_CBLAS_DOT() 1
-// #define AT_KLEIDIAI_ENABLED() 1
+// #define AT_KLEIDIAI_ENABLED() 0
 // #define AT_USE_EIGEN_SPARSE() 0
 
 // #else

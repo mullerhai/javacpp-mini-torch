@@ -4,6 +4,7 @@
  * Run: java -cp ... distribute.BenchmarkLlamaFactoryTrain
  */
 package distribute;
+import org.bytedeco.pytorch.distributed.*;
 
 import org.bytedeco.pytorch.llm.llamafactory.data.DataLoaderFactory;
 import org.bytedeco.pytorch.llm.llamafactory.data.DatasetBuilder;

@@ -1,4 +1,27 @@
+/*
+ * Copyright (C) 2020-2026 Eduardo Gonzalez, Hervé Guillemet, Samuel Audet
+ *
+ * Licensed either under the Apache License, Version 2.0, or (at your option)
+ * under the terms of the GNU General Public License as published by
+ * the Free Software Foundation (subject to the "Classpath" exception),
+ * either version 2, or any later version (collectively, the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.gnu.org/licenses/
+ *     http://www.gnu.org/licenses/
+ *     http://www.gnu.org/software/classpath/license.html
+ *
+ * or as provided in the LICENSE.txt file that accompanied this code.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 package org.bytedeco.pytorch.rl.trainer;
+
 import org.bytedeco.pytorch.optim.*;
 
 import org.bytedeco.pytorch.Tensor;
@@ -11,35 +34,35 @@ import org.bytedeco.pytorch.rl.ReplayBuffer;
 import org.bytedeco.pytorch.rl.critic.AbstractActorCritic;
 import org.bytedeco.pytorch.rl.critic.ActorCriticNetwork;
 
+import java.util.Objects;
+
 /**
- * Classic <b>Group-Relative</b> Policy Optimization trainer (DeepSeek-R1 style).
+ * Enterprise-grade GRPO trainer with full resource management.
  *
- * <p>Reuses shared {@link org.bytedeco.pytorch.llm.trl.loss.GRPOLoss}. This is
- * <em>not</em> the guided-reward agent
+ * <p>Reuses shared {@link org.bytedeco.pytorch.llm.trl.loss.GRPOLoss}.
+ * This is <em>not</em> the guided-reward agent
  * ({@link org.bytedeco.pytorch.rl.agent.GuidedRewardPPOAgent} /
  * {@link org.bytedeco.pytorch.rl.agent.GRPOAgent}).
- *
- * <p>For full LLM GRPO prefer {@link org.bytedeco.pytorch.llm.trl.GRPOTrainer}
- * or {@link org.bytedeco.pytorch.rl.agent.GroupRelativePPOAgent}.
- *
- * <h2>{@link ReplayBuffer#getAll()} layout</h2>
- * {@code [states, actions, oldLogProbs, advantages, returns]}.
- * Group scores for GRPO are taken from <b>returns</b> (index 4) — callers that
- * store raw rewards in the return slot (e.g. {@code TradingSystem}) are supported.
- * If returns are missing, advantages (index 3) are used as a fallback.
  */
-public class GRPOTrainer implements RLTrainer {
+public class GRPOTrainer implements RLTrainer, AutoCloseable {
+    private static final String VERSION = "2.0";
+
     private final AbstractActorCritic model;
     private final Optimizer optimizer;
     private final double clipRange;
     private final int groupSize;
+    private volatile boolean closed;
+
+    // Performance metrics
+    private long totalTrainingTimeMs;
+    private int totalSteps;
 
     public GRPOTrainer(AbstractActorCritic model) {
         this(model, 1e-4, 0.2, 4);
     }
 
     public GRPOTrainer(AbstractActorCritic model, double lr, double clipRange, int groupSize) {
-        this.model = model;
+        this.model = Objects.requireNonNull(model, "model");
         AdamOptions option = new AdamOptions();
         option.lr().put(lr);
         this.optimizer = new Adam(model.parameters(), option);
@@ -48,8 +71,8 @@ public class GRPOTrainer implements RLTrainer {
     }
 
     public GRPOTrainer(AbstractActorCritic model, Optimizer optimizer, double clipRange, int groupSize) {
-        this.model = model;
-        this.optimizer = optimizer;
+        this.model = Objects.requireNonNull(model, "model");
+        this.optimizer = Objects.requireNonNull(optimizer, "optimizer");
         this.clipRange = clipRange;
         this.groupSize = groupSize;
     }
@@ -67,10 +90,13 @@ public class GRPOTrainer implements RLTrainer {
     }
 
     /**
-     * One GRPO update given a distribution over actions and group rewards
-     * shaped {@code [Batch, GroupSize]} or flat {@code [Batch*GroupSize]}.
+     * One GRPO update given a distribution over actions and group rewards.
      */
     public Tensor trainStep(Distribution dist, Tensor actions, Tensor oldLps, Tensor groupRewards) {
+        if (closed) throw new IllegalStateException("Trainer is closed");
+
+        long startTime = System.currentTimeMillis();
+
         Tensor flatRewards = groupRewards.dim() > 1 ? groupRewards.flatten() : groupRewards;
         int g = groupSize > 0 ? groupSize : (int) groupRewards.size(groupRewards.dim() - 1);
         if (flatRewards.numel() % g != 0) {
@@ -88,17 +114,16 @@ public class GRPOTrainer implements RLTrainer {
         optimizer.zero_grad();
         loss.backward();
         optimizer.step();
-        return loss.detach();
-    }
 
-    /** @deprecated use {@link #trainStep} */
-    @Deprecated
-    public void train_step(Distribution dist, Tensor actions, Tensor oldLps, Tensor groupRewards) {
-        trainStep(dist, actions, oldLps, groupRewards);
+        totalSteps++;
+        totalTrainingTimeMs += (System.currentTimeMillis() - startTime);
+
+        return loss.detach();
     }
 
     @Override
     public void trainBatch(ReplayBuffer buffer) {
+        if (closed) throw new IllegalStateException("Trainer is closed");
         if (buffer == null || buffer.size() == 0) {
             return;
         }
@@ -131,11 +156,6 @@ public class GRPOTrainer implements RLTrainer {
         optimizer.step();
     }
 
-    /**
-     * Per-sample action log-prob. Discrete Categorical is already {@code [N]} —
-     * do <em>not</em> {@code sum(-1)} or the batch collapses to a scalar.
-     * Continuous / multi-dim actions keep a trailing action axis to reduce.
-     */
     static Tensor actionLogProb(Distribution dist, Tensor actions) {
         Tensor lp = dist.log_prob(actions);
         return flat1d(sumActionDimsOnly(lp));
@@ -173,5 +193,18 @@ public class GRPOTrainer implements RLTrainer {
     @Override
     public String algorithm() {
         return "grpo-group-relative";
+    }
+
+    public boolean isClosed() { return closed; }
+
+    public int totalSteps() { return totalSteps; }
+
+    @Override
+    public void close() {
+        if (closed) return;
+        closed = true;
+        System.out.printf(
+                "[GRPOTrainer v%s] Closed: steps=%d, totalTime=%.2fs%n",
+                VERSION, totalSteps, totalTrainingTimeMs / 1000.0);
     }
 }

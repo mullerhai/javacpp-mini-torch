@@ -55,6 +55,9 @@ import java.util.Objects;
 public final class GRPOTrainer extends BaseTrainer {
     static { Loader.load(org.bytedeco.pytorch.presets.torch.class); }
 
+    private volatile boolean closed;
+    private long numTrainingSteps;
+
     private final Module policy;
     private final LlmForward policyForward;
     private final Module reference;            // optional
@@ -211,4 +214,16 @@ public final class GRPOTrainer extends BaseTrainer {
         }
         return t;
     }
+
+    @Override
+    public void close() {
+        if (closed) return;
+        closed = true;
+        super.close();
+        System.out.printf(
+                "[GRPOTrainer] Closed: trainingSteps=%d%n",
+                numTrainingSteps);
+    }
+
+    public boolean isClosed() { return closed; }
 }

@@ -78,20 +78,25 @@ import java.util.zip.GZIPInputStream;
  * {@code special_tokens_set} / {@code eot_token} / {@code n_vocab}.
  *
  * <pre>{@code
- * Tiktoken enc = Tiktoken.getEncoding("cl100k_base");
- * // or
- * Tiktoken enc = Tiktoken.encodingForModel("gpt-4o");
- *
- * int[] ids = enc.encodeOrdinary("Hello world");          // [9906, 1917]
- * int[] eot = enc.encode("<|endoftext|>", "all");         // [100257]
- * String text = enc.decode(ids);                          // "Hello world"
- * byte[] raw = enc.decodeBytes(ids);
- *
- * // HF FastTokenizer adapter for transformers pipelines
- * FastTokenizer ft = enc.toFastTokenizer();
+ * try (Tiktoken enc = Tiktoken.getEncoding("cl100k_base")) {
+ *     int[] ids = enc.encodeOrdinary("Hello world");          // [9906, 1917]
+ *     String text = enc.decode(ids);                          // "Hello world"
+ * }
  * }</pre>
  */
-public final class Tiktoken {
+public final class Tiktoken implements AutoCloseable {
+
+    public static final String VERSION = "2.0";
+
+    private volatile boolean closed;
+
+    // Performance metrics
+    private long totalEncodeTimeMs;
+    private long totalDecodeTimeMs;
+    private int totalEncodeCalls;
+    private int totalDecodeCalls;
+    private long totalTokensEncoded;
+    private long totalTokensDecoded;
 
     // ---- Public encoding name constants ----
 
@@ -546,13 +551,27 @@ public final class Tiktoken {
      */
     public int[] encodeOrdinary(String text) {
         if (text == null || text.isEmpty()) return new int[0];
-        return encodeOrdinaryText(text);
+        long start = System.currentTimeMillis();
+        int[] result = encodeOrdinaryText(text);
+        totalEncodeTimeMs += System.currentTimeMillis() - start;
+        totalEncodeCalls++;
+        totalTokensEncoded += result.length;
+        return result;
     }
 
     /** Python {@code encode_ordinary_batch}. */
     public List<int[]> encodeOrdinaryBatch(List<String> texts) {
+        long start = System.currentTimeMillis();
         List<int[]> out = new ArrayList<>(texts.size());
-        for (String t : texts) out.add(encodeOrdinary(t));
+        int totalTokens = 0;
+        for (String t : texts) {
+            int[] ids = encodeOrdinary(t);
+            out.add(ids);
+            totalTokens += ids.length;
+        }
+        totalEncodeTimeMs += System.currentTimeMillis() - start;
+        totalEncodeCalls += texts.size();
+        totalTokensEncoded += totalTokens;
         return out;
     }
 
@@ -585,6 +604,7 @@ public final class Tiktoken {
      */
     public int[] encode(String text, Object allowedSpecial, Object disallowedSpecial) {
         if (text == null || text.isEmpty()) return new int[0];
+        long start = System.currentTimeMillis();
 
         Set<String> allowed = resolveSpecialSet(allowedSpecial, /*allMeans*/ specialTokensSet);
         Set<String> disallowed = resolveSpecialSet(disallowedSpecial, /*allMeans*/ specialTokensSet);
@@ -600,10 +620,17 @@ public final class Tiktoken {
             checkNoDisallowed(text, disallowed);
         }
 
+        int[] result;
         if (allowed.isEmpty()) {
-            return encodeOrdinaryText(text);
+            result = encodeOrdinaryText(text);
+        } else {
+            result = encodeWithAllowedSpecials(text, allowed);
         }
-        return encodeWithAllowedSpecials(text, allowed);
+
+        totalEncodeTimeMs += System.currentTimeMillis() - start;
+        totalEncodeCalls++;
+        totalTokensEncoded += result.length;
+        return result;
     }
 
     /**
@@ -721,6 +748,16 @@ public final class Tiktoken {
      *                          has no skip flag — use {@link #decode(int[])} for pure parity.
      */
     public String decode(int[] ids, boolean skipSpecialTokens) {
+        long start = System.currentTimeMillis();
+        String result = decodeToString(ids, skipSpecialTokens);
+        totalDecodeTimeMs += System.currentTimeMillis() - start;
+        totalDecodeCalls++;
+        totalTokensDecoded += ids != null ? ids.length : 0;
+        return result;
+    }
+
+    /** Internal decode without metrics overhead. */
+    private String decodeToString(int[] ids, boolean skipSpecialTokens) {
         byte[] raw = decodeBytes(ids, skipSpecialTokens);
         return new String(raw, StandardCharsets.UTF_8);
     }
@@ -753,8 +790,14 @@ public final class Tiktoken {
 
     /** Python {@code decode_batch}. */
     public List<String> decodeBatch(List<int[]> batch) {
+        long start = System.currentTimeMillis();
         List<String> out = new ArrayList<>(batch.size());
         for (int[] ids : batch) out.add(decode(ids));
+        totalDecodeTimeMs += System.currentTimeMillis() - start;
+        totalDecodeCalls += batch.size();
+        int totalTokens = 0;
+        for (int[] ids : batch) totalTokens += ids != null ? ids.length : 0;
+        totalTokensDecoded += totalTokens;
         return out;
     }
 
@@ -1181,5 +1224,83 @@ public final class Tiktoken {
     public String toString() {
         return "Tiktoken{name=" + name + ", nVocab=" + nVocab
                 + ", specials=" + specialTokensSet.size() + "}";
+    }
+
+    @Override
+    public void close() {
+        if (closed) return;
+        closed = true;
+        System.out.printf(
+                "[Tiktoken] Closed: name=%s, encodeCalls=%d, decodeCalls=%d, " +
+                "encodeTime=%.2fs (%.3fms/call), decodeTime=%.2fs (%.3fms/call), " +
+                "tokensEncoded=%d, tokensDecoded=%d%n",
+                name, totalEncodeCalls, totalDecodeCalls,
+                totalEncodeTimeMs / 1000.0,
+                totalEncodeCalls > 0 ? (double) totalEncodeTimeMs / totalEncodeCalls : 0,
+                totalDecodeTimeMs / 1000.0,
+                totalDecodeCalls > 0 ? (double) totalDecodeTimeMs / totalDecodeCalls : 0,
+                totalTokensEncoded, totalTokensDecoded);
+    }
+
+    public boolean isClosed() { return closed; }
+
+    /**
+     * Get tiktoken statistics.
+     */
+    public TiktokenStats getStats() {
+        return new TiktokenStats(
+                name, nVocab, specialTokensSet.size(),
+                totalEncodeCalls, totalDecodeCalls,
+                totalEncodeTimeMs, totalDecodeTimeMs,
+                totalTokensEncoded, totalTokensDecoded
+        );
+    }
+
+    /**
+     * Tiktoken performance statistics.
+     */
+    public static final class TiktokenStats {
+        public final String name;
+        public final int vocabSize;
+        public final int specialTokenCount;
+        public final int totalEncodeCalls;
+        public final int totalDecodeCalls;
+        public final long totalEncodeTimeMs;
+        public final long totalDecodeTimeMs;
+        public final long totalTokensEncoded;
+        public final long totalTokensDecoded;
+
+        public TiktokenStats(String name, int vocabSize, int specialTokenCount,
+                         int totalEncodeCalls, int totalDecodeCalls,
+                         long totalEncodeTimeMs, long totalDecodeTimeMs,
+                         long totalTokensEncoded, long totalTokensDecoded) {
+            this.name = name;
+            this.vocabSize = vocabSize;
+            this.specialTokenCount = specialTokenCount;
+            this.totalEncodeCalls = totalEncodeCalls;
+            this.totalDecodeCalls = totalDecodeCalls;
+            this.totalEncodeTimeMs = totalEncodeTimeMs;
+            this.totalDecodeTimeMs = totalDecodeTimeMs;
+            this.totalTokensEncoded = totalTokensEncoded;
+            this.totalTokensDecoded = totalTokensDecoded;
+        }
+
+        public double avgEncodeTimeMs() {
+            return totalEncodeCalls > 0 ? (double) totalEncodeTimeMs / totalEncodeCalls : 0;
+        }
+
+        public double avgDecodeTimeMs() {
+            return totalDecodeCalls > 0 ? (double) totalDecodeTimeMs / totalDecodeCalls : 0;
+        }
+
+        @Override
+        public String toString() {
+            return String.format(
+                    "TiktokenStats{name=%s, vocab=%d, encodeCalls=%d, decodeCalls=%d, " +
+                    "avgEncode=%.3fms, avgDecode=%.3fms, throughput=%.0f tok/s}",
+                    name, vocabSize, totalEncodeCalls, totalDecodeCalls,
+                    avgEncodeTimeMs(), avgDecodeTimeMs(),
+                    totalEncodeTimeMs > 0 ? totalTokensEncoded * 1000.0 / totalEncodeTimeMs : 0);
+        }
     }
 }

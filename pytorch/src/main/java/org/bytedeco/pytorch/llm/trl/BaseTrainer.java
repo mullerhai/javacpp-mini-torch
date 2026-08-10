@@ -54,9 +54,16 @@ public abstract class BaseTrainer implements AutoCloseable {
 
     private int globalStep;
     private int microStep;
-    private boolean training;
+    private volatile boolean training;
+    private volatile boolean closed;
     private double runningLoss;
     private int runningLossCount;
+
+    // Performance metrics
+    private long totalForwardTimeMs;
+    private long totalBackwardTimeMs;
+    private long totalOptimizerTimeMs;
+    private int totalBatchesProcessed;
 
     protected BaseTrainer(TrainerConfig config, Optimizer optimizer) {
         this.config = Objects.requireNonNull(config, "config");
@@ -94,17 +101,28 @@ public abstract class BaseTrainer implements AutoCloseable {
      */
     public double trainingStep(Map<String, Tensor> batch) {
         Objects.requireNonNull(batch, "batch");
+        if (closed) throw new IllegalStateException("Trainer is closed");
         if (!training) {
             train();
         }
 
         int accum = Math.max(1, config.gradientAccumulationSteps());
+
+        long fwdStart = System.currentTimeMillis();
         Tensor loss = computeLoss(batch);
+        long fwdEnd = System.currentTimeMillis();
+        totalForwardTimeMs += (fwdEnd - fwdStart);
+
         // Scale for accumulation so effective loss matches full batch
         Tensor scaled = accum > 1
                 ? loss.div(new org.bytedeco.pytorch.Scalar((double) accum))
                 : loss;
+
+        long bwdStart = System.currentTimeMillis();
         scaled.backward();
+        long bwdEnd = System.currentTimeMillis();
+        totalBackwardTimeMs += (bwdEnd - bwdStart);
+
         microStep++;
 
         double lossValue = loss.item_double();
@@ -112,6 +130,7 @@ public abstract class BaseTrainer implements AutoCloseable {
         runningLossCount++;
 
         if (microStep % accum == 0) {
+            long optStart = System.currentTimeMillis();
             if (config.maxGradNorm() > 0.0) {
                 TensorVector params = trainableParameters();
                 if (params != null && params.size() > 0) {
@@ -120,11 +139,18 @@ public abstract class BaseTrainer implements AutoCloseable {
             }
             optimizer.step();
             optimizer.zero_grad();
+            long optEnd = System.currentTimeMillis();
+            totalOptimizerTimeMs += (optEnd - optStart);
+
             globalStep++;
+            totalBatchesProcessed++;
 
             Map<String, Double> metrics = new LinkedHashMap<>();
             metrics.put("loss", lossValue);
             metrics.put("lr", config.learningRate());
+            metrics.put("fwd_time_ms", (double) (fwdEnd - fwdStart));
+            metrics.put("bwd_time_ms", (double) (bwdEnd - bwdStart));
+            metrics.put("opt_time_ms", (double) (optEnd - optStart));
             fireStepEnd(metrics);
 
             if (config.loggingSteps() > 0 && globalStep % config.loggingSteps() == 0) {
@@ -194,8 +220,28 @@ public abstract class BaseTrainer implements AutoCloseable {
 
     @Override
     public void close() {
-        // Optimizer / model ownership stays with the caller.
+        if (closed) return;
+        closed = true;
+
+        // Fire end callbacks
+        fireTrainEnd();
+
+        // Clear callbacks
+        callbacks.clear();
+
+        System.out.printf(
+                "[BaseTrainer] Closed: globalStep=%d, batches=%d, " +
+                "fwdTime=%.2fs, bwdTime=%.2fs, optTime=%.2fs%n",
+                globalStep, totalBatchesProcessed,
+                totalForwardTimeMs / 1000.0,
+                totalBackwardTimeMs / 1000.0,
+                totalOptimizerTimeMs / 1000.0);
     }
+
+    /**
+     * Check if trainer is closed.
+     */
+    public boolean isClosed() { return closed; }
 
     /** Supplies preference / SFT / RLHF micro-batches as named tensors. */
     @FunctionalInterface

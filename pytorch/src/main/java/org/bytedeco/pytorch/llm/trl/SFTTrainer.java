@@ -56,6 +56,8 @@ import static org.bytedeco.pytorch.global.torch.full_like;
 public final class SFTTrainer extends BaseTrainer {
     static { Loader.load(org.bytedeco.pytorch.presets.torch.class); }
 
+    private volatile boolean closed;
+
     private final Module model;
     private final LlmForward forward;
     private final SFTConfig sftConfig;
@@ -128,4 +130,14 @@ public final class SFTTrainer extends BaseTrainer {
         }
         return t;
     }
+
+    @Override
+    public void close() {
+        if (closed) return;
+        closed = true;
+        super.close();
+        System.out.println("[SFTTrainer] Closed");
+    }
+
+    public boolean isClosed() { return closed; }
 }

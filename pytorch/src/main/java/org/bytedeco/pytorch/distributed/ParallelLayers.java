@@ -21,6 +21,8 @@
  * limitations under the License.
  */
 package org.bytedeco.pytorch.distributed;
+import org.bytedeco.pytorch.nn.modules.container.*;
+import org.bytedeco.pytorch.jit.*;
 
 import org.bytedeco.pytorch.Scalar;
 import org.bytedeco.pytorch.global.torch;
@@ -70,9 +72,11 @@ import static org.bytedeco.pytorch.global.torch.gelu;
  * </ul>
  *
  * <pre>{@code
- * DeviceMesh mesh = DeviceMesh.initDpTp(pg, tpSize);
+ * // 3D mesh: dp * tp * ep == worldSize
+ * DeviceMesh mesh = DeviceMesh.initDpTpEp(pg, tpSize, epSize);
  * DeviceMesh tpMesh = mesh.get("tp");
  * DeviceMesh dpMesh = mesh.get("dp");
+ * DeviceMesh epMesh = mesh.get("ep");
  *
  * EmbeddingTP emb = new EmbeddingTP(vocab, dim, tpMesh);
  * AttentionTP attn = new AttentionTP(numHeads, dim, tpMesh);
@@ -86,6 +90,42 @@ public final class ParallelLayers {
     static { Loader.load(org.bytedeco.pytorch.presets.torch.class); }
 
     private ParallelLayers() {}
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // DeviceMesh 3D factory (dp × tp × ep)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Initialize a 3D mesh for DP×TP×EP hybrid parallelism.
+     * Requires {@code dpSize * tpSize * epSize == worldSize}.
+     *
+     * @param pg      process group (world)
+     * @param tpSize  tensor parallel size
+     * @param epSize  expert parallel size
+     * @return root mesh with dp, tp, ep dimensions
+     */
+    public static DeviceMesh initDpTpEp(ProcessGroupWrapper pg, int tpSize, int epSize) {
+        int world = pg.getWorldSize();
+        if (tpSize <= 0 || epSize <= 0) {
+            throw new IllegalArgumentException(
+                    "tpSize=" + tpSize + " and epSize=" + epSize + " must be > 0");
+        }
+        if (world % (tpSize * epSize) != 0) {
+            throw new IllegalArgumentException(
+                    "worldSize=" + world + " not divisible by tpSize*epSize=" + (tpSize * epSize));
+        }
+        int dpSize = world / (tpSize * epSize);
+        return DeviceMesh.init(pg,
+                new int[]{dpSize, tpSize, epSize},
+                new String[]{"dp", "tp", "ep"});
+    }
+
+    /**
+     * Initialize a 2D mesh for DP×TP parallelism (backward compatible).
+     */
+    public static DeviceMesh initDpTp(ProcessGroupWrapper pg, int tpSize) {
+        return DeviceMesh.initDpTp(pg, tpSize);
+    }
 
     // ─────────────────────────────────────────────────────────────────────────
     // Embedding Tensor Parallel
@@ -133,7 +173,10 @@ public final class ParallelLayers {
 
         /**
          * Forward: local embedding lookup for this rank's vocab shard.
-         * Result is gathered to reconstruct full {@code [seq, batch, dim]}.
+         * Result is gathered along vocab dimension to reconstruct full embeddings.
+         *
+         * @param input token IDs of shape [..., seq_len]
+         * @return embeddings of shape [..., seq_len, vocab/tpSize * tpSize] (reconstructed vocab dim)
          */
         public Tensor forward(Tensor input) {
             // input: [..., seq_len] token IDs
@@ -142,28 +185,39 @@ public final class ParallelLayers {
 
             if (tpSize <= 1) return localOut;
 
-            // Allgather along embedding dim to reconstruct full vocab embeddings
-            int dim = (int) localOut.dim();
-            long seqLen = localOut.sizes().get(dim - 1);
-            long batchProd = localOut.numel() / (seqLen * embeddingDim);
+            // Input shape: [batch, seq_len] -> output shape: [batch, seq_len, embedding_dim]
+            int nd = (int) localOut.dim();
+            long batch = localOut.sizes().get(0);
+            long seqLen = nd > 1 ? localOut.sizes().get(1) : 1;
+            long hiddenDim = localOut.sizes().get(nd - 1);
 
-            // Reshape to [batch*seq, dim] for allgather
-            long flatSize = batchProd * seqLen;
-            Tensor flat = localOut.reshape(flatSize * embeddingDim);
+            // Reshape to [batch * seq_len, embedding_dim] for allgather
+            long numTokens = batch * seqLen;
+            Tensor flat = localOut.reshape(numTokens, hiddenDim);
 
             // Gather from all TP ranks
-            Tensor gathered = empty(flatSize * embeddingDim * tpSize)
+            // Each rank has [numTokens, hiddenDim], gathered shape: [tpSize, numTokens, hiddenDim]
+            Tensor gathered = empty(tpSize, numTokens, hiddenDim)
                     .to(flat.device(), flat.scalar_type());
-            pg.allgatherBase(gathered, flat)._wait();
+            pg.allgatherBase(gathered.reshape(tpSize * numTokens, hiddenDim), flat)._wait();
 
-            // Reconstruct: interleave shards by rank
-            // gathered shape: [tpSize, batch*seq, dim] -> transpose -> [batch*seq, tpSize, dim]
-            Tensor view = gathered.reshape(tpSize, batchProd * seqLen, embeddingDim);
-            Tensor perm = view.permute(1L, 0L, 2L).contiguous();
+            // Transpose to [numTokens, tpSize, hiddenDim] and reshape
+            // This interleaves vocab shards from different TP ranks
+            Tensor perm = gathered.permute(1L, 0L, 2L).contiguous(); // [numTokens, tpSize, hiddenDim]
 
-            // Reshape back to [..., seq, batch, dim] then move seq to front
-            long[] outShape = localOut.sizes().vec().get();//.toLongArray();
-            outShape[dim - 1] = seqLen * tpSize;
+            // Reconstruct original shape with full vocab dimension
+            // Output shape: [batch, seq_len, tpSize * hiddenDim]
+            long[] outShape;
+            if (nd == 1) {
+                // Input was 1D [seq_len]
+                outShape = new long[]{seqLen, tpSize * hiddenDim};
+            } else {
+                outShape = new long[nd];
+                for (int i = 0; i < nd - 1; i++) {
+                    outShape[i] = localOut.sizes().get(i);
+                }
+                outShape[nd - 1] = tpSize * hiddenDim;
+            }
             return perm.reshape(outShape);
         }
 
@@ -550,19 +604,42 @@ public final class ParallelLayers {
      * results are gathered and scattered along sequence dimension.
      *
      * <p>Uses ring-style collective for attention gradient synchronization.
+     *
+     * <p>Two usage modes:
+     * <ul>
+     *   <li>With embedded attention: {@code new PrefillSP(seqLen, tpMesh)}</li>
+     *   <li>With external attention: {@code new PrefillSP(seqLen, attentionModule, tpMesh)}</li>
+     * </ul>
      */
     public static final class PrefillSP extends Module {
-        private final Module attention;     // underlying attention (TP or DP)
+        private final Module attention;     // underlying attention (TP or DP), may be null
         private final ProcessGroupWrapper spGroup;
         private final DeviceMesh spMesh;
         private final long seqLen;
         private final long localSeqLen;
         private final int spSize;
         private final int spRank;
+        private final boolean hasOwnAttention;
 
+        /**
+         * Simple constructor: creates internal AttentionTP module.
+         *
+         * @param seqLen  full sequence length (must be divisible by spSize)
+         * @param spMesh  sequence parallel device mesh (same as TP mesh for hybrid SP+TP)
+         */
+        public PrefillSP(long seqLen, DeviceMesh spMesh) {
+            this(seqLen, null, spMesh);
+        }
+
+        /**
+         * Full constructor with external attention module.
+         *
+         * @param seqLen    full sequence length (must be divisible by spSize)
+         * @param attention external attention module (or null to create internal AttentionTP)
+         * @param spMesh    sequence parallel device mesh
+         */
         public PrefillSP(long seqLen, Module attention, DeviceMesh spMesh) {
             super("PrefillSP");
-            this.attention = attention;
             this.spMesh = spMesh;
             this.spGroup = spMesh.processGroup();
             this.spSize = spMesh.size();
@@ -574,7 +651,22 @@ public final class ParallelLayers {
                         "seqLen=" + seqLen + " not divisible by spSize=" + spSize);
             }
             this.localSeqLen = seqLen / spSize;
+
+            // Create internal attention if not provided
+            if (attention == null) {
+                // Get hidden dim from mesh config (default 4096)
+                long hiddenDim = 4096;
+                int numHeads = 32;
+                this.attention = register_module("attention", new AttentionTP(hiddenDim, numHeads, spMesh));
+                this.hasOwnAttention = true;
+            } else {
+                this.attention = attention;
+                this.hasOwnAttention = false;
+            }
         }
+
+        /** Returns the underlying attention module. */
+        public Module getAttention() { return attention; }
 
         /**
          * Forward with sequence-parallel input.
@@ -587,7 +679,6 @@ public final class ParallelLayers {
             if (spSize <= 1) return out;
 
             // Allgather to reconstruct full sequence
-            int dim = (int) out.dim();
             long batch = out.sizes().get(0);
             long localS = out.sizes().get(1);
             long hidden = out.sizes().get(2);
@@ -629,72 +720,152 @@ public final class ParallelLayers {
 
     /**
      * Hybrid trainer combining EP for MoE, TP for dense/attention, DP for replication.
-     * Assumes a 3D mesh: [dp, tp, ep] dimensions.
+     *
+     * <p>Supports both 2D mesh (dp×tp) and 3D mesh (dp×tp×ep) configurations.
+     * When only 2D mesh is available, EP operations gracefully degrade to local-only
+     * (no actual expert parallelization, but model runs).
+     *
+     * <p>Recommended mesh initialization:
+     * <pre>{@code
+     * // 8 GPUs: dp=1, tp=4, ep=2
+     * DeviceMesh mesh = ParallelLayers.initDpTpEp(pg, 4, 2);
+     * HybridTrainer trainer = HybridTrainer.builder()
+     *     .mesh(mesh)
+     *     .vocab(32000)
+     *     .hiddenDim(4096)
+     *     .numHeads(32)
+     *     .intermediateDim(16384)
+     *     .numExperts(8)
+     *     .topK(2)
+     *     .seqLen(2048)
+     *     .build();
+     * }</pre>
      */
     public static final class HybridTrainer implements AutoCloseable {
-        private final EmbeddingTP embedding;
-        private final AttentionTP attention;
-        private final DenseTP ffn;
-        private final RoutedExpertEP moe;
-        private final PrefillSP prefill;
+        protected final EmbeddingTP embedding;
+        protected final AttentionTP attention;
+        protected final DenseTP ffn;
+        protected final RoutedExpertEP moe;
+        protected final PrefillSP prefill;
         private final DeviceMesh dpMesh;
         private final DeviceMesh tpMesh;
         private final DeviceMesh epMesh;
         private final ProcessGroupWrapper dpGroup;
         private final ProcessGroupWrapper tpGroup;
         private final ProcessGroupWrapper epGroup;
+        private final boolean hasEP;
         private final Function<Tensor, Tensor> forward;
         private long steps;
+        private boolean closed;
 
+        /**
+         * Create hybrid trainer with full 3D mesh (dp × tp × ep).
+         *
+         * @param mesh           3D mesh with dp, tp, ep dimensions
+         * @param vocab          vocabulary size
+         * @param hiddenDim      hidden dimension
+         * @param numHeads       number of attention heads
+         * @param intermediateDim FFN intermediate dimension
+         * @param numExperts      number of experts (for MoE)
+         * @param topK           top-k routing
+         * @param seqLen         sequence length
+         */
         public HybridTrainer(DeviceMesh mesh, long vocab, long hiddenDim,
                              int numHeads, long intermediateDim,
                              int numExperts, int topK, long seqLen) {
-            this.dpMesh = mesh.get("dp");
-            this.tpMesh = mesh.get("tp");
-            this.epMesh = mesh.get("ep");
+            // Extract sub-meshes if available, with graceful fallback
+            this.dpMesh = extractMesh(mesh, "dp");
+            this.tpMesh = extractMesh(mesh, "tp");
+            this.epMesh = extractMesh(mesh, "ep");
+            this.hasEP = epMesh != null;
 
-            this.dpGroup = dpMesh.processGroup();
-            this.tpGroup = tpMesh.processGroup();
-            this.epGroup = epMesh.processGroup();
+            this.dpGroup = dpMesh != null ? dpMesh.processGroup() : null;
+            this.tpGroup = tpMesh != null ? tpMesh.processGroup() : null;
+            this.epGroup = hasEP ? epMesh.processGroup() : null;
 
             // Initialize parallel layers
             this.embedding = new EmbeddingTP(vocab, hiddenDim, tpMesh);
             this.attention = new AttentionTP(hiddenDim, numHeads, tpMesh);
             this.ffn = new DenseTP(hiddenDim, intermediateDim, tpMesh);
-            this.moe = new RoutedExpertEP(numExperts, topK, hiddenDim, epMesh);
-            this.prefill = new PrefillSP(seqLen, attention, tpMesh);
+
+            // MoE: use EP mesh if available, otherwise fall back to TP mesh
+            // (will run locally without expert parallelization)
+            DeviceMesh moeMesh = hasEP ? epMesh : tpMesh;
+            this.moe = new RoutedExpertEP(numExperts, topK, hiddenDim, moeMesh);
+
+            // PrefillSP: use simplified constructor (creates internal attention)
+            this.prefill = new PrefillSP(seqLen, tpMesh);
 
             this.forward = input -> HybridTrainer.this.forwardImpl(input);
 
-            System.out.printf("[HybridTrainer] dp=%d tp=%d ep=%d vocab=%d hidden=%d experts=%d%n",
-                    dpMesh.size(), tpMesh.size(), epMesh.size(), vocab, hiddenDim, numExperts);
+            int dpSize = dpMesh != null ? dpMesh.size() : 1;
+            int tpSize = tpMesh != null ? tpMesh.size() : 1;
+            int epSize = hasEP ? epMesh.size() : 1;
+
+            System.out.printf("[HybridTrainer] initialized: dp=%d tp=%d ep=%d (hasEP=%b)%n" +
+                            "  vocab=%d hidden=%d numHeads=%d experts=%d topK=%d seqLen=%d%n",
+                    dpSize, tpSize, epSize, hasEP,
+                    vocab, hiddenDim, numHeads, numExperts, topK, seqLen);
+        }
+
+        /**
+         * Extract a named sub-mesh from a potentially multi-dimensional mesh.
+         * Returns null if the dimension doesn't exist (for backward compatibility).
+         */
+        private static DeviceMesh extractMesh(DeviceMesh mesh, String dimName) {
+            try {
+                return mesh.get(dimName);
+            } catch (IllegalArgumentException e) {
+                System.out.printf("[HybridTrainer] WARNING: mesh dimension '%s' not found, operations will be local%n", dimName);
+                return null;
+            }
         }
 
         private Tensor forwardImpl(Tensor input) {
             // Embedding (TP)
             Tensor x = embedding.forward(input);
 
-            // Prefill with SP (TP)
+            // Prefill with SP (sequence parallel)
             x = prefill.forward(x);
 
-            // Residual block
+            // Residual block: FFN + MoE
             Tensor residual = x;
             x = prefill.allreduceForward(ffn.forward(x)).add_(residual);
+            residual = x;
             x = prefill.allreduceForward(moe.forward(x)).add_(residual);
 
             return x;
         }
 
+        /**
+         * Single training step: forward, backward, gradient sync, optimizer step.
+         *
+         * @param input   input tokens [batch, seq_len]
+         * @param target  target token IDs [batch, seq_len]
+         * @param opt     optimizer
+         * @return loss tensor
+         */
         public Tensor step(Tensor input, Tensor target, Optimizer opt) {
             opt.zero_grad();
             Tensor out = forward.apply(input);
             Tensor loss = DistributedLoss.crossEntropy(out, target);
             loss.backward();
 
-            // Synchronize gradients
-            tpGroup.averageGradients(new java.util.ArrayList<>());
-            epGroup.averageGradients(new java.util.ArrayList<>());
-            dpGroup.averageGradients(new java.util.ArrayList<>());
+            // Synchronize gradients across parallel groups
+            // TP gradients: average across TP ranks
+            if (tpGroup != null && tpGroup.getWorldSize() > 1) {
+                tpGroup.averageGradients(new ArrayList<>());
+            }
+
+            // EP gradients: average across EP ranks (if using EP)
+            if (hasEP && epGroup != null && epGroup.getWorldSize() > 1) {
+                epGroup.averageGradients(new ArrayList<>());
+            }
+
+            // DP gradients: average across DP ranks
+            if (dpGroup != null && dpGroup.getWorldSize() > 1) {
+                dpGroup.averageGradients(new ArrayList<>());
+            }
 
             opt.step();
             steps++;
@@ -703,9 +874,15 @@ public final class ParallelLayers {
 
         public Module getModule() { return embedding; }  // composite module
         public long getSteps() { return steps; }
+        public boolean hasExpertParallel() { return hasEP; }
 
         @Override
-        public void close() {}
+        public void close() {
+            if (closed) return;
+            closed = true;
+            // HybridTrainer doesn't own the module, just closes internal layers
+            System.out.printf("[HybridTrainer] Closed: steps=%d%n", steps);
+        }
 
         public static Builder builder() { return new Builder(); }
 

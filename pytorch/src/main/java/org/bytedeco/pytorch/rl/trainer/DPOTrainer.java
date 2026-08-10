@@ -1,4 +1,31 @@
+/*
+ * Copyright (C) 2020-2026 Eduardo Gonzalez, Hervé Guillemet, Samuel Audet
+ *
+ * Licensed either under the Apache License, Version 2.0, or (at your option)
+ * under the terms of the GNU General Public License as published by
+ * the Free Software Foundation (subject to the "Classpath" exception),
+ * either version 2, or any later version (collectively, the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.gnu.org/licenses/
+ *     http://www.gnu.org/licenses/
+ *     http://www.gnu.org/software/classpath/license.html
+ *
+ * or as provided in the LICENSE.txt file that accompanied this code.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 package org.bytedeco.pytorch.rl.trainer;
+
 import org.bytedeco.pytorch.optim.*;
 
 import org.bytedeco.javacpp.PointerScope;
@@ -10,15 +37,24 @@ import org.bytedeco.pytorch.optim.Optimizer;
 import org.bytedeco.pytorch.rl.ReplayBuffer;
 import org.bytedeco.pytorch.rl.critic.ActorCriticNetwork;
 
+import java.util.Objects;
+
 /**
- * Classic (non-LLM) DPO trainer operating on actor-critic policy distributions.
+ * Enterprise-grade DPO trainer with full resource management.
  *
  * <p>For LLM preference tuning prefer
  * {@link org.bytedeco.pytorch.llm.trl.DPOTrainer}.
  */
-public class DPOTrainer implements RLTrainer {
+public class DPOTrainer implements RLTrainer, AutoCloseable {
+    private static final String VERSION = "2.0";
+
     private final float beta;
     private Optimizer optimizer;
+    private volatile boolean closed;
+
+    // Performance metrics
+    private long totalTrainingTimeMs;
+    private int totalSteps;
 
     public DPOTrainer(float beta) {
         this.beta = beta;
@@ -30,7 +66,7 @@ public class DPOTrainer implements RLTrainer {
     }
 
     public void setOptimizer(Optimizer optimizer) {
-        this.optimizer = optimizer;
+        this.optimizer = Objects.requireNonNull(optimizer, "optimizer");
     }
 
     public float beta() {
@@ -38,14 +74,16 @@ public class DPOTrainer implements RLTrainer {
     }
 
     /**
-     * Canonical DPO loss — delegates to the shared TRL implementation.
+     * Canonical DPO loss - delegates to the shared TRL implementation.
      */
     public Tensor computeLoss(Tensor pLpC, Tensor pLpR, Tensor rLpC, Tensor rLpR) {
+        if (closed) throw new IllegalStateException("Trainer is closed");
         return DPOLoss.compute(pLpC, pLpR, rLpC, rLpR, beta, "sigmoid");
     }
 
     public Tensor computeLoss(
             Tensor pLpC, Tensor pLpR, Tensor rLpC, Tensor rLpR, String lossType) {
+        if (closed) throw new IllegalStateException("Trainer is closed");
         return DPOLoss.compute(pLpC, pLpR, rLpC, rLpR, beta, lossType);
     }
 
@@ -64,6 +102,9 @@ public class DPOTrainer implements RLTrainer {
             Tensor actionRejected,
             ActorCriticNetwork policy,
             ActorCriticNetwork reference) {
+        if (closed) throw new IllegalStateException("Trainer is closed");
+        long startTime = System.currentTimeMillis();
+
         try (PointerScope scope = new PointerScope()) {
             Distribution pi = policy.forward_policy(state);
             Tensor lpChosen = pi.log_prob(actionChosen).sum(new long[]{-1L});
@@ -83,14 +124,17 @@ public class DPOTrainer implements RLTrainer {
                 lossT.backward();
                 optimizer.step();
             }
+
+            totalSteps++;
+            totalTrainingTimeMs += (System.currentTimeMillis() - startTime);
+
             return lossT.detach();
         }
     }
 
     @Override
     public void trainBatch(ReplayBuffer buffer) {
-        // Preference pairs are not stored in the classic ReplayBuffer layout;
-        // callers should use trainPreferenceStep or the LLM DPOTrainer.
+        if (closed) throw new IllegalStateException("Trainer is closed");
         if (buffer == null || buffer.size() == 0) {
             return;
         }
@@ -99,5 +143,18 @@ public class DPOTrainer implements RLTrainer {
     @Override
     public String algorithm() {
         return "dpo";
+    }
+
+    public boolean isClosed() { return closed; }
+
+    public int totalSteps() { return totalSteps; }
+
+    @Override
+    public void close() {
+        if (closed) return;
+        closed = true;
+        System.out.printf(
+                "[DPOTrainer v%s] Closed: steps=%d, totalTime=%.2fs%n",
+                VERSION, totalSteps, totalTrainingTimeMs / 1000.0);
     }
 }

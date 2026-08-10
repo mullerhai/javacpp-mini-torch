@@ -54,6 +54,8 @@ import static org.bytedeco.pytorch.global.torch.log_sigmoid;
 public final class RewardTrainer extends BaseTrainer {
     static { Loader.load(org.bytedeco.pytorch.presets.torch.class); }
 
+    private volatile boolean closed;
+
     /** Maps {@code (input_ids, attention_mask)} → scalar rewards {@code [B]}. */
     @FunctionalInterface
     public interface RewardForward {
@@ -145,4 +147,14 @@ public final class RewardTrainer extends BaseTrainer {
         }
         return t;
     }
+
+    @Override
+    public void close() {
+        if (closed) return;
+        closed = true;
+        super.close();
+        System.out.println("[RewardTrainer] Closed");
+    }
+
+    public boolean isClosed() { return closed; }
 }

@@ -47,12 +47,25 @@ import java.util.Objects;
  * loaded from real {@code tokenizer.json} files (Qwen / Llama / DeepSeek / GLM / BERT / …).
  *
  * <pre>{@code
- * FastTokenizer tok = FastTokenizer.fromFile(Path.of("tokenizer.json"));
- * Encoding enc = tok.encode("Hello world", true);
- * String text = tok.decode(enc.ids(), true);
+ * try (FastTokenizer tok = FastTokenizer.fromFile(Path.of("tokenizer.json"))) {
+ *     Encoding enc = tok.encode("Hello world", true);
+ *     String text = tok.decode(enc.ids(), true);
+ * }
  * }</pre>
  */
-public final class FastTokenizer {
+public final class FastTokenizer implements AutoCloseable {
+
+    public static final String VERSION = "2.0";
+
+    private volatile boolean closed;
+
+    // Performance metrics
+    private long totalEncodeTimeMs;
+    private long totalDecodeTimeMs;
+    private int totalEncodeCalls;
+    private int totalDecodeCalls;
+    private long totalTokensEncoded;
+    private long totalTokensDecoded;
 
     public enum Backend { BPE, WORDPIECE, GPT2, CHAR, WHITESPACE, UNIGRAM, PIPELINE }
 
@@ -210,24 +223,38 @@ public final class FastTokenizer {
     }
 
     public Encoding encode(String text, boolean addSpecialTokens) {
+        long start = System.currentTimeMillis();
         Encoding enc = pipeline.encode(text, addSpecialTokens);
+        totalEncodeTimeMs += System.currentTimeMillis() - start;
+        totalEncodeCalls++;
+        totalTokensEncoded += enc.size();
         return applyConfiguredPadTruncate(enc);
     }
 
     public Encoding encodePair(String textA, String textB, boolean addSpecialTokens) {
+        long start = System.currentTimeMillis();
         Encoding enc = pipeline.encodePair(textA, textB, addSpecialTokens);
+        totalEncodeTimeMs += System.currentTimeMillis() - start;
+        totalEncodeCalls++;
+        totalTokensEncoded += enc.size();
         return applyConfiguredPadTruncate(enc);
     }
 
     public List<Encoding> encodeBatch(List<String> texts, boolean addSpecialTokens) {
         if (texts == null || texts.isEmpty()) return List.of();
+        long start = System.currentTimeMillis();
         List<Encoding> out = new ArrayList<>(texts.size());
         int max = 0;
+        int totalTokens = 0;
         for (String t : texts) {
-            Encoding e = encode(t, addSpecialTokens);
+            Encoding e = pipeline.encode(t, addSpecialTokens);
             out.add(e);
+            totalTokens += e.size();
             if (e.size() > max) max = e.size();
         }
+        totalEncodeTimeMs += System.currentTimeMillis() - start;
+        totalEncodeCalls += texts.size();
+        totalTokensEncoded += totalTokens;
         Padding pad = pipeline.padding();
         if (pad != null && pad.strategy == Padding.Strategy.LONGEST) {
             List<Encoding> padded = new ArrayList<>(out.size());
@@ -244,7 +271,12 @@ public final class FastTokenizer {
     }
 
     public String decode(int[] ids, boolean skipSpecialTokens) {
-        return pipeline.decode(ids, skipSpecialTokens);
+        long start = System.currentTimeMillis();
+        String result = pipeline.decode(ids, skipSpecialTokens);
+        totalDecodeTimeMs += System.currentTimeMillis() - start;
+        totalDecodeCalls++;
+        totalTokensDecoded += ids != null ? ids.length : 0;
+        return result;
     }
 
     private Encoding applyConfiguredPadTruncate(Encoding enc) {
@@ -303,6 +335,87 @@ public final class FastTokenizer {
     public int sepId() { return tokenToId(sepToken()); }
     public int bosId() { return pipeline.bosId(); }
     public int eosId() { return pipeline.eosId(); }
+
+    @Override
+    public void close() {
+        if (closed) return;
+        closed = true;
+        System.out.printf(
+                "[FastTokenizer] Closed: encodeCalls=%d, decodeCalls=%d, " +
+                "encodeTime=%.2fs (%.3fms/call), decodeTime=%.2fs (%.3fms/call), " +
+                "tokensEncoded=%d, tokensDecoded=%d%n",
+                totalEncodeCalls, totalDecodeCalls,
+                totalEncodeTimeMs / 1000.0,
+                totalEncodeCalls > 0 ? (double) totalEncodeTimeMs / totalEncodeCalls : 0,
+                totalDecodeTimeMs / 1000.0,
+                totalDecodeCalls > 0 ? (double) totalDecodeTimeMs / totalDecodeCalls : 0,
+                totalTokensEncoded, totalTokensDecoded);
+    }
+
+    public boolean isClosed() { return closed; }
+
+    /**
+     * Get tokenizer statistics.
+     */
+    public TokenizerStats getStats() {
+        return new TokenizerStats(
+                totalEncodeCalls, totalDecodeCalls,
+                totalEncodeTimeMs, totalDecodeTimeMs,
+                totalTokensEncoded, totalTokensDecoded,
+                vocabSize(), backend().name()
+        );
+    }
+
+    /**
+     * Tokenizer performance statistics.
+     */
+    public static final class TokenizerStats {
+        public final int totalEncodeCalls;
+        public final int totalDecodeCalls;
+        public final long totalEncodeTimeMs;
+        public final long totalDecodeTimeMs;
+        public final long totalTokensEncoded;
+        public final long totalTokensDecoded;
+        public final int vocabSize;
+        public final String backend;
+
+        public TokenizerStats(int totalEncodeCalls, int totalDecodeCalls,
+                           long totalEncodeTimeMs, long totalDecodeTimeMs,
+                           long totalTokensEncoded, long totalTokensDecoded,
+                           int vocabSize, String backend) {
+            this.totalEncodeCalls = totalEncodeCalls;
+            this.totalDecodeCalls = totalDecodeCalls;
+            this.totalEncodeTimeMs = totalEncodeTimeMs;
+            this.totalDecodeTimeMs = totalDecodeTimeMs;
+            this.totalTokensEncoded = totalTokensEncoded;
+            this.totalTokensDecoded = totalTokensDecoded;
+            this.vocabSize = vocabSize;
+            this.backend = backend;
+        }
+
+        public double avgEncodeTimeMs() {
+            return totalEncodeCalls > 0 ? (double) totalEncodeTimeMs / totalEncodeCalls : 0;
+        }
+
+        public double avgDecodeTimeMs() {
+            return totalDecodeCalls > 0 ? (double) totalDecodeTimeMs / totalDecodeCalls : 0;
+        }
+
+        public double encodeThroughput() {
+            return totalEncodeTimeMs > 0 ? totalTokensEncoded * 1000.0 / totalEncodeTimeMs : 0;
+        }
+
+        @Override
+        public String toString() {
+            return String.format(
+                    "TokenizerStats{encodeCalls=%d, decodeCalls=%d, " +
+                    "avgEncode=%.3fms, avgDecode=%.3fms, " +
+                    "throughput=%.0f tok/s, vocab=%d, backend=%s}",
+                    totalEncodeCalls, totalDecodeCalls,
+                    avgEncodeTimeMs(), avgDecodeTimeMs(),
+                    encodeThroughput(), vocabSize, backend);
+        }
+    }
 
     public String unkToken() { return pipeline.unkToken(); }
     public String padToken() { return pipeline.padToken(); }
