@@ -264,6 +264,52 @@ public final class DataFrame implements AutoCloseable, Serializable {
         return rowCount++;
     }
 
+    // ---- Spark-style fluent I/O entry points ----
+
+    /**
+     * Fluent writer entry point (Spark-style).
+     *
+     * <pre>
+     *   df.write().format("parquet").option("compression","snappy").mode("overwrite").save("/data/out");
+     *   df.write().option("header","true").save("out.csv");            // format auto-detected
+     *   df.write().parquet("out.parquet");                            // quick helpers
+     *   df.write().json("out.json");
+     *   df.write().jsonl("out.jsonl");
+     * </pre>
+     *
+     * @return a {@link DataFrameWriter} configured for this DataFrame
+     * @see DataFrameWriter
+     */
+    public DataFrameWriter write() {
+        return new DataFrameWriter(this);
+    }
+
+    /**
+     * Fluent reader entry point (Spark-style).
+     *
+     * <pre>
+     *   DataFrame df = DataFrame.read().format("parquet").load("/data/file.parquet");
+     *   DataFrame df = DataFrame.read().load("a.parquet");            // format auto-detected
+     *   DataFrame df = DataFrame.read().parquet("a.parquet");          // quick helpers
+     *   DataFrame df = DataFrame.read().csv("a.csv", true, ',');
+     *   DataFrame df = DataFrame.read().json("a.json");
+     *   DataFrame df = DataFrame.read().jsonl("rows.jsonl");
+     *   DataFrame df = DataFrame.read().text("a.txt");
+     *   // schema override
+     *   DataFrame df = DataFrame.read().format("csv")
+     *       .schema(java.util.Map.of("id", Column.DType.INT64, "name", Column.DType.STRING))
+     *       .load("a.csv");
+     *   // multiple paths
+     *   DataFrame df = DataFrame.read().parquet("p1.parquet", "p2.parquet");
+     * </pre>
+     *
+     * @return a {@link DataFrameReader} ready to configure and load
+     * @see DataFrameReader
+     */
+    public static DataFrameReader read() {
+        return new DataFrameReader();
+    }
+
     // ---- I/O: Parquet ----
 
     public static DataFrame readParquet(String path) throws Exception {

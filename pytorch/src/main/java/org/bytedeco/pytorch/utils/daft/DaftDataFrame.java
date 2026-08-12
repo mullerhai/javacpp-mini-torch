@@ -88,8 +88,11 @@ public final class DaftDataFrame {
     }
 
     public static DaftDataFrame fromJson(String path) {
-        DeferredTransform t = new DeferredTransform(DeferredTransform.Kind.READ_JSON, path,
-                java.util.Collections.emptyMap());
+        return fromJson(path, java.util.Collections.emptyMap());
+    }
+
+    public static DaftDataFrame fromJson(String path, Map<String, String> options) {
+        DeferredTransform t = new DeferredTransform(DeferredTransform.Kind.READ_JSON, path, options);
         return deferred(ExecutionConfig.defaults()).withTransform(t);
     }
 
@@ -300,6 +303,66 @@ public final class DaftDataFrame {
     }
 
     // ---- write -------------------------------------------------------------
+
+    // ---- write -------------------------------------------------------------
+
+    /**
+     * Fluent writer entry point (Spark / Daft-style).
+     *
+     * <pre>{@code
+     *   // Daft-style quick helpers
+     *   df.write().parquet("/data/out.parquet");
+     *   df.write().csv("/data/out.csv");
+     *   df.write().json("/data/out.json");
+     *   df.write().jsonl("/data/out.jsonl");
+     *   df.write().lance("/data/out.lance");
+     *
+     *   // Spark-style
+     *   df.write().format("parquet").mode("overwrite").save("/data/out");
+     *   df.write().option("compression", "zstd").parquet("/data/out.parquet");
+     *   df.write().partitionBy("year", "month").parquet("/data/out");
+     * }</pre>
+     *
+     * @return a {@link DaftDataFrameWriter} configured for this DataFrame
+     * @see DaftDataFrameWriter
+     */
+    public DaftDataFrameWriter write() {
+        return new DaftDataFrameWriter(this);
+    }
+
+    // ---- read (static entry point) -------------------------------------------
+
+    /**
+     * Static fluent reader entry point (Daft / Spark-style).
+     *
+     * <pre>{@code
+     *   // Daft-style quick helpers
+     *   DaftDataFrame df = DaftDataFrame.read().parquet("/data/*.parquet");
+     *   DaftDataFrame df = DaftDataFrame.read().csv("/data/file.csv");
+     *   DaftDataFrame df = DaftDataFrame.read().json("/data/file.json");
+     *   DaftDataFrame df = DaftDataFrame.read().jsonl("/data/rows.jsonl");
+     *   DaftDataFrame df = DaftDataFrame.read().text("/data/file.txt");
+     *
+     *   // Spark-style
+     *   DaftDataFrame df = DaftDataFrame.read().format("parquet").load("/data/file.parquet");
+     *   DaftDataFrame df = DaftDataFrame.read().option("header", "true").csv("/data/file.csv");
+     *   DaftDataFrame df = DaftDataFrame.read().parquet("p1.parquet", "p2.parquet");
+     *
+     *   // chain Daft transforms
+     *   DaftDataFrame df = DaftDataFrame.read()
+     *       .parquet("/data/*.parquet")
+     *       .filter(Expression.col("age").gt(18))
+     *       .select("name", "age")
+     *       .limit(1000);
+     *   df.collect();  // materialise
+     * }</pre>
+     *
+     * @return a {@link DaftDataFrameReader} ready to configure and load
+     * @see DaftDataFrameReader
+     */
+    public static DaftDataFrameReader read() {
+        return new DaftDataFrameReader();
+    }
 
     public void writeParquet(String path) throws Exception {
         DataFrame df = collect();
