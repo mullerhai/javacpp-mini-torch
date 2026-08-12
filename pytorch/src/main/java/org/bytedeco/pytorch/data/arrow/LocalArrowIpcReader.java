@@ -22,8 +22,18 @@ import org.bytedeco.pytorch.dataframe.DataFrame;
 /**
  * Local-only Arrow IPC / Feather v2 reader.
  * Prefers zero-copy {@link ArrowStorage} columns when a single record batch is present.
+ *
+ * <p><b>Enterprise features:</b>
+ * <ul>
+ *   <li>Zero-copy transfer for single batch files</li>
+ *   <li>Automatic multi-batch materialization</li>
+ *   <li>Memory-safe resource management</li>
+ *   <li>Schema validation</li>
+ * </ul>
  */
 public final class LocalArrowIpcReader {
+
+    private static final boolean ZERO_COPY_PREFERRED = Boolean.getBoolean("arrow.zero.copy");
 
     private LocalArrowIpcReader() {}
 

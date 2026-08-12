@@ -21,25 +21,41 @@ public final class NpyHeader {
     }
 
     public static NpyHeader parse(String headerStr) {
+        if (headerStr == null || headerStr.isEmpty()) {
+            return new NpyHeader(DType.FLOAT64, false, new long[0]);
+        }
+
+        // Extract dtype descriptor
         String desc = extract(headerStr, "'descr'\\s*:\\s*'([^']+)'");
         if (desc.isEmpty()) desc = extract(headerStr, "\"descr\"\\s*:\\s*\"([^\"]+)\"");
         DType dtype = DType.fromDescriptor(desc);
 
+        // Extract fortran_order flag
         String fo = extract(headerStr, "'fortran_order'\\s*:\\s*(True|False)");
         if (fo.isEmpty()) fo = extract(headerStr, "\"fortran_order\"\\s*:\\s*(true|false)");
         boolean fortranOrder = "True".equalsIgnoreCase(fo) || "true".equals(fo);
 
+        // Extract shape tuple
         String shapeRaw = extract(headerStr, "'shape'\\s*:\\s*\\(([^)]*)\\)");
         if (shapeRaw.isEmpty()) shapeRaw = extract(headerStr, "\"shape\"\\s*:\\s*\\[([^\\]]*)\\]");
         long[] shape;
         if (shapeRaw.isEmpty()) {
             shape = new long[0];
         } else {
-            shape = Arrays.stream(shapeRaw.split(","))
-                    .map(String::trim)
-                    .filter(s -> !s.isEmpty())
-                    .mapToLong(Long::parseLong)
-                    .toArray();
+            String[] parts = shapeRaw.split(",");
+            java.util.ArrayList<Long> dims = new java.util.ArrayList<>();
+            for (String p : parts) {
+                String trimmed = p.trim();
+                if (!trimmed.isEmpty()) {
+                    try {
+                        dims.add(Long.parseLong(trimmed));
+                    } catch (NumberFormatException e) {
+                        // Skip malformed dimension
+                    }
+                }
+            }
+            shape = new long[dims.size()];
+            for (int i = 0; i < dims.size(); i++) shape[i] = dims.get(i);
         }
         return new NpyHeader(dtype, fortranOrder, shape);
     }

@@ -746,40 +746,49 @@ public final class NP {
     }
 
     public static NDArray load(String path) throws IOException {
-        try (FileInputStream fis = new FileInputStream(path);
-             FileChannel channel = fis.getChannel()) {
-            byte[] prefix = new byte[10];
-            if (fis.read(prefix) != 10) throw new EOFException("truncated npy");
-            if (prefix[0] != (byte) 0x93 || prefix[1] != 'N' || prefix[2] != 'U'
-                    || prefix[3] != 'M' || prefix[4] != 'P' || prefix[5] != 'Y') {
+        try (FileInputStream fis = new FileInputStream(path)) {
+            // Read magic (6 bytes) + version (2 bytes) + header_len (2 bytes)
+            byte[] header = new byte[10];
+            int magicRead = fis.read(header);
+            if (magicRead != 10) throw new EOFException("truncated npy: expected 10 header bytes, got " + magicRead);
+            if (header[0] != (byte) 0x93 || header[1] != 'N' || header[2] != 'U'
+                    || header[3] != 'M' || header[4] != 'P' || header[5] != 'Y') {
                 throw new IOException("Not a NumPy .npy file: " + path);
             }
-            int major = prefix[6] & 0xff;
+            int major = header[6] & 0xff;
             int headerLen;
             if (major == 1) {
-                headerLen = ByteBuffer.wrap(new byte[]{prefix[8], prefix[9]})
-                        .order(ByteOrder.LITTLE_ENDIAN).getShort() & 0xffff;
+                headerLen = ((header[9] & 0xff) << 8) | (header[8] & 0xff);
             } else {
-                byte[] rest = new byte[2];
-                if (fis.read(rest) != 2) throw new EOFException("truncated npy v2 header len");
-                headerLen = ByteBuffer.wrap(new byte[]{prefix[8], prefix[9], rest[0], rest[1]})
-                        .order(ByteOrder.LITTLE_ENDIAN).getInt();
+                byte[] extra = new byte[2];
+                if (fis.read(extra) != 2) throw new EOFException("truncated npy v2 header len");
+                headerLen = ((extra[1] & 0xff) << 24) | ((extra[0] & 0xff) << 16)
+                          | ((header[9] & 0xff) << 8) | (header[8] & 0xff);
             }
-            byte[] headerBytes = new byte[headerLen];
-            if (fis.read(headerBytes) != headerLen) throw new EOFException("truncated npy header");
 
-            NpyHeader header = NpyHeader.parse(new String(headerBytes, StandardCharsets.US_ASCII));
-            long totalSize = header.numel();
+            // Read the dtype/shape header
+            byte[] headerBytes = new byte[headerLen];
+            if (fis.read(headerBytes) != headerLen) {
+                throw new EOFException("truncated npy header: expected " + headerLen + " bytes");
+            }
+
+            NpyHeader npyHeader = NpyHeader.parse(new String(headerBytes, StandardCharsets.US_ASCII));
+            long totalSize = npyHeader.numel();
             if (totalSize > Integer.MAX_VALUE) {
                 throw new IOException("Array too large for Java heap: " + totalSize);
             }
-            int bytes = (int) (totalSize * header.dtype.getByteSize());
-            ByteBuffer dataBuf = ByteBuffer.allocate(bytes).order(ByteOrder.LITTLE_ENDIAN);
-            while (dataBuf.hasRemaining()) {
-                if (channel.read(dataBuf) < 0) throw new EOFException("truncated npy data");
+            int elemBytes = npyHeader.dtype.getByteSize();
+            int dataBytes = (int) (totalSize * elemBytes);
+
+            // Direct read using readAllBytes for guaranteed correctness
+            byte[] data = fis.readAllBytes();
+            if (data.length < dataBytes) {
+                throw new EOFException("truncated npy data: expected " + dataBytes
+                        + " bytes, got " + data.length);
             }
-            dataBuf.flip();
-            return readElements(header.dtype, header.shape, dataBuf);
+
+            ByteBuffer dataBuf = ByteBuffer.wrap(data, 0, dataBytes).order(ByteOrder.LITTLE_ENDIAN);
+            return readElements(npyHeader.dtype, npyHeader.shape, dataBuf);
         }
     }
 
@@ -825,6 +834,14 @@ public final class NP {
             }
         }
         return out;
+    }
+
+    /**
+     * Load every {@code .npy} entry from an NPZ archive as a flat array.
+     * Equivalent to {@code loadz(path).values().toArray(new NDArray[0])}.
+     */
+    public static NDArray[] loadNpz(String path) throws IOException {
+        return loadz(path).values().toArray(new NDArray[0]);
     }
 
     private static void writeElements(NDArray a, ByteBuffer buf) {

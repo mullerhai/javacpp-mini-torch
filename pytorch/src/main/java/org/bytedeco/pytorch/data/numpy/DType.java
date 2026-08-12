@@ -41,21 +41,42 @@ public enum DType {
     public static DType fromDescriptor(String desc) {
         if (desc == null) return FLOAT64;
         String d = desc.trim();
+
+        // First check exact match
         for (DType t : values()) {
             if (t.descriptor.equals(d)) return t;
         }
-        if (d.endsWith("f8") || d.equals("float64") || d.equals("f8")) return FLOAT64;
-        if (d.endsWith("f4") || d.equals("float32") || d.equals("f4")) return FLOAT32;
-        if (d.endsWith("f2") || d.equals("float16") || d.equals("f2")) return FLOAT16;
-        if (d.endsWith("i8") || d.equals("int64") || d.equals("i8")) return INT64;
-        if (d.endsWith("i4") || d.equals("int32") || d.equals("i4")) return INT32;
-        if (d.endsWith("i2") || d.equals("int16") || d.equals("i2")) return INT16;
-        if (d.endsWith("i1") || d.equals("int8") || d.equals("i1")) return INT8;
-        if (d.endsWith("u1") || d.equals("uint8") || d.equals("u1")) return UINT8;
-        if (d.endsWith("b1") || d.equals("bool") || d.equals("b1")) return BOOL;
-        if (d.endsWith("c16") || d.equals("complex128") || d.equals("c16")) return COMPLEX128;
-        if (d.endsWith("c8") || d.equals("complex64") || d.equals("c8")) return COMPLEX64;
-        return FLOAT64;
+
+        // Normalize: strip byte order prefix (< or >) and unicode type
+        String norm = d.startsWith("<") || d.startsWith(">") ? d.substring(1) : d;
+
+        // Handle complex types first (longer strings)
+        if (norm.startsWith("c") || d.contains("complex")) {
+            if (norm.equals("c8") || norm.equals("c0") || d.contains("complex64")) return COMPLEX64;
+            if (norm.equals("c16") || d.contains("complex128")) return COMPLEX128;
+        }
+
+        // Handle float types
+        if (norm.equals("f8") || norm.equals("f0") || d.contains("float64")) return FLOAT64;
+        if (norm.equals("f4") || norm.equals("f") || d.contains("float32")) return FLOAT32;
+        if (norm.equals("f2") || d.contains("float16")) return FLOAT16;
+
+        // Handle signed int types
+        if (norm.equals("i8") || norm.startsWith("i") && norm.length() > 2 || d.contains("int64")) return INT64;
+        if (norm.equals("i4") || d.contains("int32")) return INT32;
+        if (norm.equals("i2") || d.contains("int16")) return INT16;
+        if (norm.equals("i1") || d.contains("int8")) return INT8;
+
+        // Handle unsigned int types
+        if (norm.equals("u1") || d.contains("uint8")) return UINT8;
+        if (norm.equals("u2") || d.contains("uint16")) return INT16;
+        if (norm.equals("u4") || d.contains("uint32")) return INT32;
+        if (norm.equals("u8") || d.contains("uint64")) return INT64;
+
+        // Handle bool
+        if (norm.equals("b1") || d.contains("bool")) return BOOL;
+
+        return FLOAT64; // default
     }
 
     public static DType fromTorch(ScalarType st) {

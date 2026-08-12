@@ -116,6 +116,19 @@ public final class DataFrame implements AutoCloseable, Serializable {
 
     public static DataFrame create() { return new DataFrame(); }
 
+    /** Create a DataFrame pre-populated with copies of the given columns. */
+    public static DataFrame create(List<Column> cols) {
+        DataFrame df = new DataFrame();
+        for (Column c : cols) {
+            try {
+                df.addColumn(c.copy());
+            } catch (Exception ignored) {
+                // Skip empty / synthetic columns that can't be copied.
+            }
+        }
+        return df;
+    }
+
     // ---- column management ----
 
     public List<Column> columns() { return new ArrayList<>(columns); }
@@ -134,6 +147,22 @@ public final class DataFrame implements AutoCloseable, Serializable {
 
     public Column column(int index) { return columns.get(index); }
     public boolean hasColumn(String name) { return columnMap.containsKey(name); }
+
+    /** Index of column by name, or -1 if missing. */
+    public int columnIndex(String name) {
+        int i = 0;
+        for (Column c : columns) {
+            if (c.name().equals(name)) return i;
+            i++;
+        }
+        return -1;
+    }
+
+    /** Row value by (row, columnIndex). */
+    public Object get(int rowIndex, int colIndex) { return columns.get(colIndex).get(rowIndex); }
+
+    /** Set row value by (row, columnIndex). */
+    public void set(int rowIndex, int colIndex, Object value) { columns.get(colIndex).set(rowIndex, value); }
 
     public void addColumn(String name, Column.DType dtype) {
         if (columnMap.containsKey(name)) throw new IllegalArgumentException("Column exists: " + name);
@@ -419,6 +448,129 @@ public final class DataFrame implements AutoCloseable, Serializable {
     /** Legacy list-of-dicts pickle (explicit). */
     public void toPickleRecords(String path) throws Exception {
         toPickle(path, PickleOptions.records());
+    }
+
+    // ---- I/O: PyTorch PT ----
+
+    /**
+     * Read a PyTorch .pt/.pth checkpoint file.
+     * Each tensor becomes a column; tensor data is flattened to rows.
+     */
+    public static DataFrame readPT(String path) throws Exception {
+        return readPT(path, PTTODataFrameOptions.defaults());
+    }
+
+    /**
+     * Read PT file with options for tensor-to-column mapping.
+     */
+    public static DataFrame readPT(String path, PTTODataFrameOptions opts) throws Exception {
+        File file = new File(path);
+        Map<String, org.bytedeco.pytorch.data.pt.PT.TensorData> tensors = 
+            org.bytedeco.pytorch.data.pt.PT.load(file);
+        
+        DataFrame df = DataFrame.create();
+        
+        for (Map.Entry<String, org.bytedeco.pytorch.data.pt.PT.TensorData> e : tensors.entrySet()) {
+            String name = e.getKey();
+            org.bytedeco.pytorch.data.pt.PT.TensorData td = e.getValue();
+            
+            // Determine column dtype
+            Column.DType dtype;
+            switch (td.dtype) {
+                case FLOAT32: case FLOAT64: case FLOAT16:
+                    dtype = Column.DType.FLOAT64; break;
+                case INT64: case INT32:
+                    dtype = Column.DType.INT64; break;
+                default:
+                    dtype = Column.DType.STRING;
+            }
+            
+            // Add column
+            Column col = new Column(name, dtype);
+            
+            // Fill data
+            if (dtype == Column.DType.FLOAT64) {
+                float[] arr = td.asFloatArray();
+                for (float v : arr) {
+                    col.add((double) v);
+                }
+            } else if (dtype == Column.DType.INT64) {
+                long[] arr = td.asLongArray();
+                for (long v : arr) {
+                    col.add(v);
+                }
+            }
+            
+            df.addColumn(col);
+        }
+        
+        return df;
+    }
+
+    /**
+     * Write DataFrame to PyTorch checkpoint file.
+     * Each numeric column becomes a tensor.
+     */
+    public void toPT(String path) throws Exception {
+        toPT(path, PTFromDataFrameOptions.defaults());
+    }
+
+    public void toPT(String path, PTFromDataFrameOptions opts) throws Exception {
+        Map<String, org.bytedeco.pytorch.Tensor> tensors = new LinkedHashMap<>();
+        
+        for (Column col : columns) {
+            if (!col.isNumeric()) continue;
+            
+            String name = col.name();
+            long[] shape = opts.flat() ? new long[]{col.size()} : new long[]{col.size()};
+            
+            if (col.dtype() == Column.DType.FLOAT64 || col.dtype() == Column.DType.FLOAT32) {
+                float[] data = new float[col.size()];
+                for (int i = 0; i < col.size(); i++) {
+                    Object v = col.get(i);
+                    data[i] = v == null ? 0f : ((Number) v).floatValue();
+                }
+                org.bytedeco.pytorch.Tensor t = org.bytedeco.pytorch.global.torch.tensor(data);
+                if (shape.length > 1) t = t.reshape(shape);
+                tensors.put(name, t);
+            } else {
+                long[] data = new long[col.size()];
+                for (int i = 0; i < col.size(); i++) {
+                    Object v = col.get(i);
+                    data[i] = v == null ? 0L : ((Number) v).longValue();
+                }
+                org.bytedeco.pytorch.Tensor t = org.bytedeco.pytorch.global.torch.tensor(data);
+                if (shape.length > 1) t = t.reshape(shape);
+                tensors.put(name, t);
+            }
+        }
+        
+        org.bytedeco.pytorch.data.pt.PT.save(tensors, new File(path));
+    }
+
+    /**
+     * Options for reading PT files to DataFrame.
+     */
+    public static class PTTODataFrameOptions {
+        private boolean flatten = false;
+        private int maxElements = 100000;
+
+        public static PTTODataFrameOptions defaults() { return new PTTODataFrameOptions(); }
+        public PTTODataFrameOptions flatten(boolean b) { this.flatten = b; return this; }
+        public PTTODataFrameOptions maxElements(int n) { this.maxElements = n; return this; }
+        public boolean flatten() { return flatten; }
+        public int maxElements() { return maxElements; }
+    }
+
+    /**
+     * Options for writing DataFrame to PT file.
+     */
+    public static class PTFromDataFrameOptions {
+        private boolean flat = true;
+
+        public static PTFromDataFrameOptions defaults() { return new PTFromDataFrameOptions(); }
+        public PTFromDataFrameOptions flat(boolean b) { this.flat = b; return this; }
+        public boolean flat() { return flat; }
     }
 
     // ---- I/O: SafeTensors ----
@@ -2568,7 +2720,7 @@ public final class DataFrame implements AutoCloseable, Serializable {
         return result;
     }
 
-    public Map<String, List<Double>> describe() {
+    public Map<String, List<Double>> describeStats() {
         Map<String, List<Double>> result = new LinkedHashMap<>();
         for (String k : mean().keySet()) {
             List<Double> stats = new ArrayList<>();
@@ -3034,6 +3186,55 @@ public final class DataFrame implements AutoCloseable, Serializable {
         DataFrame d = describeFrame();
         d.show(d.rowCount());
         return d;
+    }
+
+    /**
+     * Render the DataFrame via {@link DataShow#show(DataFrame)} (richer format
+     * with search/filter support). For Pandas-style {@code show()} that prints
+     * to stdout, use the {@code void show()} overload above.
+     */
+    public String toShowString() {
+        return DataShow.show(this);
+    }
+
+    /**
+     * Render the DataFrame via  DataShow#show(DataFrame, ShowOptions)} with options.
+     */
+    public String toShowString(DataShow.ShowOptions opts) {
+        return DataShow.show(this, opts);
+    }
+
+
+    public String toShowString(int maxRows) {
+        return DataShow.show(this, new DataShow.ShowOptions().maxRows(maxRows));
+    }
+
+    /**
+     * Get statistics for the DataFrame.
+     */
+    public String describe() {
+        return DataShow.describeAsString(this);
+    }
+
+    /**
+     * Filter DataFrame by search query.
+     */
+    public DataFrame filter(String query) {
+        return DataShow.filter(this, query);
+    }
+
+    /**
+     * Filter DataFrame with case sensitivity option.
+     */
+    public DataFrame filter(String query, boolean caseSensitive) {
+        return DataShow.filter(this, query, caseSensitive);
+    }
+
+    /**
+     * Select columns by regex pattern.
+     */
+    public DataFrame select(String pattern) {
+        return DataShow.select(this, pattern);
     }
 
     public String toString() { return toString(20); }
@@ -4627,7 +4828,7 @@ public final class DataFrame implements AutoCloseable, Serializable {
      * (rows = stats, columns = feature names) — Pandas {@code describe()}.
      */
     public DataFrame describeFrame() {
-        Map<String, List<Double>> stats = describe();
+        Map<String, List<Double>> stats = describeStats();
         DataFrame out = DataFrame.create();
         out.addColumn("stat", Column.DType.STRING);
         List<String> features = new ArrayList<>(stats.keySet());

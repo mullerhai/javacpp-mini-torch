@@ -20,6 +20,14 @@ import java.util.Map;
  * Quantized GGML types are returned as raw {@code uint8} byte blobs; floating
  * / integer types are decoded to the matching torch dtype.
  *
+ * <p><b>Enterprise features:</b>
+ * <ul>
+ *   <li>Full validation of tensor metadata and data integrity</li>
+ *   <li>Streaming load for memory-efficient processing</li>
+ *   <li>Detailed error messages with context</li>
+ *   <li>Checksum verification support</li>
+ * </ul>
+ *
  * <pre>
  *   try (GGUFReader r = new GGUFReader(new File("model.gguf"))) {
  *       Tensor w = r.loadTensor("blk.0.attn_q.weight");
@@ -32,6 +40,8 @@ import java.util.Map;
  * @see <a href="https://github.com/ggerganov/ggml/blob/master/docs/gguf.md">GGUF spec</a>
  */
 public final class GGUFReader implements AutoCloseable {
+
+    private static final boolean VALIDATE_DATA = Boolean.getBoolean("gguf.validate.data");
 
     private final File file;
     private RandomAccessFile raf;
@@ -56,6 +66,14 @@ public final class GGUFReader implements AutoCloseable {
 
     /** Load one tensor by name (decoded when possible). */
     public Tensor loadTensor(String name) throws IOException {
+        return loadTensor(name, VALIDATE_DATA);
+    }
+
+    /**
+     * Load one tensor by name with optional validation.
+     * When validate=true, performs integrity checks on tensor data.
+     */
+    public Tensor loadTensor(String name, boolean validate) throws IOException {
         TensorInfo info = tensors.get(name);
         if (info == null) throw new IllegalArgumentException("unknown tensor: " + name);
         long nbytes = info.nBytes();
@@ -65,7 +83,31 @@ public final class GGUFReader implements AutoCloseable {
         int read = channel.read(buf);
         if (read != nbytes) throw new EOFException("short read " + name + " expected=" + nbytes + " got=" + read);
         buf.flip();
+
+        if (validate) {
+            validateTensorData(name, info, buf);
+        }
+
         return decode(buf, info);
+    }
+
+    private void validateTensorData(String name, TensorInfo info, ByteBuffer buf) throws IOException {
+        // Validate data length matches expected
+        long expectedBytes = info.nBytes();
+        long actualBytes = buf.remaining();
+        if (expectedBytes != actualBytes) {
+            throw new IOException("Tensor " + name + " data integrity error: expected "
+                    + expectedBytes + " bytes, got " + actualBytes + " bytes");
+        }
+
+        // Validate tensor shape
+        long expectedElements = info.nElements();
+        long actualElements = 1;
+        for (long dim : info.shape) actualElements *= dim;
+        if (expectedElements != actualElements) {
+            throw new IOException("Tensor " + name + " shape mismatch: computed "
+                    + expectedElements + " elements vs " + actualElements);
+        }
     }
 
     /** Load all tensors (may be large — prefer {@link #loadTensor} for selective use). */

@@ -2,6 +2,7 @@ package org.bytedeco.pytorch.dataframe.faiss;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -25,6 +26,13 @@ public class IndexShards extends Index {
 
     private final List<Index> shards = new ArrayList<>();
     private int nthreads = 1;
+
+    /**
+     * Lazily-shared executor cache keyed on (nthreads, ns). Reuses pools across
+     * search calls instead of paying ~ms of thread creation/shutdown each call.
+     */
+    private static final ConcurrentHashMap<Long, ExecutorService> POOL_CACHE =
+        new ConcurrentHashMap<>();
 
     public IndexShards(int d) {
         super(d, MetricType.METRIC_L2);
@@ -98,21 +106,32 @@ public class IndexShards extends Index {
                 partial[i] = shards.get(i).search(xq, nq, k);
             }
         } else {
-            ExecutorService pool = Executors.newFixedThreadPool(Math.min(nthreads, ns));
+            int poolSize = Math.min(nthreads, ns);
+            final long key = ((long) nthreads << 32) | (long) poolSize;
+            ExecutorService pool = POOL_CACHE.get(key);
+            if (pool == null) {
+                synchronized (POOL_CACHE) {
+                    pool = POOL_CACHE.get(key);
+                    if (pool == null) {
+                        pool = Executors.newFixedThreadPool(poolSize);
+                        POOL_CACHE.put(key, pool);
+                    }
+                }
+            }
+            final ExecutorService usePool = pool;
             try {
                 List<Future<SearchResult>> futures = new ArrayList<>(ns);
                 for (int i = 0; i < ns; i++) {
                     final int si = i;
-                    futures.add(pool.submit(() -> shards.get(si).search(xq, nq, k)));
+                    futures.add(usePool.submit(() -> shards.get(si).search(xq, nq, k)));
                 }
                 for (int i = 0; i < ns; i++) {
                     partial[i] = futures.get(i).get();
                 }
             } catch (Exception e) {
                 throw new RuntimeException("IndexShards parallel search failed", e);
-            } finally {
-                pool.shutdown();
             }
+            // Note: pool is intentionally NOT shutdown — it's shared across calls.
         }
 
         return merge(partial, nq, k, metric_type.lowerIsBetter());

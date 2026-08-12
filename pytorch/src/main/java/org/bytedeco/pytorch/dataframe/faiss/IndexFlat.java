@@ -115,21 +115,38 @@ public class IndexFlat extends Index {
     public synchronized long remove_ids(IDSelector sel) {
         if (sel == null || ntotal == 0) return 0;
         int n = (int) ntotal;
-        int w = 0;
+        // First pass: find which rows to drop, batch into contiguous kept ranges
+        // so we can do a single memmove per range instead of one per vector.
+        boolean[] drop = new boolean[n];
+        int dropCount = 0;
         for (int r = 0; r < n; r++) {
             long id = hasIds && ids != null ? ids[r] : r;
-            if (sel.is_member(id)) continue; // drop
-            if (w != r) {
-                System.arraycopy(xb, r * d, xb, w * d, d);
-                if (hasIds && ids != null) ids[w] = ids[r];
+            if (sel.is_member(id)) {
+                drop[r] = true;
+                dropCount++;
             }
-            w++;
         }
-        long removed = n - w;
+        if (dropCount == 0) return 0;
+        // Second pass: compact by contiguous kept ranges.
+        int w = 0;
+        int r = 0;
+        while (r < n) {
+            if (drop[r]) { r++; continue; }
+            int start = r;
+            while (r < n && !drop[r]) r++;
+            int len = r - start;
+            if (w != start) {
+                System.arraycopy(xb, start * d, xb, w * d, len * d);
+                if (hasIds && ids != null) {
+                    System.arraycopy(ids, start, ids, w, len);
+                }
+            }
+            w += len;
+        }
         ntotal = w;
         normsValid = false;
         releaseGpuTensor();
-        return removed;
+        return dropCount;
     }
 
     @Override

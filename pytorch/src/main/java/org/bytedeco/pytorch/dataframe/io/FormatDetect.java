@@ -19,7 +19,7 @@ public final class FormatDetect {
 
     public enum Format {
         CSV, TSV, JSON, JSONL, PARQUET, ARROW, FEATHER, PICKLE,
-        EXCEL, HDF5, AVRO, ORC, NPZ, NPY, SAFETENSORS, GGUF, LANCE, UNKNOWN
+        EXCEL, HDF5, AVRO, ORC, NPZ, NPY, SAFETENSORS, GGUF, LANCE, TOML, BIN, UNKNOWN
     }
 
     public static Format detect(String path) {
@@ -69,6 +69,8 @@ public final class FormatDetect {
             case "npy": return Format.NPY;
             case "gguf": return Format.GGUF;
             case "lance": return Format.LANCE;
+            case "toml": return Format.TOML;
+            case "bin": return Format.BIN;
             default: return Format.UNKNOWN;
         }
     }
@@ -128,11 +130,15 @@ public final class FormatDetect {
                 return DataFrame.readOrc(path);
             case LANCE:
                 return DataFrame.readLance(path);
+            case TOML:
+                return TomlReader.read(path);
+            case BIN:
+                return BinReader.read(path);
             default:
                 throw new IllegalArgumentException(
                     "Cannot auto-detect DataFrame format for path: " + path
                         + " (supported: csv,tsv,json,jsonl,parquet,arrow,feather,ipc,"
-                        + "pkl,xlsx,xls,h5,hdf5,avro,orc,npz,npy,safetensors,gguf,lance;"
+                        + "pkl,xlsx,xls,h5,hdf5,avro,orc,npz,npy,safetensors,gguf,lance,toml,bin;"
                         + " also magic-byte sniff for PAR1/ARROW1/NUMPY/ORC/HDF/Avro/JSON)");
         }
     }

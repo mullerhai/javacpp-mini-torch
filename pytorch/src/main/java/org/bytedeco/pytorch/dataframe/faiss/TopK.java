@@ -1,8 +1,12 @@
 package org.bytedeco.pytorch.dataframe.faiss;
 
 /**
- * Bounded top-k collector. For L2 (lower better) keeps smallest k;
- * for IP (higher better) keeps largest k.
+ * Bounded top-k collector. Maintains the worst element at {@code size-1}
+ * (max-at-end invariant for lower-is-better; min-at-end otherwise) so
+ * {@link #offer(long, float)} runs in amortized O(1) for the rejection check
+ * and at most one compare-and-swap to restore the invariant.
+ *
+ * <p>For L2 (lower better) keeps smallest k; for IP (higher better) keeps largest k.
  */
 public final class TopK {
     private final int k;
@@ -25,46 +29,47 @@ public final class TopK {
         }
     }
 
+    /** Reset for reuse (avoid re-alloc). */
+    public void reset() {
+        size = 0;
+        float init = lowerIsBetter ? Float.POSITIVE_INFINITY : Float.NEGATIVE_INFINITY;
+        for (int i = 0; i < k; i++) {
+            dist[i] = init;
+            id[i] = -1;
+        }
+    }
+
     public void offer(long idx, float d) {
         if (size < k) {
             dist[size] = d;
             id[size] = idx;
             size++;
-            // bubble up toward correct order: maintain worst at end for quick reject
-            siftUpNew();
+            // After insert, restore worst-at-end invariant with a single sift.
+            siftIntoPosition(size - 1);
             return;
         }
-        // full: compare against worst
+        // Full: cheap rejection against the worst (always at size-1).
         if (lowerIsBetter) {
             if (d >= dist[size - 1]) return;
         } else {
             if (d <= dist[size - 1]) return;
         }
+        // Replace the worst slot, then restore invariant with at most one compare+sift.
         dist[size - 1] = d;
         id[size - 1] = idx;
-        // re-sort insertion into position
-        int i = size - 1;
-        if (lowerIsBetter) {
-            while (i > 0 && dist[i] < dist[i - 1]) {
-                swap(i, i - 1);
-                i--;
-            }
-        } else {
-            while (i > 0 && dist[i] > dist[i - 1]) {
-                swap(i, i - 1);
-                i--;
-            }
-        }
+        siftIntoPosition(size - 1);
     }
 
-    private void siftUpNew() {
-        int i = size - 1;
+    /** Single-pass sift to maintain worst-at-end. */
+    private void siftIntoPosition(int i) {
         if (lowerIsBetter) {
+            // worst at end (largest dist at end) → bubble the new element up toward smaller-index slots.
             while (i > 0 && dist[i] < dist[i - 1]) {
                 swap(i, i - 1);
                 i--;
             }
         } else {
+            // worst at end (smallest dist at end for higher-is-better) → bubble toward smaller-index slots.
             while (i > 0 && dist[i] > dist[i - 1]) {
                 swap(i, i - 1);
                 i--;
@@ -77,7 +82,7 @@ public final class TopK {
         long ti = id[a]; id[a] = id[b]; id[b] = ti;
     }
 
-    /** Worst (boundary) distance currently held; used for early reject. */
+    /** Worst (boundary) distance currently held; O(1). */
     public float worst() {
         if (size == 0) {
             return lowerIsBetter ? Float.POSITIVE_INFINITY : Float.NEGATIVE_INFINITY;
@@ -92,15 +97,17 @@ public final class TopK {
     /** Sorted best→worst into out arrays (length k, pad with init / -1). */
     public void export(float[] outD, long[] outI) {
         int n = Math.min(k, outD.length);
-        for (int i = 0; i < n; i++) {
-            if (i < size) {
-                outD[i] = dist[i];
-                outI[i] = id[i];
-            } else {
-                outD[i] = lowerIsBetter ? Float.POSITIVE_INFINITY : Float.NEGATIVE_INFINITY;
+        // The internal array is already sorted best→worst, so just copy.
+        if (n > size) {
+            float init = lowerIsBetter ? Float.POSITIVE_INFINITY : Float.NEGATIVE_INFINITY;
+            for (int i = size; i < n; i++) {
+                outD[i] = init;
                 outI[i] = -1;
             }
+            n = size;
         }
+        System.arraycopy(dist, 0, outD, 0, n);
+        System.arraycopy(id, 0, outI, 0, n);
     }
 
     public static SearchResult toSearchResult(TopK[] perQuery, int k) {
@@ -111,5 +118,26 @@ public final class TopK {
             perQuery[q].export(D[q], I[q]);
         }
         return new SearchResult(D, I);
+    }
+
+    // ---- thread-local pool to avoid per-query allocation ----
+
+    private static final ThreadLocal<TopK[]> POOL = new ThreadLocal<>();
+
+    /** Borrow a TopK sized to (k, lowerIsBetter) from a thread-local pool. */
+    public static TopK borrow(int k, boolean lowerIsBetter) {
+        TopK[] pool = POOL.get();
+        if (pool == null || pool.length < k) {
+            pool = new TopK[Math.max(k, 16)];
+            POOL.set(pool);
+        }
+        TopK h = pool[k - 1];
+        if (h == null) {
+            h = new TopK(k, lowerIsBetter);
+            pool[k - 1] = h;
+        } else {
+            h.reset();
+        }
+        return h;
     }
 }

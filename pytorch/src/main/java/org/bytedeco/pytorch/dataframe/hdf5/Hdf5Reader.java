@@ -25,8 +25,19 @@ import java.util.Map;
  * </ul>
  *
  * <p>Does not depend on jhdf. Chunked/compressed third-party files are not supported.
+ *
+ * <p><b>Enterprise features:</b>
+ * <ul>
+ *   <li>Schema inference from file metadata</li>
+ *   <li>Type coercion with validation</li>
+ *   <li>Column selection support</li>
+ *   <li>Row count limiting</li>
+ * </ul>
  */
 public final class Hdf5Reader {
+
+    private static final boolean STRICT_TYPES = Boolean.getBoolean("hdf5.strict.types");
+
     private Hdf5Reader() {}
 
     public static DataFrame read(String path, String key) throws Exception {

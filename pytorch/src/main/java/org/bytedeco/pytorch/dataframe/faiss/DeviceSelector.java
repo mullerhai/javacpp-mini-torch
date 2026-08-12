@@ -1,5 +1,7 @@
 package org.bytedeco.pytorch.dataframe.faiss;
 
+import java.lang.reflect.Method;
+
 /**
  * Device selection for FAISS distance backends — CPU or CUDA via javacpp-pytorch.
  *
@@ -9,7 +11,8 @@ package org.bytedeco.pytorch.dataframe.faiss;
 public final class DeviceSelector {
     public enum Device {
         CPU,
-        CUDA
+        CUDA,
+        MPS
     }
 
     private static volatile Boolean cudaAvailable;
@@ -64,6 +67,12 @@ public final class DeviceSelector {
         return lastProbeDetail;
     }
 
+    // Cached Method handles resolved on first probe.
+    private static volatile Method cachedCudaAvailable;
+    private static volatile Method cachedTensorCuda;
+    private static volatile Method cachedTensorTo;
+    private static volatile java.lang.reflect.Constructor<?> cachedDeviceCtor;
+
     private static boolean probeCuda() {
         try {
             // 0) Fast negative: no torch_cuda classes on classpath
@@ -83,14 +92,15 @@ public final class DeviceSelector {
             try {
                 Class<?> torch = Class.forName("org.bytedeco.pytorch.global.torch");
                 for (String name : new String[]{"cuda_is_available", "hasCUDA", "is_cuda_available"}) {
-                    try {
-                        java.lang.reflect.Method m = torch.getMethod(name);
-                        Object r = m.invoke(null);
-                        if (r instanceof Boolean b) {
-                            lastProbeDetail = name + "=" + b;
-                            return b;
-                        }
-                    } catch (NoSuchMethodException ignored) {
+                    Method m = cachedCudaAvailable;
+                    if (m == null || !m.getName().equals(name)) {
+                        try { m = torch.getMethod(name); cachedCudaAvailable = m; }
+                        catch (NoSuchMethodException ignored) { continue; }
+                    }
+                    Object r = m.invoke(null);
+                    if (r instanceof Boolean b) {
+                        lastProbeDetail = name + "=" + b;
+                        return b;
                     }
                 }
             } catch (ClassNotFoundException e) {
@@ -103,47 +113,60 @@ public final class DeviceSelector {
                 org.bytedeco.pytorch.Tensor t =
                     org.bytedeco.pytorch.global.torch.tensor(new float[]{0f});
                 try {
-                    java.lang.reflect.Method cudaM = t.getClass().getMethod("cuda");
-                    Object g = cudaM.invoke(t);
-                    if (g instanceof org.bytedeco.pytorch.Tensor gt) {
-                        boolean ok = false;
+                    Method cudaM = cachedTensorCuda;
+                    if (cudaM == null) {
                         try {
-                            ok = gt.is_cuda();
-                        } catch (Throwable ignored) {
-                            ok = true; // cuda() succeeded
+                            cudaM = t.getClass().getMethod("cuda");
+                            cachedTensorCuda = cudaM;
+                        } catch (NoSuchMethodException ns) {
+                            cudaM = null;
                         }
-                        try { gt.close(); } catch (Throwable ignored) {}
-                        try { t.close(); } catch (Throwable ignored) {}
-                        lastProbeDetail = "tensor.cuda() ok=" + ok;
-                        return ok;
                     }
-                } catch (NoSuchMethodException ns) {
-                    try {
-                        Class<?> devCls = Class.forName("org.bytedeco.pytorch.Device");
-                        Object dev = devCls.getConstructor(String.class)
-                            .newInstance("cuda:" + cudaDeviceIndex);
-                        java.lang.reflect.Method toM = t.getClass().getMethod("to", devCls);
-                        Object g = toM.invoke(t, dev);
-                        boolean ok = g instanceof org.bytedeco.pytorch.Tensor gt && safeIsCuda(gt);
-                        if (g instanceof AutoCloseable ac) try { ac.close(); } catch (Exception ignored) {}
-                        try { t.close(); } catch (Throwable ignored) {}
-                        lastProbeDetail = "tensor.to(cuda) ok=" + ok;
-                        return ok;
-                    } catch (Throwable e) {
-                        lastProbeDetail = "to(cuda) failed: " + shortMsg(e)
-                            + (hasCudaClasses ? " (cuda classes present)" : " (no cuda classes)");
-                        try { t.close(); } catch (Throwable ignored) {}
-                        return false;
+                    if (cudaM != null) {
+                        Object g = cudaM.invoke(t);
+                        if (g instanceof org.bytedeco.pytorch.Tensor gt) {
+                            boolean ok;
+                            try { ok = gt.is_cuda(); } catch (Throwable ignored) { ok = true; }
+                            try { gt.close(); } catch (Throwable ignored) {}
+                            try { t.close(); } catch (Throwable ignored) {}
+                            lastProbeDetail = "tensor.cuda() ok=" + ok;
+                            return ok;
+                        }
+                    } else {
+                        // Fallback to .to(Device("cuda:N"))
+                        try {
+                            Class<?> devCls = Class.forName("org.bytedeco.pytorch.Device");
+                            java.lang.reflect.Constructor<?> ctor = cachedDeviceCtor;
+                            if (ctor == null) {
+                                ctor = devCls.getConstructor(String.class);
+                                cachedDeviceCtor = ctor;
+                            }
+                            Object dev = ctor.newInstance("cuda:" + cudaDeviceIndex);
+                            Method toM = cachedTensorTo;
+                            if (toM == null) {
+                                toM = t.getClass().getMethod("to", devCls);
+                                cachedTensorTo = toM;
+                            }
+                            Object g = toM.invoke(t, dev);
+                            boolean ok = g instanceof org.bytedeco.pytorch.Tensor gt && safeIsCuda(gt);
+                            if (g instanceof AutoCloseable ac) try { ac.close(); } catch (Exception ignored) {}
+                            try { t.close(); } catch (Throwable ignored) {}
+                            lastProbeDetail = "tensor.to(cuda) ok=" + ok;
+                            return ok;
+                        } catch (Throwable e) {
+                            lastProbeDetail = "to(cuda) failed: " + shortMsg(e)
+                                + (hasCudaClasses ? " (cuda classes present)" : " (no cuda classes)");
+                            try { t.close(); } catch (Throwable ignored) {}
+                            return false;
+                        }
                     }
                 } catch (Throwable e) {
-                    // Method exists but native call failed (no GPU driver / no lib)
                     lastProbeDetail = "tensor.cuda() failed: " + shortMsg(e);
                     try { t.close(); } catch (Throwable ignored) {}
                     return false;
                 }
                 try { t.close(); } catch (Throwable ignored) {}
             } catch (Throwable e) {
-                // torch.tensor itself failed (e.g. openblas preload) — still not CUDA
                 lastProbeDetail = "torch init failed (CPU ok via pure-Java kernels); CUDA=false: "
                     + shortMsg(e);
                 return false;

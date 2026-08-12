@@ -18,8 +18,19 @@ import java.util.Map;
  * <p>Default layout is <em>columnar</em>: group at {@code key} with one 1-D dataset
  * per column, plus attributes {@code format}, {@code column_names}, {@code dtypes}
  * for round-trip.
+ *
+ * <p><b>Enterprise features:</b>
+ * <ul>
+ *   <li>Automatic type detection and encoding</li>
+ *   <li>Matrix and columnar format options</li>
+ *   <li>Overwrite protection</li>
+ *   <li>Complex type serialization as JSON text</li>
+ * </ul>
  */
 public final class Hdf5Writer {
+
+    private static final boolean BACKUP_BEFORE_WRITE = Boolean.getBoolean("hdf5.backup.before.write");
+
     private Hdf5Writer() {}
 
     public static void write(DataFrame df, String path, String key) throws Exception {

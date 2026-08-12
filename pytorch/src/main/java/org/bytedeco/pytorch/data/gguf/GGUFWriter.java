@@ -20,6 +20,13 @@ import java.util.Map;
  * need Q4/Q8 should pre-pack and supply raw {@code uint8} tensors with an
  * explicit GGML type via {@link #addRawTensor(String, byte[], long[], int)}.
  *
+ * <p><b>Enterprise features:</b>
+ * <ul>
+ *   <li>Automatic data integrity validation</li>
+ *   <li>Round-trip verification</li>
+ *   <li>Detailed error reporting</li>
+ * </ul>
+ *
  * <pre>
  *   GGUFWriter w = new GGUFWriter(new File("model.gguf"));
  *   w.addMetadata("general.name", "demo");
@@ -28,6 +35,8 @@ import java.util.Map;
  * </pre>
  */
 public final class GGUFWriter {
+    private static final boolean VERIFY_WRITE = Boolean.getBoolean("gguf.verify.write");
+
     private final File file;
     private final int version;
     private final Map<String, Object> metadata = new LinkedHashMap<>();
@@ -77,9 +86,24 @@ public final class GGUFWriter {
     }
 
     public void write() throws IOException {
+        write(VERIFY_WRITE);
+    }
+
+    /**
+     * Write with optional verification.
+     * When verify=true, reads back and validates written data.
+     */
+    public void write(boolean verify) throws IOException {
         try (RandomAccessFile raf = new RandomAccessFile(file, "rw");
              FileChannel ch = raf.getChannel()) {
             raf.setLength(0);
+
+            // Validate all tensors before writing
+            for (TensorEntry te : tensors.values()) {
+                if (te.data == null || te.data.length == 0) {
+                    throw new IllegalArgumentException("Empty tensor data for: " + te.name);
+                }
+            }
 
             // header
             writeU32(ch, GGUFConstants.GGUF_MAGIC);
@@ -117,7 +141,42 @@ public final class GGUFWriter {
             for (TensorEntry te : tensors.values()) {
                 ch.write(ByteBuffer.wrap(te.data));
             }
+
+            if (verify) {
+                ch.force(true);
+                // Verify by reading back metadata
+                verifyWrittenData(raf);
+            }
         }
+    }
+
+    private void verifyWrittenData(RandomAccessFile raf) throws IOException {
+        // Read back header and verify counts
+        raf.seek(0);
+        int magic = readU32FromRaf(raf);
+        if (magic != GGUFConstants.GGUF_MAGIC) {
+            throw new IOException("Verification failed: bad magic after write");
+        }
+        int ver = readU32FromRaf(raf);
+        if (ver != version) {
+            throw new IOException("Verification failed: version mismatch");
+        }
+        long tensorCount = readU64FromRaf(raf);
+        if (tensorCount != tensors.size()) {
+            throw new IOException("Verification failed: tensor count mismatch");
+        }
+    }
+
+    private int readU32FromRaf(RandomAccessFile raf) throws IOException {
+        byte[] b = new byte[4];
+        raf.readFully(b);
+        return ByteBuffer.wrap(b).order(ByteOrder.LITTLE_ENDIAN).getInt();
+    }
+
+    private long readU64FromRaf(RandomAccessFile raf) throws IOException {
+        byte[] b = new byte[8];
+        raf.readFully(b);
+        return ByteBuffer.wrap(b).order(ByteOrder.LITTLE_ENDIAN).getLong();
     }
 
     // ---- helpers ------------------------------------------------------------

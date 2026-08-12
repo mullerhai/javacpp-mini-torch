@@ -44,6 +44,9 @@ public final class Column implements AutoCloseable {
     public int size() { return storage.size(); }
     public boolean isArrowBacked() { return storage.isArrowBacked(); }
 
+    public boolean isNumeric() {
+        return storage.dtype() == DType.INT32 || storage.dtype() == DType.INT64 || storage.dtype() == DType.FLOAT32 || storage.dtype() == DType.FLOAT64;
+    }
     /** Mutable list view — materializes Arrow-backed columns. */
     public List<Object> data() { return storage.materialize(); }
 

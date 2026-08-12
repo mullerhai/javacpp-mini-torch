@@ -257,6 +257,9 @@ public final class DataFrameWriter {
             case "avro":        writeAvro(path); break;
             case "orc":         writeOrc(path); break;
             case "lance":       writeLance(path); break;
+            case "toml":        writeToml(path, TomlReader.TomlOptions.defaults()); break;
+            case "bin":
+            case "binary":      writeBin(path, BinReader.BinOptions.defaults()); break;
             default:
                 throw new IllegalArgumentException("Unknown write format: '" + fmt + "'");
         }
@@ -470,6 +473,14 @@ public final class DataFrameWriter {
         else df.writeLance(path);
     }
 
+    private void writeToml(String path, TomlReader.TomlOptions opt) throws Exception {
+        TomlReader.write(df, path, opt);
+    }
+
+    private void writeBin(String path, BinReader.BinOptions opt) throws Exception {
+        BinReader.write(df, path, opt);
+    }
+
     // ---- partitionBy implementation ----
 
     private void savePartitioned(String fmt, String root) throws Exception {
@@ -557,6 +568,9 @@ public final class DataFrameWriter {
             case "avro":    return ".avro";
             case "orc":     return ".orc";
             case "lance":   return ".lance";
+            case "toml":    return ".toml";
+            case "bin":
+            case "binary":  return ".bin";
             default:        return "";
         }
     }

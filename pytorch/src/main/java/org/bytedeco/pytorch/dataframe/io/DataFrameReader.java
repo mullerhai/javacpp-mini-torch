@@ -235,6 +235,8 @@ public final class DataFrameReader {
     public DataFrame avro(String path)        throws Exception { format("avro");    return load(path); }
     public DataFrame orc(String path)         throws Exception { format("orc");     return load(path); }
     public DataFrame lance(String path)       throws Exception { format("lance");    return load(path); }
+    public DataFrame toml(String path)        throws Exception { format("toml");    return load(path); }
+    public DataFrame bin(String path)         throws Exception { format("bin");     return load(path); }
 
     /**
      * Plain text → single-column DataFrame with column {@code "value"}.
@@ -276,6 +278,9 @@ public final class DataFrameReader {
             case "avro":        return readAvro(path);
             case "orc":         return readOrc(path);
             case "lance":       return DataFrame.readLance(path);
+            case "toml":        return readToml(path);
+            case "bin":
+            case "binary":      return readBin(path);
             default:
                 throw new IllegalArgumentException("Unknown read format: '" + fmt + "'");
         }
@@ -459,5 +464,13 @@ public final class DataFrameReader {
 
     private DataFrame readOrc(String path) throws Exception {
         return DataFrame.readOrc(path);
+    }
+
+    private DataFrame readToml(String path) throws Exception {
+        return TomlReader.read(path);
+    }
+
+    private DataFrame readBin(String path) throws Exception {
+        return BinReader.read(path);
     }
 }

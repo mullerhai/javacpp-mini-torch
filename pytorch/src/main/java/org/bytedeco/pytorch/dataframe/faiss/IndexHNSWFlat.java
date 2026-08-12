@@ -31,6 +31,9 @@ public class IndexHNSWFlat extends Index {
     /** Public FAISS-style param object: {@code index.hnsw.efSearch = ...}. */
     public final HnswParams hnsw;
 
+    /** Cached metric flag for hot-path comparisons (avoid virtual dispatch). */
+    private final boolean lowerIsBetter;
+
     private final double levelMult; // 1/ln(M)
 
     private float[] data;
@@ -59,6 +62,7 @@ public class IndexHNSWFlat extends Index {
         this.neighbors = new int[0][][];
         this.levels = new int[0];
         this.is_trained = true;
+        this.lowerIsBetter = (metric == null ? MetricType.METRIC_L2 : metric).lowerIsBetter();
         initVisitState();
     }
 
@@ -191,11 +195,12 @@ public class IndexHNSWFlat extends Index {
         int n = (int) ntotal;
         if (n == 0 || entryPoint < 0) {
             Arrays.fill(outI, -1);
-            float fill = metric_type.lowerIsBetter() ? Float.POSITIVE_INFINITY : Float.NEGATIVE_INFINITY;
+            float fill = lowerIsBetter ? Float.POSITIVE_INFINITY : Float.NEGATIVE_INFINITY;
             Arrays.fill(outD, fill);
             return;
         }
-        float[] query = new float[d];
+        // Reuse thread-local scratch buffers to avoid per-query float[d] allocation.
+        float[] query = scratchFloat(d);
         System.arraycopy(xq, q * d, query, 0, d);
 
         int curr = entryPoint;
@@ -206,27 +211,30 @@ public class IndexHNSWFlat extends Index {
         // ef-beam on layer 0
         MinMaxHeap w = searchLayer(query, curr, ef, 0);
 
-        // export top-k (best first)
+        // Export internal array directly (already sorted best→worst by MinMaxHeap layout).
         int got = Math.min(k, w.size);
-        // w is max-heap by distance for L2 (farthest on top for pruning);
-        // extract sorted
-        int[] idxs = new int[w.size];
-        float[] dists = new float[w.size];
+        // The MinMaxHeap stores worst-at-end (lowerIsBetter) or best-at-start depending on layout.
+        // Easiest path: copy the prefix if best-at-start, else reverse.
+        int[] idxs = scratchInt(got);
+        float[] dists = scratchFloat(got);
         int sz = w.size;
-        for (int i = 0; i < sz; i++) {
-            idxs[i] = w.ids[i];
-            dists[i] = w.dist[i];
-        }
-        // sort ascending for L2, descending for IP
-        sortHeapResult(dists, idxs, sz, metric_type.lowerIsBetter());
-        for (int i = 0; i < k; i++) {
-            if (i < got) {
-                outD[i] = dists[i];
-                outI[i] = idxs[i];
-            } else {
-                outD[i] = metric_type.lowerIsBetter() ? Float.POSITIVE_INFINITY : Float.NEGATIVE_INFINITY;
-                outI[i] = -1;
+        if (lowerIsBetter) {
+            // array is best→worst
+            for (int i = 0; i < sz; i++) { idxs[i] = w.ids[i]; dists[i] = w.dist[i]; }
+        } else {
+            // array is worst→best (since worst is at start for higher-is-better); reverse.
+            for (int i = 0; i < sz; i++) {
+                int j = sz - 1 - i;
+                idxs[i] = w.ids[j]; dists[i] = w.dist[j];
             }
+        }
+        int copy = Math.min(got, k);
+        System.arraycopy(dists, 0, outD, 0, copy);
+        System.arraycopy(idxs, 0, outI, 0, copy);
+        if (copy < k) {
+            float fill = lowerIsBetter ? Float.POSITIVE_INFINITY : Float.NEGATIVE_INFINITY;
+            Arrays.fill(outD, copy, k, fill);
+            Arrays.fill(outI, copy, k, -1L);
         }
     }
 
@@ -270,12 +278,8 @@ public class IndexHNSWFlat extends Index {
         localVisitGen.set(gen);
 
         // candidates: min-heap (best first to expand); w: result max-heap (worst at root for L2)
-        CandidateHeap candidates = new CandidateHeap(ef * 2, true /* min-heap by dist for L2 */);
-        // For IP (higher better), invert comparison via flag
-        boolean lower = metric_type.lowerIsBetter();
-        candidates.lowerIsBetter = lower;
-
-        MinMaxHeap w = new MinMaxHeap(ef, lower);
+        CandidateHeap candidates = new CandidateHeap(ef * 2, lowerIsBetter);
+        MinMaxHeap w = new MinMaxHeap(ef, lowerIsBetter);
 
         float enterDist = distQuery(query, enter);
         candidates.push(enter, enterDist);
@@ -301,7 +305,6 @@ public class IndexHNSWFlat extends Index {
                 if (w.size < ef || better(dd, w.worstDist())) {
                     candidates.push(nb, dd);
                     w.push(nb, dd);
-                    if (w.size > ef) w.popWorst();
                 }
             }
         }
@@ -381,7 +384,7 @@ public class IndexHNSWFlat extends Index {
         }
         localVisitGen.set(gen);
 
-        boolean lower = metric_type.lowerIsBetter();
+        boolean lower = lowerIsBetter;
         CandidateHeap candidates = new CandidateHeap(ef * 2, lower);
         MinMaxHeap w = new MinMaxHeap(ef, lower);
 
@@ -413,7 +416,6 @@ public class IndexHNSWFlat extends Index {
                 if (w.size < ef || better(dd, w.worstDist())) {
                     candidates.push(nb, dd);
                     w.push(nb, dd);
-                    if (w.size > ef) w.popWorst();
                 }
             }
         }
@@ -428,7 +430,7 @@ public class IndexHNSWFlat extends Index {
             n2[cur.length] = nb;
             neighbors[node][lc] = n2;
         } else {
-            MinMaxHeap tmp = new MinMaxHeap(maxM + 1, metric_type.lowerIsBetter());
+            MinMaxHeap tmp = new MinMaxHeap(maxM + 1, lowerIsBetter);
             for (int x : cur) tmp.push(x, distNN(node, x));
             tmp.push(nb, distNN(node, nb));
             neighbors[node][lc] = selectNeighbors(node, tmp, maxM);
@@ -446,7 +448,7 @@ public class IndexHNSWFlat extends Index {
         int sz = cand.size;
         int[] ids = Arrays.copyOf(cand.ids, sz);
         float[] dist = Arrays.copyOf(cand.dist, sz);
-        sortHeapResult(dist, ids, sz, metric_type.lowerIsBetter());
+        sortHeapResult(dist, ids, sz, lowerIsBetter);
 
         int[] selected = new int[maxM];
         float[] selDist = new float[maxM];
@@ -503,11 +505,11 @@ public class IndexHNSWFlat extends Index {
 
     /** true if a is strictly better than b under current metric. */
     private boolean better(float a, float b) {
-        return metric_type.lowerIsBetter() ? a < b : a > b;
+        return lowerIsBetter ? a < b : a > b;
     }
 
     private boolean betterOrEq(float a, float b) {
-        return metric_type.lowerIsBetter() ? a <= b : a >= b;
+        return lowerIsBetter ? a <= b : a >= b;
     }
 
     private void ensureCapacity(int need) {
@@ -523,7 +525,7 @@ public class IndexHNSWFlat extends Index {
         nq = Math.max(0, nq); k = Math.max(0, k);
         float[][] D = new float[nq][k];
         long[][] I = new long[nq][k];
-        float fill = metric_type.lowerIsBetter() ? Float.POSITIVE_INFINITY : Float.NEGATIVE_INFINITY;
+        float fill = lowerIsBetter ? Float.POSITIVE_INFINITY : Float.NEGATIVE_INFINITY;
         for (int q = 0; q < nq; q++) {
             Arrays.fill(D[q], fill);
             Arrays.fill(I[q], -1);
@@ -564,7 +566,10 @@ public class IndexHNSWFlat extends Index {
 
     // ---- compact heaps ----
 
-    /** Result set: keeps up to cap elements; worst is easily accessible. */
+    /**
+     * Result set: keeps up to {@code cap} best elements in best→worst order.
+     * Worst-at-end invariant: {@link #worstDist()} is O(1).
+     */
     static final class MinMaxHeap {
         final int cap;
         final boolean lowerIsBetter;
@@ -575,8 +580,8 @@ public class IndexHNSWFlat extends Index {
         MinMaxHeap(int cap, boolean lowerIsBetter) {
             this.cap = cap;
             this.lowerIsBetter = lowerIsBetter;
-            this.ids = new int[cap + 1];
-            this.dist = new float[cap + 1];
+            this.ids = new int[cap];
+            this.dist = new float[cap];
             this.size = 0;
         }
 
@@ -585,45 +590,84 @@ public class IndexHNSWFlat extends Index {
                 ids[size] = id;
                 dist[size] = d;
                 size++;
+                siftIntoPosition(size - 1);
                 return;
             }
-            // replace worst if better
-            int wi = worstIndex();
-            if (lowerIsBetter ? d >= dist[wi] : d <= dist[wi]) return;
-            ids[wi] = id;
-            dist[wi] = d;
+            // Replace worst if better. Worst is at index size-1.
+            if (lowerIsBetter ? d >= dist[size - 1] : d <= dist[size - 1]) return;
+            ids[size - 1] = id;
+            dist[size - 1] = d;
+            siftIntoPosition(size - 1);
         }
 
         void popWorst() {
             if (size == 0) return;
-            int wi = worstIndex();
-            ids[wi] = ids[size - 1];
-            dist[wi] = dist[size - 1];
             size--;
         }
 
+        /** O(1) access to the worst (boundary) distance — used for early reject. */
         float worstDist() {
             if (size == 0)
                 return lowerIsBetter ? Float.POSITIVE_INFINITY : Float.NEGATIVE_INFINITY;
-            return dist[worstIndex()];
+            return dist[size - 1];
         }
 
         int bestId() {
-            if (size == 0) return -1;
-            int bi = 0;
-            for (int i = 1; i < size; i++) {
-                if (lowerIsBetter ? dist[i] < dist[bi] : dist[i] > dist[bi]) bi = i;
-            }
-            return ids[bi];
+            return size == 0 ? -1 : ids[0];
         }
 
-        private int worstIndex() {
-            int wi = 0;
-            for (int i = 1; i < size; i++) {
-                if (lowerIsBetter ? dist[i] > dist[wi] : dist[i] < dist[wi]) wi = i;
+        /** Maintain best-at-start, worst-at-end. */
+        private void siftIntoPosition(int i) {
+            if (lowerIsBetter) {
+                while (i > 0 && dist[i] < dist[i - 1]) {
+                    swap(i, i - 1);
+                    i--;
+                }
+            } else {
+                while (i > 0 && dist[i] > dist[i - 1]) {
+                    swap(i, i - 1);
+                    i--;
+                }
             }
-            return wi;
         }
+
+        private void swap(int a, int b) {
+            int ti = ids[a]; ids[a] = ids[b]; ids[b] = ti;
+            float td = dist[a]; dist[a] = dist[b]; dist[b] = td;
+        }
+    }
+
+    // ---- thread-local scratch buffers ----
+
+    private transient ThreadLocal<float[]> scratchF;
+    private transient ThreadLocal<int[]> scratchI;
+
+    private float[] scratchFloat(int need) {
+        ThreadLocal<float[]> tl = scratchF;
+        if (tl == null) {
+            tl = new ThreadLocal<>();
+            scratchF = tl;
+        }
+        float[] s = tl.get();
+        if (s == null || s.length < need) {
+            s = new float[Math.max(need, 256)];
+            tl.set(s);
+        }
+        return s;
+    }
+
+    private int[] scratchInt(int need) {
+        ThreadLocal<int[]> tl = scratchI;
+        if (tl == null) {
+            tl = new ThreadLocal<>();
+            scratchI = tl;
+        }
+        int[] s = tl.get();
+        if (s == null || s.length < need) {
+            s = new int[Math.max(need, 256)];
+            tl.set(s);
+        }
+        return s;
     }
 
     /** Expansion candidates — simple binary heap. */

@@ -178,65 +178,73 @@ public class IndexIVFPQ extends Index {
         // probe lists via quantizer
         SearchResult lists = quantizer.search(xq, nq, probe);
 
-        for (int q = 0; q < nq; q++) {
-            // precompute ADC tables for this query residual vs each probed list's...
-            // Simpler correct approach: for each probed list, decode residual approx and compare.
-            // Faster: precompute dist tables query_sub vs codebook once, then for each list
-            // adjust by residual = query - centroid → table on residual subs.
+        // Per-query scratch (heap + ADC base table). One per query.
+        TopK[] heaps = new TopK[nq];
+        for (int q = 0; q < nq; q++) heaps[q] = TopK.borrow(k, lower);
+        // Per-query table[sub][c] = dist(query_sub, codebook_entry) — independent of probed list.
+        // Reused across all probed lists (each list contributes only a constant offset).
+        float[][] baseTable = new float[m][ksub];
+        float[] query = new float[d];
 
-            TopK heap = new TopK(k, lower);
-            float[] query = new float[d];
+        for (int q = 0; q < nq; q++) {
             System.arraycopy(xq, q * d, query, 0, d);
 
+            // Build per-sub distance table from query_sub vs each codebook centroid.
+            for (int sub = 0; sub < m; sub++) {
+                float[] cb = codebooks[sub];
+                int qOff = sub * dsub;
+                for (int c = 0; c < ksub; c++) {
+                    baseTable[sub][c] = l2
+                        ? DistanceKernel.l2Row(query, qOff, cb, c * dsub, dsub)
+                        : DistanceKernel.ipRow(query, qOff, cb, c * dsub, dsub);
+                }
+            }
+
+            TopK heap = heaps[q];
+
+            // Walk probed lists.
             for (int p = 0; p < probe; p++) {
                 long listId = lists.I[q][p];
                 if (listId < 0 || listId >= nlist) continue;
                 int list = (int) listId;
-                // residual query relative to this centroid
-                float[] qres = new float[d];
                 int cst = list * d;
-                for (int j = 0; j < d; j++) qres[j] = query[j] - centroids[cst + j];
 
-                // ADC tables: for each subquantizer, dist(qres_sub, codebook_entry)
-                float[][] tables = new float[m][ksub];
-                for (int sub = 0; sub < m; sub++) {
-                    float[] cb = codebooks[sub];
-                    int qOff = sub * dsub;
-                    for (int c = 0; c < ksub; c++) {
-                        if (l2) {
-                            tables[sub][c] = DistanceKernel.l2Row(qres, qOff, cb, c * dsub, dsub);
-                        } else {
-                            // IP on residual: sum qres·code  (approx of q·x via residual trick is imperfect for IP;
-                            // for IP we store codes of residual but score raw approx reconstruct)
-                            tables[sub][c] = DistanceKernel.ipRow(qres, qOff, cb, c * dsub, dsub);
-                        }
+                // Constant offset to convert "query-vs-codebook" table values into
+                // "residual-vs-codebook" distances for this specific list:
+                //   For L2:  ||qres_sub - c||^2 = ||q_sub||^2 + ||c_sub||^2 - 2 q_sub·c_sub
+                //                   = baseTable + (||c_sub||^2 - 2 q_sub·c_sub)
+                //   Summed across subs: offset = ||c||^2 - 2 q·c
+                //   For IP:  qres_sub · c = q_sub·c - ||c_sub||^2  → offset = -||c||^2
+                float listOffset = 0f;
+                if (l2) {
+                    float centSq = 0f, qDotC = 0f;
+                    for (int j = 0; j < d; j++) {
+                        float cj = centroids[cst + j];
+                        centSq += cj * cj;
+                        qDotC += query[j] * cj;
                     }
+                    listOffset = centSq - 2f * qDotC;
+                } else {
+                    float centSq = 0f;
+                    for (int j = 0; j < d; j++) {
+                        float cj = centroids[cst + j];
+                        centSq += cj * cj;
+                    }
+                    listOffset = -centSq;
                 }
 
                 InvList inv = invlists.get(list);
-                for (int e = 0; e < inv.size; e++) {
-                    byte[] code = inv.codes.get(e);
-                    float dist = 0f;
-                    if (l2) {
-                        for (int sub = 0; sub < m; sub++) {
-                            int ci = code[sub] & 0xFF;
-                            if (nbits > 8) {
-                                // packed differently — we use 1 byte when nbits<=8
-                            }
-                            dist += tables[sub][ci];
-                        }
-                    } else {
-                        // IP: higher better — sum of sub IPs on residual is residual·approx;
-                        // add centroid·query for better ranking
-                        float centDot = DistanceKernel.ipRow(query, centroids, cst, d);
-                        float resDot = 0f;
-                        for (int sub = 0; sub < m; sub++) {
-                            int ci = code[sub] & 0xFF;
-                            resDot += tables[sub][ci];
-                        }
-                        dist = centDot + resDot;
+                int size = inv.size;
+                long[] invIds = inv.ids;
+                byte[][] invCodes = inv.codes;
+                for (int e = 0; e < size; e++) {
+                    byte[] code = invCodes[e];
+                    float dist = listOffset;
+                    for (int sub = 0; sub < m; sub++) {
+                        int ci = code[sub] & 0xFF;
+                        dist += baseTable[sub][ci];
                     }
-                    heap.offer(inv.ids.get(e), dist);
+                    heap.offer(invIds[e], dist);
                 }
             }
             heap.export(D[q], I[q]);
@@ -251,9 +259,11 @@ public class IndexIVFPQ extends Index {
         requireTrained();
         for (int list = 0; list < nlist; list++) {
             InvList inv = invlists.get(list);
+            long[] ids = inv.ids;
+            byte[][] codes = inv.codes;
             for (int e = 0; e < inv.size; e++) {
-                if (inv.ids.get(e) != key) continue;
-                byte[] code = inv.codes.get(e);
+                if (ids[e] != key) continue;
+                byte[] code = codes[e];
                 // decode residual + centroid
                 Arrays.fill(recons, 0, d, 0f);
                 for (int sub = 0; sub < m; sub++) {
@@ -393,19 +403,23 @@ public class IndexIVFPQ extends Index {
 
     private static final class InvList implements java.io.Serializable {
         private static final long serialVersionUID = 1L;
-        final List<Long> ids = new ArrayList<>();
-        final List<byte[]> codes = new ArrayList<>();
+        // Flat arrays — avoids boxing and List.get() virtual dispatch in the inner loop.
+        long[] ids = new long[16];
+        byte[][] codes = new byte[16][];
         int size;
 
         void add(long id, byte[] code) {
-            ids.add(id);
-            codes.add(code);
+            if (size == ids.length) {
+                ids = java.util.Arrays.copyOf(ids, ids.length * 2);
+                codes = java.util.Arrays.copyOf(codes, codes.length * 2);
+            }
+            ids[size] = id;
+            codes[size] = code;
             size++;
         }
 
         void clear() {
-            ids.clear();
-            codes.clear();
+            // zero length but keep capacity for reuse
             size = 0;
         }
     }
@@ -439,10 +453,11 @@ public class IndexIVFPQ extends Index {
     /** Contiguous codes for one list: n * codeSize bytes. */
     byte[] listCodes(int list) {
         InvList inv = invlists.get(list);
+        byte[][] codes = inv.codes;
         int cs = pqCodeSize();
         byte[] out = new byte[inv.size * cs];
         for (int e = 0; e < inv.size; e++) {
-            byte[] c = inv.codes.get(e);
+            byte[] c = codes[e];
             System.arraycopy(c, 0, out, e * cs, Math.min(cs, c.length));
         }
         return out;
@@ -450,8 +465,9 @@ public class IndexIVFPQ extends Index {
 
     long[] listIds(int list) {
         InvList inv = invlists.get(list);
+        long[] src = inv.ids;
         long[] out = new long[inv.size];
-        for (int e = 0; e < inv.size; e++) out[e] = inv.ids.get(e);
+        System.arraycopy(src, 0, out, 0, inv.size);
         return out;
     }
 

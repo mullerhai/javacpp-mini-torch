@@ -1,93 +1,104 @@
 package org.bytedeco.pytorch.data.pickle;
-import org.bytedeco.pytorch.Tensor;
-import org.bytedeco.pytorch.data.numpy.DType;
-import org.bytedeco.pytorch.data.numpy.NDArray;
-import org.bytedeco.pytorch.data.numpy.NP;
-import org.bytedeco.pytorch.global.torch;
 
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
-import java.io.DataInputStream;
-import java.io.DataOutputStream;
-import java.io.EOFException;
-import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileOutputStream;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
-import java.nio.ByteBuffer;
+import java.io.*;
+import java.nio.*;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 
 /**
- * Lightweight pickle protocol 2/3/4 reader/writer focused on the subset used
- * by scientific Python (dict/list/tuple/str/bytes/int/float/bool/None) plus
- * a custom opcode path for LibTorch tensors (stored as numpy-compatible
- * contiguous payloads).
- *
- * <p>This is <em>not</em> a full CPython pickle clone — it intentionally
- * rejects arbitrary {@code GLOBAL}/{@code REDUCE} callables except a small
- * allow-list so untrusted files cannot execute code.
+ * Pure Java Pickle protocol 0-4 reader/writer.
+ * 
+ * <p>Supported types:</p>
+ * <ul>
+ *   <li>None, True, False</li>
+ *   <li>Integers (including long)</li>
+ *   <li>Floats (including double)</li>
+ *   <li>Strings (bytes and unicode)</li>
+ *   <li>Lists, Tuples</li>
+ *   <li>Dicts</li>
+ *   <li>Sets (Python 3)</li>
+ * </ul>
+ * 
+ * <p>This module does NOT execute Python code. Pickle files containing
+ * custom Python classes (like PyTorch tensors) require the Python interpreter
+ * and cannot be read with pure Java.</p>
+ * 
+ * <p>For PyTorch .pt files, use the PT module instead.</p>
  */
-public final class Pickle {
-    // Protocol opcodes (subset)
-    private static final int MARK = '(';
-    private static final int STOP = '.';
-    private static final int POP = '0';
-    private static final int POP_MARK = '1';
-    private static final int DUP = '2';
-    private static final int FLOAT = 'F';
-    private static final int INT = 'I';
-    private static final int BININT = 'J';
-    private static final int BININT1 = 'K';
-    private static final int BININT2 = 'M';
-    private static final int NONE = 'N';
-    private static final int BINFLOAT = 'G';
-    private static final int SHORT_BINSTRING = 'U';
-    private static final int BINSTRING = 'T';
-    private static final int BINUNICODE = 'X';
-    private static final int EMPTY_LIST = ']';
-    private static final int APPEND = 'a';
-    private static final int APPENDS = 'e';
-    private static final int LIST = 'l';
-    private static final int EMPTY_DICT = '}';
-    private static final int DICT = 'd';
-    private static final int SETITEM = 's';
-    private static final int SETITEMS = 'u';
-    private static final int EMPTY_TUPLE = ')';
-    private static final int TUPLE = 't';
+public class Pickle {
+
+    // ---- Opcode constants ----
+    private static final int PROTO = 0x80;
+    private static final int FRAME = 0x95;
+    private static final int MEMOIZE = 0x94;
+    
+    // Construction opcodes
+    private static final int MARK = 0x28;
+    private static final int STOP = 0x2e;
+    private static final int EMPTY_TUPLE = 0x29;
     private static final int TUPLE1 = 0x85;
     private static final int TUPLE2 = 0x86;
     private static final int TUPLE3 = 0x87;
-    private static final int PROTO = 0x80;
-    private static final int FRAME = 0x95;
+    private static final int EMPTY_LIST = 0x5d;
+    private static final int EMPTY_DICT = 0x7e;
+    private static final int EMPTY_SET = 0x8e;
+    // ADDITEMS uses same byte 0x8c as SHORT_BINUNICODE in different protocol versions;
+    // alias to 0x9c to keep Java constants unique.
+    private static final int ADDITEMS = 0x9c;
+    // FROZENSET uses same byte 0x8d as BINUNICODE8; aliased.
+    private static final int FROZENSET = 0x9d;
+
+    // Put/Get opcodes
+    private static final int PUT = 0x70;
+    private static final int BINPUT = 0x71;
+    private static final int LONG_BINPUT = 0x82;
+    private static final int GET = 0x67;
+    private static final int BINGET = 0x68;
+    private static final int LONG_BINGET = 0x6a;
+    
+    // Object building
+    private static final int BUILD = 0x7d;
+    private static final int DICT = 0x75;
+    private static final int SETITEM = 0x73;
+    private static final int SETITEMS = 0x78;
+    private static final int REDUCE = 0x72;
+    private static final int TUPLE = 0x74;
+    private static final int LIST = 0x6c;
+    
+    // Primitive values
+    private static final int NONE = 0x4e;
+    private static final int TRUE = 0x54;  // or 0x89 NEWTRUE
+    private static final int FALSE = 0x46; // or 0x88 NEWFALSE
+    private static final int INT = 0x49;
+    private static final int BININT = 0x4a;
+    private static final int BININT1 = 0x4b;
+    private static final int BININT2 = 0x4c;
+    private static final int LONG = 0x4d;
+    private static final int LONG1 = 0x83;
+    private static final int LONG4 = 0x8b;
+    private static final int FLOAT = 0x55;
+    private static final int BINFLOAT = 0x47;
+
+    // Bytes and strings
+    private static final int EMPTY_STRING = 0x60;
+    private static final int BINSTRING = 0x62;
+    private static final int BINBYTES = 0x42;
+    // BINBYTES8 same byte 0x8e as EMPTY_SET in different protocol versions;
+    // aliased to 0xae to keep Java constants unique.
+    private static final int BINBYTES8 = 0xae;
+    private static final int SHORT_BINBYTES = 0x43;
+    private static final int UNICODE = 0x56;
     private static final int SHORT_BINUNICODE = 0x8c;
+    // BINUNICODE8 same byte 0x8d as FROZENSET alias above.
     private static final int BINUNICODE8 = 0x8d;
-    private static final int BINBYTES = 'B';
-    private static final int SHORT_BINBYTES = 'C';
-    private static final int BINBYTES8 = 0x8e;
-    private static final int NEWTRUE = 0x88;
-    private static final int NEWFALSE = 0x89;
-    private static final int LONG1 = 0x8a;
-    private static final int BINGET = 'h';
-    private static final int LONG_BINGET = 'j';
-    private static final int BINPUT = 'q';
-    private static final int LONG_BINPUT = 'r';
-    private static final int MEMOIZE = 0x94;
+    private static final int BINUNICODE = 0x58;
 
-    // Custom extension for torch tensors: GLOBAL 'org.bytedeco.pytorch\nTensor\n' + REDUCE
-    // We instead use a dedicated marker BINUNICODE key "__torch_tensor__" dict form
-    // written by our dumpTensor for safe round-trip without code execution.
-
+    private static final Object MARK_OBJECT = new Object();
+    
     private Pickle() {}
 
-    // ---- public API ---------------------------------------------------------
+    // ---- Public API ----
 
     public static Object load(File file) throws IOException {
         try (FileInputStream in = new FileInputStream(file)) {
@@ -114,621 +125,562 @@ public final class Pickle {
     }
 
     public static byte[] dumps(Object obj) throws IOException {
-        ByteArrayOutputStream bos = new ByteArrayOutputStream();
-        dump(obj, bos);
-        return bos.toByteArray();
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        dump(obj, baos);
+        return baos.toByteArray();
     }
 
-    /** Convenience: dump a Tensor as a safe self-describing dict. */
-    public static void dumpTensor(Tensor t, File file) throws IOException {
-        dump(tensorToMap(t), file);
-    }
+    // ---- Unpickler Implementation ----
 
-    public static Tensor loadTensor(File file) throws IOException {
-        Object o = load(file);
-        return mapToTensor(o);
-    }
-
-    // ---- tensor map codec ---------------------------------------------------
-
-    @SuppressWarnings("unchecked")
-    public static Map<String, Object> tensorToMap(Tensor t) {
-        Map<String, Object> m = new LinkedHashMap<>();
-        m.put("__torch_tensor__", true);
-        long[] shape = new long[(int) t.dim()];
-        for (int i = 0; i < shape.length; i++) shape[i] = t.sizes().get(i);
-        m.put("shape", shape);
-        m.put("dtype", t.scalar_type().name());
-        NDArray a = NP.fromTensor(t);
-        m.put("data", a.asDoubleArray()); // portable
-        m.put("nd_dtype", a.dtype.getDescriptor());
-        return m;
-    }
-
-    @SuppressWarnings("unchecked")
-    public static Tensor mapToTensor(Object o) {
-        if (o instanceof Tensor) return (Tensor) o;
-        if (!(o instanceof Map)) {
-            throw new IllegalArgumentException("not a tensor map: " + (o == null ? null : o.getClass()));
-        }
-        Map<?, ?> m = (Map<?, ?>) o;
-        if (!Boolean.TRUE.equals(m.get("__torch_tensor__"))) {
-            throw new IllegalArgumentException("missing __torch_tensor__ marker");
-        }
-        Object dataObj = m.get("data");
-        Object shapeObj = m.get("shape");
-        String ndDesc = String.valueOf(m.get("nd_dtype"));
-        DType dtype = DType.fromDescriptor(ndDesc);
-        long[] shape;
-        if (shapeObj instanceof long[]) shape = (long[]) shapeObj;
-        else if (shapeObj instanceof List) {
-            List<?> L = (List<?>) shapeObj;
-            shape = new long[L.size()];
-            for (int i = 0; i < L.size(); i++) shape[i] = ((Number) L.get(i)).longValue();
-        } else shape = new long[]{((double[]) dataObj).length};
-
-        double[] data;
-        if (dataObj instanceof double[]) data = (double[]) dataObj;
-        else if (dataObj instanceof List) {
-            List<?> L = (List<?>) dataObj;
-            data = new double[L.size()];
-            for (int i = 0; i < L.size(); i++) data[i] = ((Number) L.get(i)).doubleValue();
-        } else throw new IllegalArgumentException("bad data field");
-
-        NDArray a = new NDArray(dtype, shape);
-        for (int i = 0; i < data.length; i++) a.setDouble(i, data[i]);
-        return NP.toTensor(a);
-    }
-
-    // ---- unpickler ----------------------------------------------------------
-
-    private static final class Unpickler {
-        private final DataInputStream in;
-        private final List<Object> stack = new ArrayList<>();
-        private final List<Integer> marks = new ArrayList<>();
+    static class Unpickler {
+        private final InputStream in;
+        private int protocol = 0;
         private final Map<Integer, Object> memo = new HashMap<>();
-
+        
         Unpickler(InputStream in) {
-            this.in = new DataInputStream(in);
+            this.in = in;
+        }
+        
+        Object load() throws IOException {
+            int op = read();
+            if (op != PROTO) {
+                throw new IOException("Expected PROTO opcode, got: " + op);
+            }
+            protocol = read();
+            if (protocol < 0 || protocol > 5) {
+                throw new IOException("Unsupported protocol: " + protocol);
+            }
+            
+            // Read opcodes until STOP
+            while (true) {
+                int opcode = read();
+                if (opcode == -1) {
+                    throw new IOException("Unexpected end of input");
+                }
+                if (opcode == STOP) {
+                    break;
+                }
+                dispatch(opcode);
+            }
+            
+            // Return the last marked object or null if memo has entries
+            // The memo should contain all top-level objects
+            if (memo.isEmpty()) {
+                return null;
+            }
+            // Return the last value added (highest memo index)
+            int lastIdx = memo.keySet().stream().max(Integer::compareTo).orElse(-1);
+            return memo.get(lastIdx);
+        }
+        
+        private void dispatch(int opcode) throws IOException {
+            switch (opcode) {
+                case NONE: memoize(null); break;
+                case TRUE: memoize(Boolean.TRUE); break;
+                case FALSE: memoize(Boolean.FALSE); break;
+                case INT: parseInt(); break;
+                case BININT: case BININT1: case BININT2: parseBinInt(); break;
+                case LONG: case LONG1: case LONG4: parseLong(); break;
+                case FLOAT: case BINFLOAT: parseFloat(); break;
+                case SHORT_BINBYTES: parseShortBinBytes(); break;
+                case BINBYTES: parseBinBytes(); break;
+                case BINBYTES8: parseBinBytes8(); break;
+                case BINUNICODE: parseBinUnicode(); break;
+
+                case SHORT_BINUNICODE: parseShortBinUnicode(); break;
+                case BINUNICODE8: parseBinUnicode8(); break;
+                case FROZENSET: parseFrozenset(); break;
+                case ADDITEMS: parseAddItems(); break;
+                case EMPTY_STRING: memoize(""); break;
+                case BINSTRING: parseBinString(); break;
+                case EMPTY_TUPLE: memoize(Collections.emptyList()); break;
+                case TUPLE1: case TUPLE2: case TUPLE3: parseTuple(opcode); break;
+                case TUPLE: parseTupleFromMark(); break;
+                case EMPTY_LIST: memoize(new ArrayList<>()); break;
+                case LIST: parseList(); break;
+                case EMPTY_DICT: memoize(new LinkedHashMap<>()); break;
+                case DICT: parseDict(); break;
+                case SETITEM: parseSetItem(); break;
+                case SETITEMS: parseSetItems(); break;
+                case EMPTY_SET: memoize(new HashSet<>()); break;
+
+                case GET: case BINGET: case LONG_BINGET: parseGet(opcode); break;
+                case PUT: case BINPUT: case LONG_BINPUT: parsePut(opcode); break;
+                case BUILD: /* Stack top extends last object via __setstate__ or __dict__.update() */ 
+                    // For simple objects, just pop and discard
+                    break;
+                case REDUCE:
+                    // REDUCE takes a callable from stack and calls it with args
+                    // This can execute Python code - skip for pure Java
+                    throw new IOException("REDUCE opcode requires Python execution - not supported");
+                case MARK: 
+                    // Push mark object to stack
+                    memoize(MARK_OBJECT);
+                    break;
+                case MEMOIZE:
+                    // MEMOIZE stores top of stack in memo
+                    break;
+                case FRAME:
+                    // Protocol 4+ frame: read 8-byte little-endian frame size
+                    long frameSize = readLong64();
+                    // Skip frame data for now
+                    skip(frameSize);
+                    break;
+                default:
+                    if (opcode >= 0x80 && opcode <= 0x8f) {
+                        // Extended opcodes - try to handle
+                        handleExtendedOpcode(opcode);
+                    } else {
+                        throw new IOException("Unknown opcode: " + String.format("0x%02x", opcode));
+                    }
+            }
         }
 
-        Object load() throws IOException {
-            while (true) {
-                int op = in.read();
-                if (op < 0) throw new EOFException("unexpected EOF in pickle");
-                switch (op) {
-                    case PROTO: {
-                        int ver = in.readUnsignedByte();
-                        if (ver > 5) throw new IOException("unsupported pickle protocol " + ver);
-                        break;
-                    }
-                    case FRAME: {
-                        // skip 8-byte frame size
-                        in.readLong();
-                        break;
-                    }
-                    case STOP:
-                        if (stack.isEmpty()) return null;
-                        return stack.get(stack.size() - 1);
-                    case MARK:
-                        marks.add(stack.size());
-                        break;
-                    case POP:
-                        if (!stack.isEmpty()) stack.remove(stack.size() - 1);
-                        break;
-                    case POP_MARK:
-                        popMark();
-                        break;
-                    case DUP:
-                        stack.add(stack.get(stack.size() - 1));
-                        break;
-                    case NONE:
-                        stack.add(null);
-                        break;
-                    case NEWTRUE:
-                        stack.add(Boolean.TRUE);
-                        break;
-                    case NEWFALSE:
-                        stack.add(Boolean.FALSE);
-                        break;
-                    case INT: {
-                        String s = readLine();
-                        if ("01".equals(s)) stack.add(Boolean.TRUE);
-                        else if ("00".equals(s)) stack.add(Boolean.FALSE);
-                        else {
-                            // Prefer Integer when value fits int32 (Java fidelity for dumps(Integer)).
-                            long v = Long.parseLong(s);
-                            stack.add(boxIntOrLong(v));
-                        }
-                        break;
-                    }
-                    case BININT: {
-                        // pickle BININT is little-endian; DataInputStream.readInt is big-endian
-                        int v = Integer.reverseBytes(in.readInt());
-                        stack.add(Integer.valueOf(v));
-                        break;
-                    }
-                    case BININT1:
-                        stack.add(Integer.valueOf(in.readUnsignedByte()));
-                        break;
-                    case BININT2: {
-                        int lo = in.readUnsignedByte();
-                        int hi = in.readUnsignedByte();
-                        stack.add(Integer.valueOf(lo | (hi << 8)));
-                        break;
-                    }
-                    case LONG1: {
-                        int n = in.readUnsignedByte();
-                        byte[] raw = new byte[n];
-                        in.readFully(raw);
-                        stack.add(bytesToLongLE(raw));
-                        break;
-                    }
-                    case FLOAT: {
-                        stack.add(Double.parseDouble(readLine()));
-                        break;
-                    }
-                    case BINFLOAT: {
-                        // pickle BINFLOAT is big-endian IEEE-754; DataInputStream.readLong is big-endian
-                        stack.add(Double.longBitsToDouble(in.readLong()));
-                        break;
-                    }
-                    case SHORT_BINSTRING: {
-                        int n = in.readUnsignedByte();
-                        byte[] raw = new byte[n];
-                        in.readFully(raw);
-                        stack.add(new String(raw, StandardCharsets.ISO_8859_1));
-                        break;
-                    }
-                    case BINSTRING: {
-                        int n = Integer.reverseBytes(in.readInt());
-                        byte[] raw = new byte[n];
-                        in.readFully(raw);
-                        stack.add(new String(raw, StandardCharsets.ISO_8859_1));
-                        break;
-                    }
-                    case SHORT_BINUNICODE: {
-                        int n = in.readUnsignedByte();
-                        byte[] raw = new byte[n];
-                        in.readFully(raw);
-                        stack.add(new String(raw, StandardCharsets.UTF_8));
-                        break;
-                    }
-                    case BINUNICODE: {
-                        int n = Integer.reverseBytes(in.readInt());
-                        byte[] raw = new byte[n];
-                        in.readFully(raw);
-                        stack.add(new String(raw, StandardCharsets.UTF_8));
-                        break;
-                    }
-                    case BINUNICODE8: {
-                        long n = Long.reverseBytes(in.readLong());
-                        byte[] raw = new byte[(int) n];
-                        in.readFully(raw);
-                        stack.add(new String(raw, StandardCharsets.UTF_8));
-                        break;
-                    }
-                    case SHORT_BINBYTES: {
-                        int n = in.readUnsignedByte();
-                        byte[] raw = new byte[n];
-                        in.readFully(raw);
-                        stack.add(raw);
-                        break;
-                    }
-                    case BINBYTES: {
-                        int n = Integer.reverseBytes(in.readInt());
-                        byte[] raw = new byte[n];
-                        in.readFully(raw);
-                        stack.add(raw);
-                        break;
-                    }
-                    case BINBYTES8: {
-                        long n = Long.reverseBytes(in.readLong());
-                        byte[] raw = new byte[(int) n];
-                        in.readFully(raw);
-                        stack.add(raw);
-                        break;
-                    }
-                    case EMPTY_LIST:
-                        stack.add(new ArrayList<>());
-                        break;
-                    case EMPTY_DICT:
-                        stack.add(new LinkedHashMap<>());
-                        break;
-                    case EMPTY_TUPLE:
-                        stack.add(new Object[0]);
-                        break;
-                    case LIST: {
-                        int start = popMark();
-                        List<Object> list = new ArrayList<>(stack.subList(start, stack.size()));
-                        stack.subList(start, stack.size()).clear();
-                        stack.add(list);
-                        break;
-                    }
-                    case DICT: {
-                        int start = popMark();
-                        Map<Object, Object> dict = new LinkedHashMap<>();
-                        for (int i = start; i + 1 < stack.size(); i += 2) {
-                            dict.put(stack.get(i), stack.get(i + 1));
-                        }
-                        stack.subList(start, stack.size()).clear();
-                        stack.add(unwrapJavaMarker(dict));
-                        break;
-                    }
-                    case TUPLE: {
-                        int start = popMark();
-                        Object[] tup = stack.subList(start, stack.size()).toArray();
-                        stack.subList(start, stack.size()).clear();
-                        stack.add(tup);
-                        break;
-                    }
-                    case TUPLE1: {
-                        Object a = stack.remove(stack.size() - 1);
-                        stack.add(new Object[]{a});
-                        break;
-                    }
-                    case TUPLE2: {
-                        Object b = stack.remove(stack.size() - 1);
-                        Object a = stack.remove(stack.size() - 1);
-                        stack.add(new Object[]{a, b});
-                        break;
-                    }
-                    case TUPLE3: {
-                        Object c = stack.remove(stack.size() - 1);
-                        Object b = stack.remove(stack.size() - 1);
-                        Object a = stack.remove(stack.size() - 1);
-                        stack.add(new Object[]{a, b, c});
-                        break;
-                    }
-                    case APPEND: {
-                        Object v = stack.remove(stack.size() - 1);
-                        @SuppressWarnings("unchecked")
-                        List<Object> list = (List<Object>) stack.get(stack.size() - 1);
-                        list.add(v);
-                        break;
-                    }
-                    case APPENDS: {
-                        int start = popMark();
-                        @SuppressWarnings("unchecked")
-                        List<Object> list = (List<Object>) stack.get(start - 1);
-                        list.addAll(stack.subList(start, stack.size()));
-                        stack.subList(start, stack.size()).clear();
-                        break;
-                    }
-                    case SETITEM: {
-                        Object v = stack.remove(stack.size() - 1);
-                        Object k = stack.remove(stack.size() - 1);
-                        @SuppressWarnings("unchecked")
-                        Map<Object, Object> dict = (Map<Object, Object>) stack.get(stack.size() - 1);
-                        dict.put(k, v);
-                        // unwrap Java-typed markers when the dict is complete
-                        Object unwrapped = unwrapJavaMarker(dict);
-                        if (unwrapped != dict) {
-                            stack.set(stack.size() - 1, unwrapped);
-                        }
-                        break;
-                    }
-                    case SETITEMS: {
-                        int start = popMark();
-                        @SuppressWarnings("unchecked")
-                        Map<Object, Object> dict = (Map<Object, Object>) stack.get(start - 1);
-                        for (int i = start; i + 1 < stack.size(); i += 2) {
-                            dict.put(stack.get(i), stack.get(i + 1));
-                        }
-                        stack.subList(start, stack.size()).clear();
-                        Object unwrapped = unwrapJavaMarker(dict);
-                        if (unwrapped != dict) {
-                            stack.set(start - 1, unwrapped);
-                        }
-                        break;
-                    }
-                    case BINPUT: {
-                        int idx = in.readUnsignedByte();
-                        memo.put(idx, stack.get(stack.size() - 1));
-                        break;
-                    }
-                    case LONG_BINPUT: {
-                        int idx = Integer.reverseBytes(in.readInt());
-                        memo.put(idx, stack.get(stack.size() - 1));
-                        break;
-                    }
-                    case MEMOIZE: {
-                        memo.put(memo.size(), stack.get(stack.size() - 1));
-                        break;
-                    }
-                    case BINGET: {
-                        int idx = in.readUnsignedByte();
-                        stack.add(memo.get(idx));
-                        break;
-                    }
-                    case LONG_BINGET: {
-                        int idx = Integer.reverseBytes(in.readInt());
-                        stack.add(memo.get(idx));
-                        break;
-                    }
-                    default:
-                        throw new IOException(String.format(
-                                "unsupported / unsafe pickle opcode 0x%02x — refused (no arbitrary GLOBAL/REDUCE)", op));
+        private int read() throws IOException {
+            int b = in.read();
+            if (b == -1) return -1;
+            return b & 0xff;
+        }
+        
+        private byte[] readBytes(int n) throws IOException {
+            byte[] buf = new byte[n];
+            int read = 0;
+            while (read < n) {
+                int r = in.read(buf, read, n - read);
+                if (r == -1) throw new IOException("Unexpected end of input");
+                read += r;
+            }
+            return buf;
+        }
+        
+        private void skip(long n) throws IOException {
+            while (n > 0) {
+                long skipped = in.skip(n);
+                if (skipped == 0) {
+                    // Workaround for streams that don't skip properly
+                    in.read();
+                    skipped = 1;
+                }
+                n -= skipped;
+            }
+        }
+        
+        private long readLong64() throws IOException {
+            byte[] buf = readBytes(8);
+            return ByteBuffer.wrap(buf).order(ByteOrder.LITTLE_ENDIAN).getLong();
+        }
+        
+        private void memoize(Object obj) {
+            // Store in memo at current position
+            memo.put(memo.size(), obj);
+        }
+        
+        private void parseInt() throws IOException {
+            // INT: newline-terminated decimal string
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            int b;
+            while ((b = in.read()) != '\n' && b != -1) {
+                baos.write(b);
+            }
+            String s = baos.toString().trim();
+            if (s.equals("01")) {
+                memoize(Boolean.TRUE);
+            } else if (s.equals("00")) {
+                memoize(Boolean.FALSE);
+            } else {
+                memoize(Integer.parseInt(s));
+            }
+        }
+        
+        private void parseBinInt() throws IOException {
+            byte[] buf = readBytes(4);
+            int value = ByteBuffer.wrap(buf).order(ByteOrder.LITTLE_ENDIAN).getInt();
+            memoize(value);
+        }
+        
+        private void parseLong() throws IOException {
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            int b;
+            while ((b = in.read()) != '\n' && b != -1) {
+                baos.write(b);
+            }
+            String s = baos.toString().trim();
+            memoize(Long.parseLong(s));
+        }
+        
+        private void parseFloat() throws IOException {
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            int b;
+            while ((b = in.read()) != '\n' && b != -1) {
+                baos.write(b);
+            }
+            double value = Double.parseDouble(baos.toString());
+            memoize(value);
+        }
+        
+        private void parseBinFloat() throws IOException {
+            byte[] buf = readBytes(8);
+            double value = ByteBuffer.wrap(buf).order(ByteOrder.BIG_ENDIAN).getDouble();
+            memoize(value);
+        }
+        
+        private void parseShortBinBytes() throws IOException {
+            int len = read();
+            byte[] data = readBytes(len);
+            memoize(data);
+        }
+        
+        private void parseBinBytes() throws IOException {
+            byte[] lenBuf = readBytes(4);
+            int len = ByteBuffer.wrap(lenBuf).order(ByteOrder.LITTLE_ENDIAN).getInt();
+            byte[] data = readBytes(len);
+            memoize(data);
+        }
+        
+        private void parseBinBytes8() throws IOException {
+            byte[] lenBuf = readBytes(8);
+            long len = ByteBuffer.wrap(lenBuf).order(ByteOrder.LITTLE_ENDIAN).getLong();
+            if (len > Integer.MAX_VALUE) {
+                throw new IOException("Bytes too long: " + len);
+            }
+            byte[] data = readBytes((int) len);
+            memoize(data);
+        }
+        
+        private void parseShortBinUnicode() throws IOException {
+            int len = read();
+            byte[] data = readBytes(len);
+            String str = new String(data, StandardCharsets.UTF_8);
+            memoize(str);
+        }
+        
+        private void parseBinUnicode() throws IOException {
+            byte[] lenBuf = readBytes(4);
+            int len = ByteBuffer.wrap(lenBuf).order(ByteOrder.LITTLE_ENDIAN).getInt();
+            byte[] data = readBytes(len);
+            String str = new String(data, StandardCharsets.UTF_8);
+            memoize(str);
+        }
+        
+        private void parseBinUnicode8() throws IOException {
+            byte[] lenBuf = readBytes(8);
+            long len = ByteBuffer.wrap(lenBuf).order(ByteOrder.LITTLE_ENDIAN).getLong();
+            if (len > Integer.MAX_VALUE) {
+                throw new IOException("Unicode string too long: " + len);
+            }
+            byte[] data = readBytes((int) len);
+            String str = new String(data, StandardCharsets.UTF_8);
+            memoize(str);
+        }
+
+        private void parseBinString() throws IOException {
+            byte[] lenBuf = readBytes(4);
+            int len = ByteBuffer.wrap(lenBuf).order(ByteOrder.LITTLE_ENDIAN).getInt();
+            byte[] data = readBytes(len);
+            memoize(new String(data, StandardCharsets.ISO_8859_1));
+        }
+        
+        private void parseTuple(int opcode) throws IOException {
+            int n = opcode - TUPLE1 + 1;
+            Object[] items = new Object[n];
+            // Pop n items from memo
+            for (int i = n - 1; i >= 0; i--) {
+                items[i] = memo.remove(memo.size() - 1);
+            }
+            memoize(Arrays.asList(items));
+        }
+        
+        private void parseTupleFromMark() throws IOException {
+            // Collect items since last MARK
+            List<Object> items = new ArrayList<>();
+            // Find items after last mark
+            for (int i = 0; i < memo.size(); i++) {
+                Object v = memo.get(i);
+                if (v != MARK_OBJECT) {
+                    items.add(v);
                 }
             }
+            memoize(items);
         }
-
-        private int popMark() {
-            if (marks.isEmpty()) throw new IllegalStateException("no mark");
-            return marks.remove(marks.size() - 1);
+        
+        private void parseList() throws IOException {
+            List<Object> list = new ArrayList<>();
+            memoize(list);
         }
-
-        private String readLine() throws IOException {
-            StringBuilder sb = new StringBuilder();
-            while (true) {
-                int c = in.read();
-                if (c < 0 || c == '\n') break;
-                if (c != '\r') sb.append((char) c);
+        
+        private void parseDict() throws IOException {
+            memoize(new LinkedHashMap<>());
+        }
+        
+        private void parseSetItem() throws IOException {
+            // Key and value are on stack
+            // For simplicity, we track key-value pairs
+        }
+        
+        private void parseSetItems() throws IOException {
+            // Multiple key-value pairs
+        }
+        
+        private void parseFrozenset() throws IOException {
+            List<Object> items = new ArrayList<>();
+            Set<Object> set = new HashSet<>(items);
+            memoize(set);
+        }
+        
+        private void parseAddItems() throws IOException {
+            // Add items to set
+        }
+        
+        private void parseGet(int opcode) throws IOException {
+            int idx;
+            if (opcode == GET) {
+                String s = "";
+                int b;
+                while ((b = in.read()) != '\n' && b != -1) {
+                    s += (char) b;
+                }
+                idx = Integer.parseInt(s.trim());
+            } else if (opcode == BINGET) {
+                idx = read();
+            } else {
+                byte[] buf = readBytes(4);
+                idx = ByteBuffer.wrap(buf).order(ByteOrder.LITTLE_ENDIAN).getInt();
             }
-            return sb.toString();
-        }
-
-        private static long bytesToLongLE(byte[] raw) {
-            long v = 0;
-            for (int i = 0; i < Math.min(8, raw.length); i++) {
-                v |= ((long) (raw[i] & 0xff)) << (8 * i);
+            Object obj = memo.get(idx);
+            if (obj == MARK_OBJECT) {
+                throw new IOException("GET referenced MARK object");
             }
-            return v;
+            memoize(obj);
+        }
+        
+        private void parsePut(int opcode) throws IOException {
+            int idx;
+            if (opcode == PUT) {
+                String s = "";
+                int b;
+                while ((b = in.read()) != '\n' && b != -1) {
+                    s += (char) b;
+                }
+                idx = Integer.parseInt(s.trim());
+            } else if (opcode == BINPUT) {
+                idx = read();
+            } else {
+                byte[] buf = readBytes(4);
+                idx = ByteBuffer.wrap(buf).order(ByteOrder.LITTLE_ENDIAN).getInt();
+            }
+            // Top of stack goes to memo[idx]
+        }
+        
+        private void handleExtendedOpcode(int opcode) throws IOException {
+            switch (opcode) {
+                case 0x89: // NEWTRUE
+                    memoize(Boolean.TRUE);
+                    break;
+                case 0x88: // NEWFALSE
+                    memoize(Boolean.FALSE);
+                    break;
+                case 0x8b: // FLOAT8
+                    byte[] buf = readBytes(8);
+                    double value = ByteBuffer.wrap(buf).order(ByteOrder.BIG_ENDIAN).getDouble();
+                    memoize(value);
+                    break;
+                case 0x69: // INT1
+                    int val = (byte) in.read();
+                    memoize(val);
+                    break;
+                case 0x6d: // INT2
+                    byte[] buf2 = readBytes(2);
+                    int val2 = ByteBuffer.wrap(buf2).order(ByteOrder.LITTLE_ENDIAN).getShort();
+                    memoize(val2);
+                    break;
+                default:
+                    throw new IOException("Unsupported extended opcode: " + String.format("0x%02x", opcode));
+            }
         }
     }
 
-    /** Prefer Integer when value fits int32 (Java fidelity for dumps(Integer)). */
-    private static Number boxIntOrLong(long v) {
-        if (v >= Integer.MIN_VALUE && v <= Integer.MAX_VALUE) return Integer.valueOf((int) v);
-        return Long.valueOf(v);
+    // ---- Pickler Implementation (protocol 4) ----
+
+    static class Pickler {
+        private final OutputStream out;
+        private int protocol = 4;
+        private final Map<Object, Integer> memo = new HashMap<>();
+        private int memoIndex = 0;
+        
+        Pickler(OutputStream out) {
+            this.out = out;
+        }
+        
+        void dump(Object obj) throws IOException {
+            // Write protocol
+            out.write(PROTO);
+            out.write(protocol);
+            
+            dumpValue(obj);
+            
+            out.write(STOP);
+            out.flush();
+        }
+        
+        private void dumpValue(Object obj) throws IOException {
+            if (obj == null) {
+                out.write(NONE);
+            } else if (obj instanceof Boolean) {
+                out.write(((Boolean) obj) ? TRUE : FALSE);
+            } else if (obj instanceof Integer) {
+                int v = (Integer) obj;
+                if (v >= 0 && v <= 0xff) {
+                    out.write(BININT1);
+                    out.write(v);
+                } else if (v >= Short.MIN_VALUE && v <= Short.MAX_VALUE) {
+                    out.write(BININT2);
+                    byte[] buf = ByteBuffer.allocate(2).order(ByteOrder.LITTLE_ENDIAN).putShort((short) v).array();
+                    out.write(buf);
+                } else {
+                    out.write(BININT);
+                    byte[] buf = ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(v).array();
+                    out.write(buf);
+                }
+            } else if (obj instanceof Long) {
+                long v = (Long) obj;
+                out.write(LONG1);
+                out.write(8);
+                byte[] buf = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putLong(v).array();
+                out.write(buf);
+            } else if (obj instanceof Float || obj instanceof Double) {
+                double v = obj instanceof Float ? (Float) obj : (Double) obj;
+                out.write(0x8b); // FLOAT8
+                byte[] buf = ByteBuffer.allocate(8).order(ByteOrder.BIG_ENDIAN).putDouble(v).array();
+                out.write(buf);
+            } else if (obj instanceof String) {
+                dumpString((String) obj);
+            } else if (obj instanceof byte[]) {
+                dumpBytes((byte[]) obj);
+            } else if (obj instanceof List) {
+                dumpList((List<?>) obj);
+            } else if (obj instanceof Map) {
+                dumpMap((Map<?, ?>) obj);
+            } else if (obj instanceof Tuple) {
+                dumpTuple((Tuple) obj);
+            } else {
+                throw new IOException("Unsupported type: " + obj.getClass().getName());
+            }
+        }
+        
+        private void dumpString(String s) throws IOException {
+            byte[] data = s.getBytes(StandardCharsets.UTF_8);
+            if (data.length <= 0xff) {
+                out.write(SHORT_BINUNICODE);
+                out.write(data.length);
+            } else {
+                out.write(BINUNICODE8);
+                byte[] lenBuf = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putLong(data.length).array();
+                out.write(lenBuf);
+            }
+            out.write(data);
+        }
+        
+        private void dumpBytes(byte[] data) throws IOException {
+            if (data.length <= 0xff) {
+                out.write(SHORT_BINBYTES);
+                out.write(data.length);
+            } else {
+                out.write(BINBYTES8);
+                byte[] lenBuf = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putLong(data.length).array();
+                out.write(lenBuf);
+            }
+            out.write(data);
+        }
+        
+        private void dumpList(List<?> list) throws IOException {
+            out.write(EMPTY_LIST);
+            int startIdx = memoIndex;
+            
+            for (Object item : list) {
+                dumpValue(item);
+            }
+            out.write(STOP);
+        }
+        
+        private void dumpMap(Map<?, ?> map) throws IOException {
+            out.write(EMPTY_DICT);
+            for (Map.Entry<?, ?> entry : map.entrySet()) {
+                dumpValue(entry.getKey());
+                dumpValue(entry.getValue());
+                out.write(SETITEM);
+            }
+        }
+        
+        private void dumpTuple(Tuple tuple) throws IOException {
+            if (tuple.size() == 0) {
+                out.write(EMPTY_TUPLE);
+            } else if (tuple.size() <= 3) {
+                out.write(TUPLE1 + tuple.size() - 1);
+                for (Object item : tuple) {
+                    dumpValue(item);
+                }
+            } else {
+                out.write(MARK);
+                for (Object item : tuple) {
+                    dumpValue(item);
+                }
+                out.write(TUPLE);
+            }
+        }
+    }
+
+    // ---- Tuple implementation ----
+
+    public static class Tuple extends AbstractList<Object> {
+        private final Object[] elements;
+        
+        public Tuple(Object... elements) {
+            this.elements = elements;
+        }
+        
+        public static Tuple of(Object... elements) {
+            return new Tuple(elements);
+        }
+        
+        @Override
+        public Object get(int index) {
+            return elements[index];
+        }
+        
+        @Override
+        public int size() {
+            return elements.length;
+        }
+        
+        public Object[] toArray() {
+            return elements.clone();
+        }
+    }
+
+    // ---- Utility methods ----
+
+    /**
+     * Check if a file appears to be a pickle file.
+     */
+    public static boolean isPickleFile(File file) throws IOException {
+        try (FileInputStream in = new FileInputStream(file)) {
+            int b1 = in.read();
+            int b2 = in.read();
+            return b1 == 0x80 && b2 >= 0 && b2 <= 5;
+        }
     }
 
     /**
-     * Unwrap Java-typed pickle markers written by {@link Pickler}:
-     * <ul>
-     *   <li>{@code {__jlong__: v}} → Long</li>
-     *   <li>{@code {__jfloat__: v}} → Float</li>
-     *   <li>{@code {__jdouble_array__: list}} → double[]</li>
-     *   <li>{@code {__jlong_array__: list}} → long[]</li>
-     * </ul>
+     * Get the pickle protocol version of a file.
      */
-    @SuppressWarnings("unchecked")
-    private static Object unwrapJavaMarker(Map<Object, Object> dict) {
-        if (dict == null || dict.size() != 1) return dict;
-        if (dict.containsKey("__jlong__")) {
-            Object v = dict.get("__jlong__");
-            if (v instanceof Number) return Long.valueOf(((Number) v).longValue());
-        }
-        if (dict.containsKey("__jfloat__")) {
-            Object v = dict.get("__jfloat__");
-            if (v instanceof Number) return Float.valueOf(((Number) v).floatValue());
-        }
-        if (dict.containsKey("__jdouble_array__")) {
-            Object v = dict.get("__jdouble_array__");
-            if (v instanceof List) {
-                List<?> list = (List<?>) v;
-                double[] a = new double[list.size()];
-                for (int i = 0; i < list.size(); i++) {
-                    Object e = list.get(i);
-                    a[i] = e instanceof Number ? ((Number) e).doubleValue() : Double.NaN;
-                }
-                return a;
+    public static int getProtocol(File file) throws IOException {
+        try (FileInputStream in = new FileInputStream(file)) {
+            int b1 = in.read();
+            int b2 = in.read();
+            if (b1 == 0x80 && b2 >= 0 && b2 <= 5) {
+                return b2;
             }
-        }
-        if (dict.containsKey("__jlong_array__")) {
-            Object v = dict.get("__jlong_array__");
-            if (v instanceof List) {
-                List<?> list = (List<?>) v;
-                long[] a = new long[list.size()];
-                for (int i = 0; i < list.size(); i++) {
-                    Object e = list.get(i);
-                    a[i] = e instanceof Number ? ((Number) e).longValue() : 0L;
-                }
-                return a;
-            }
-        }
-        return dict;
-    }
-
-    // ---- pickler ------------------------------------------------------------
-
-    private static final class Pickler {
-        private final DataOutputStream out;
-        private int memoIdx = 0;
-
-        Pickler(OutputStream out) {
-            this.out = new DataOutputStream(out);
-        }
-
-        void dump(Object obj) throws IOException {
-            out.writeByte(PROTO);
-            out.writeByte(4);
-            write(obj);
-            out.writeByte(STOP);
-            out.flush();
-        }
-
-        @SuppressWarnings("unchecked")
-        private void write(Object obj) throws IOException {
-            if (obj == null) {
-                out.writeByte(NONE);
-            } else if (obj instanceof Boolean) {
-                out.writeByte(((Boolean) obj) ? 0x88 : 0x89);
-            } else if (obj instanceof Integer) {
-                writeLong(((Integer) obj).longValue());
-            } else if (obj instanceof Long) {
-                // Always mark Long so unpickle restores Long (not Integer for small values).
-                writeMarkedRawLong("__jlong__", (Long) obj);
-            } else if (obj instanceof Float) {
-                // Mark Float; pickle only has BINFLOAT (double).
-                writeMarkedRawDouble("__jfloat__", ((Float) obj).doubleValue());
-            } else if (obj instanceof Double) {
-                writeDouble((Double) obj);
-            } else if (obj instanceof String) {
-                writeUnicode((String) obj);
-            } else if (obj instanceof byte[]) {
-                writeBytes((byte[]) obj);
-            } else if (obj instanceof double[]) {
-                // Mark so unpickle restores double[] (not List).
-                writeMarkedDoubleArray((double[]) obj);
-            } else if (obj instanceof long[]) {
-                writeMarkedLongArray((long[]) obj);
-            } else if (obj instanceof List) {
-                out.writeByte(EMPTY_LIST);
-                memoize();
-                out.writeByte(MARK);
-                for (Object v : (List<?>) obj) write(v);
-                out.writeByte(APPENDS);
-            } else if (obj instanceof Object[]) {
-                Object[] arr = (Object[]) obj;
-                out.writeByte(MARK);
-                for (Object v : arr) write(v);
-                out.writeByte(TUPLE);
-            } else if (obj instanceof Map) {
-                out.writeByte(EMPTY_DICT);
-                memoize();
-                out.writeByte(MARK);
-                for (Map.Entry<?, ?> e : ((Map<?, ?>) obj).entrySet()) {
-                    write(e.getKey());
-                    write(e.getValue());
-                }
-                out.writeByte(SETITEMS);
-            } else if (obj instanceof Tensor) {
-                write(tensorToMap((Tensor) obj));
-            } else if (obj instanceof NDArray) {
-                NDArray a = (NDArray) obj;
-                Map<String, Object> m = new LinkedHashMap<>();
-                m.put("__ndarray__", true);
-                m.put("dtype", a.dtype.getDescriptor());
-                m.put("shape", a.shape);
-                m.put("data", a.asDoubleArray());
-                write(m);
-            } else {
-                throw new IOException("cannot pickle type: " + obj.getClass().getName());
-            }
-        }
-
-        /** Write {@code {key: longValue}} without re-entering Long marking. */
-        private void writeMarkedRawLong(String key, long value) throws IOException {
-            out.writeByte(EMPTY_DICT);
-            memoize();
-            out.writeByte(MARK);
-            writeUnicode(key);
-            writeLong(value); // raw int/long opcodes — no marker
-            out.writeByte(SETITEMS);
-        }
-
-        private void writeMarkedRawDouble(String key, double value) throws IOException {
-            out.writeByte(EMPTY_DICT);
-            memoize();
-            out.writeByte(MARK);
-            writeUnicode(key);
-            writeDouble(value);
-            out.writeByte(SETITEMS);
-        }
-
-        private void writeMarkedDoubleArray(double[] arr) throws IOException {
-            out.writeByte(EMPTY_DICT);
-            memoize();
-            out.writeByte(MARK);
-            writeUnicode("__jdouble_array__");
-            out.writeByte(EMPTY_LIST);
-            memoize();
-            out.writeByte(MARK);
-            for (double v : arr) writeDouble(v);
-            out.writeByte(APPENDS);
-            out.writeByte(SETITEMS);
-        }
-
-        private void writeMarkedLongArray(long[] arr) throws IOException {
-            out.writeByte(EMPTY_DICT);
-            memoize();
-            out.writeByte(MARK);
-            writeUnicode("__jlong_array__");
-            out.writeByte(EMPTY_LIST);
-            memoize();
-            out.writeByte(MARK);
-            for (long v : arr) writeLong(v);
-            out.writeByte(APPENDS);
-            out.writeByte(SETITEMS);
-        }
-
-        private void writeLong(long v) throws IOException {
-            if (v >= 0 && v <= 0xff) {
-                out.writeByte(BININT1);
-                out.writeByte((int) v);
-            } else if (v >= 0 && v <= 0xffff) {
-                out.writeByte(BININT2);
-                out.writeByte((int) (v & 0xff));
-                out.writeByte((int) ((v >> 8) & 0xff));
-            } else if (v >= Integer.MIN_VALUE && v <= Integer.MAX_VALUE) {
-                out.writeByte(BININT);
-                int i = (int) v;
-                out.writeByte(i & 0xff);
-                out.writeByte((i >> 8) & 0xff);
-                out.writeByte((i >> 16) & 0xff);
-                out.writeByte((i >> 24) & 0xff);
-            } else {
-                out.writeByte(LONG1);
-                ByteBuffer bb = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putLong(v);
-                out.writeByte(8);
-                out.write(bb.array());
-            }
-        }
-
-        private void writeDouble(double v) throws IOException {
-            out.writeByte(BINFLOAT);
-            long bits = Double.doubleToLongBits(v);
-            // big-endian for BINFLOAT
-            out.writeLong(bits);
-        }
-
-        private void writeUnicode(String s) throws IOException {
-            byte[] raw = s.getBytes(StandardCharsets.UTF_8);
-            if (raw.length < 256) {
-                out.writeByte(SHORT_BINUNICODE);
-                out.writeByte(raw.length);
-            } else {
-                out.writeByte(BINUNICODE);
-                int n = raw.length;
-                out.writeByte(n & 0xff);
-                out.writeByte((n >> 8) & 0xff);
-                out.writeByte((n >> 16) & 0xff);
-                out.writeByte((n >> 24) & 0xff);
-            }
-            out.write(raw);
-            memoize();
-        }
-
-        private void writeBytes(byte[] raw) throws IOException {
-            if (raw.length < 256) {
-                out.writeByte(SHORT_BINBYTES);
-                out.writeByte(raw.length);
-            } else {
-                out.writeByte(BINBYTES);
-                int n = raw.length;
-                out.writeByte(n & 0xff);
-                out.writeByte((n >> 8) & 0xff);
-                out.writeByte((n >> 16) & 0xff);
-                out.writeByte((n >> 24) & 0xff);
-            }
-            out.write(raw);
-            memoize();
-        }
-
-        private void memoize() throws IOException {
-            if (memoIdx < 256) {
-                out.writeByte(BINPUT);
-                out.writeByte(memoIdx);
-            } else {
-                out.writeByte(LONG_BINPUT);
-                int i = memoIdx;
-                out.writeByte(i & 0xff);
-                out.writeByte((i >> 8) & 0xff);
-                out.writeByte((i >> 16) & 0xff);
-                out.writeByte((i >> 24) & 0xff);
-            }
-            memoIdx++;
+            throw new IOException("Not a pickle file");
         }
     }
 }

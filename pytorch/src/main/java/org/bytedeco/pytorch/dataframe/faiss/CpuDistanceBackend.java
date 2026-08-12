@@ -60,49 +60,48 @@ public final class CpuDistanceBackend implements DistanceBackend {
             return new RangeSearchResult(new long[]{0}, new float[0], new long[0]);
         }
         boolean l2 = metric == MetricType.METRIC_L2;
-        List<float[]> allD = new ArrayList<>(nq);
-        List<long[]> allI = new ArrayList<>(nq);
+        // Two-pass: count, then fill. Avoids the per-query growth + boxed sort
+        // of the previous implementation.
+        int[] counts = new int[nq];
         long[] lims = new long[nq + 1];
-        long cursor = 0;
+        // Pass 1: count
         for (int q = 0; q < nq; q++) {
             int qOff = q * d;
-            // collect matches
-            float[] tmpD = new float[Math.min(nb, 1024)];
-            long[] tmpI = new long[tmpD.length];
+            int c = 0;
+            for (int i = 0; i < nb; i++) {
+                float dist = l2
+                    ? DistanceKernel.l2Row(queries, qOff, base, i * d, d)
+                    : DistanceKernel.ipRow(queries, qOff, base, i * d, d);
+                if (l2 ? dist <= radius : dist >= radius) c++;
+            }
+            counts[q] = c;
+            lims[q + 1] = lims[q] + c;
+        }
+        long total = lims[nq];
+        float[] D = new float[(int) total];
+        long[] I = new long[(int) total];
+        // Pass 2: fill + per-query insertion sort (small n typical for range hits).
+        for (int q = 0; q < nq; q++) {
+            int qOff = q * d;
+            int c = counts[q];
+            if (c == 0) continue;
+            float[] tmpD = new float[c];
+            long[] tmpI = new long[c];
             int m = 0;
             for (int i = 0; i < nb; i++) {
-                float dist;
-                if (l2) {
-                    dist = DistanceKernel.l2Row(queries, qOff, base, i * d, d);
-                } else {
-                    dist = DistanceKernel.ipRow(queries, qOff, base, i * d, d);
+                float dist = l2
+                    ? DistanceKernel.l2Row(queries, qOff, base, i * d, d)
+                    : DistanceKernel.ipRow(queries, qOff, base, i * d, d);
+                if (l2 ? dist <= radius : dist >= radius) {
+                    tmpD[m] = dist;
+                    tmpI[m] = ids != null ? ids[i] : i;
+                    m++;
                 }
-                boolean keep = l2 ? dist <= radius : dist >= radius;
-                if (!keep) continue;
-                if (m == tmpD.length) {
-                    tmpD = java.util.Arrays.copyOf(tmpD, tmpD.length * 2);
-                    tmpI = java.util.Arrays.copyOf(tmpI, tmpI.length * 2);
-                }
-                tmpD[m] = dist;
-                tmpI[m] = ids != null ? ids[i] : i;
-                m++;
             }
-            // sort matches best-first
             sortPairs(tmpD, tmpI, m, l2);
-            allD.add(java.util.Arrays.copyOf(tmpD, m));
-            allI.add(java.util.Arrays.copyOf(tmpI, m));
-            cursor += m;
-            lims[q + 1] = cursor;
-        }
-        float[] D = new float[(int) cursor];
-        long[] I = new long[(int) cursor];
-        int p = 0;
-        for (int q = 0; q < nq; q++) {
-            float[] dq = allD.get(q);
-            long[] iq = allI.get(q);
-            System.arraycopy(dq, 0, D, p, dq.length);
-            System.arraycopy(iq, 0, I, p, iq.length);
-            p += dq.length;
+            int baseIdx = (int) lims[q];
+            System.arraycopy(tmpD, 0, D, baseIdx, m);
+            System.arraycopy(tmpI, 0, I, baseIdx, m);
         }
         return new RangeSearchResult(lims, D, I);
     }
@@ -113,8 +112,9 @@ public final class CpuDistanceBackend implements DistanceBackend {
                          int d, int k, MetricType metric, long[] ids) {
         boolean lower = metric.lowerIsBetter();
         boolean l2 = metric == MetricType.METRIC_L2;
+        // Thread-local TopK pool to avoid per-query allocation.
         TopK[] heaps = new TopK[nq];
-        for (int q = 0; q < nq; q++) heaps[q] = new TopK(k, lower);
+        for (int q = 0; q < nq; q++) heaps[q] = TopK.borrow(k, lower);
 
         if (nq == 1) {
             scanQuery(base, nb, queries, 0, d, heaps[0], l2, ids);
@@ -143,11 +143,18 @@ public final class CpuDistanceBackend implements DistanceBackend {
         return TopK.toSearchResult(heaps, k);
     }
 
+    // Per-thread scratch buffer for query copy.
+    private static final ThreadLocal<float[]> QUERY_SCRATCH = new ThreadLocal<>();
+
     private static void scanQuery(float[] base, int nb, float[] queries, int q,
                                   int d, TopK heap, boolean l2, long[] ids) {
         int qOff = q * d;
-        // Extract query to contiguous for better kernel
-        float[] qv = new float[d];
+        // Reuse thread-local scratch for query copy to keep data hot in cache.
+        float[] qv = QUERY_SCRATCH.get();
+        if (qv == null || qv.length < d) {
+            qv = new float[Math.max(d, 256)];
+            QUERY_SCRATCH.set(qv);
+        }
         System.arraycopy(queries, qOff, qv, 0, d);
         for (int i = 0; i < nb; i++) {
             float dist = l2

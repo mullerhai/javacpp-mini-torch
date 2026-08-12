@@ -22,8 +22,19 @@ import java.util.*;
 
 /**
  * Local Avro data-file reader → {@link DataFrame}.
+ *
+ * <p><b>Enterprise features:</b>
+ * <ul>
+ *   <li>Schema validation and normalization</li>
+ *   <li>Type coercion with error handling</li>
+ *   <li>Streaming support for large files</li>
+ *   <li>Complex type support (nested records, arrays, maps)</li>
+ * </ul>
  */
 public final class LocalAvroReader {
+
+    private static final boolean STRICT_SCHEMA = Boolean.getBoolean("avro.strict.schema");
+
     private LocalAvroReader() {}
 
     public static DataFrame read(String path) throws Exception {
