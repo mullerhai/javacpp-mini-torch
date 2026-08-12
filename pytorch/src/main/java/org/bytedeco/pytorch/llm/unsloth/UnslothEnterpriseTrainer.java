@@ -192,7 +192,7 @@ public class UnslothEnterpriseTrainer implements EnterpriseTrainer {
     public void removeCallback(TrainingCallback callback) { delegate.removeCallback(callback); }
 
     @Override
-    public void close() {
+    public void close() throws Exception {
         if (closed) return;
         closed = true;
         delegate.close();
@@ -214,11 +214,11 @@ public class UnslothEnterpriseTrainer implements EnterpriseTrainer {
     private class MetricsCallback implements TrainingCallback {
         @Override
         public void onStepEnd(EnterpriseTrainer trainer, int step, TrainingMetrics metrics) {
-            if (MetricsCollector.this.metrics != null) {
-                MetricsCollector.this.metrics.incrementCounter("training.steps");
-                MetricsCollector.this.metrics.gauge("training.loss").set(metrics.loss());
-                MetricsCollector.this.metrics.gauge("training.learning_rate").set(metrics.learningRate());
-                MetricsCollector.this.metrics.gauge("training.grad_norm").set(metrics.gradNorm());
+            if (UnslothEnterpriseTrainer.this.metrics != null) {
+                UnslothEnterpriseTrainer.this.metrics.incrementCounter("training.steps");
+                UnslothEnterpriseTrainer.this.metrics.gauge("training.loss").set(metrics.loss());
+                UnslothEnterpriseTrainer.this.metrics.gauge("training.learning_rate").set(metrics.learningRate());
+                UnslothEnterpriseTrainer.this.metrics.gauge("training.grad_norm").set(metrics.gradNorm());
             }
         }
 

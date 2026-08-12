@@ -22,7 +22,9 @@
  */
 package org.bytedeco.pytorch.distributed;
 import org.bytedeco.pytorch.data.*;
+import org.bytedeco.pytorch.global.torch;
 import org.bytedeco.pytorch.optim.*;
+import org.bytedeco.pytorch.StringTensorDict;
 
 import org.bytedeco.pytorch.Tensor;
 import org.bytedeco.pytorch.TensorVector;
@@ -135,14 +137,19 @@ public final class GradientAccumulator implements AutoCloseable {
         gradBuffers.clear();
         paramNames.clear();
 
-        for (String name : model.named_parameters()) {
-            Tensor param = model.get_parameter(name);
-            if (param.requires_grad() && param.grad() != null) {
-                // Clone the gradient as initial accumulation buffer
-                Tensor buffer = param.grad().clone();
-                accumulatedGrads.put(name, buffer);
-                gradBuffers.put(name, torch.zeros_like(buffer));
-                paramNames.add(name);
+        StringTensorDict dict = model.named_parameters();
+        if (dict != null && !dict.isNull()) {
+            long n = dict.size();
+            for (long i = 0; i < n; i++) {
+                String name = dict.keys().get(i).getString();
+                Tensor param = dict.get(name);
+                if (param != null && param.defined() && param.requires_grad() && param.grad() != null) {
+                    // Clone the gradient as initial accumulation buffer
+                    Tensor buffer = param.grad().clone();
+                    accumulatedGrads.put(name, buffer);
+                    gradBuffers.put(name, torch.zeros_like(buffer));
+                    paramNames.add(name);
+                }
             }
         }
 
@@ -165,20 +172,23 @@ public final class GradientAccumulator implements AutoCloseable {
 
         long start = System.nanoTime();
 
-        for (String name : paramNames) {
-            Tensor param = model.get_parameter(name);
-            Tensor grad = param.grad();
+        StringTensorDict dict = model.named_parameters();
+        if (dict != null && !dict.isNull()) {
+            for (String name : paramNames) {
+                Tensor param = dict.get(name);
+                if (param == null || !param.defined()) continue;
+                Tensor grad = param.grad();
+                if (grad == null) continue;
 
-            if (grad == null) continue;
-
-            Tensor buffer = accumulatedGrads.get(name);
-            if (buffer == null) {
-                // First gradient for this param
-                buffer = grad.clone();
-                accumulatedGrads.put(name, buffer);
-            } else {
-                // Accumulate
-                buffer.add_(grad);
+                Tensor buffer = accumulatedGrads.get(name);
+                if (buffer == null) {
+                    // First gradient for this param
+                    buffer = grad.clone();
+                    accumulatedGrads.put(name, buffer);
+                } else {
+                    // Accumulate
+                    buffer.add_(grad);
+                }
             }
         }
 
@@ -244,12 +254,15 @@ public final class GradientAccumulator implements AutoCloseable {
         }
 
         // Copy accumulated gradients to model
-        for (String name : paramNames) {
-            Tensor buffer = accumulatedGrads.get(name);
-            if (buffer != null) {
-                Tensor param = model.get_parameter(name);
-                if (param.grad() != null) {
-                    param.grad().copy_(buffer);
+        StringTensorDict dict = model.named_parameters();
+        if (dict != null && !dict.isNull()) {
+            for (String name : paramNames) {
+                Tensor buffer = accumulatedGrads.get(name);
+                if (buffer != null) {
+                    Tensor param = dict.get(name);
+                    if (param != null && param.defined() && param.grad() != null) {
+                        param.grad().copy_(buffer);
+                    }
                 }
             }
         }
@@ -261,7 +274,7 @@ public final class GradientAccumulator implements AutoCloseable {
         zeroAccumulated();
 
         // Zero model gradients
-        model.zero_grad();
+        model.zero_grad(false);
 
         // Reset counter
         microBatchCount = 0;
@@ -330,7 +343,7 @@ public final class GradientAccumulator implements AutoCloseable {
         // Compute total norm
         for (Tensor grad : accumulatedGrads.values()) {
             if (grad == null) continue;
-            float norm = (float) grad.norm(2.0).item().toDouble();
+            float norm = (float) grad.norm(new Scalar(2.0)).item().toDouble();
             totalNorm += norm * norm;
         }
         totalNorm = (float) Math.sqrt(totalNorm);
@@ -340,7 +353,7 @@ public final class GradientAccumulator implements AutoCloseable {
             float clipCoef = maxGradNorm / totalNorm;
             for (Tensor grad : accumulatedGrads.values()) {
                 if (grad != null) {
-                    grad.mul_(clipCoef);
+                    grad.mul_(new Scalar(clipCoef));
                 }
             }
             System.out.printf("[GradientAccumulator] Clipped gradients (norm: %.4f -> %.4f)%n",

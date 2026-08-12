@@ -28,7 +28,7 @@ import org.bytedeco.pytorch.Device;
 import org.bytedeco.pytorch.LongOptional;
 import org.bytedeco.pytorch.NoGradGuard;
 import org.bytedeco.pytorch.Scalar;
-import org.bytedeco.pytorch.ScalarType;
+import org.bytedeco.pytorch.global.torch.ScalarType;
 import org.bytedeco.pytorch.Tensor;
 import org.bytedeco.pytorch.TensorVector;
 import org.bytedeco.pytorch.nn.Module;
@@ -268,7 +268,7 @@ public final class NativeFSDPTrainer implements AutoCloseable {
             shardedParams.clear();
             shardedParams.add(sharded);
             shardedGrads.clear();
-            shardedGrads.add(zerosLike(sharded));
+            shardedGrads.add(zeros_like(sharded));
         } finally {
             if (shardView != null) try { shardView.close(); } catch (Throwable ignored) {}
             if (flat != null) try { flat.close(); } catch (Throwable ignored) {}
@@ -649,7 +649,7 @@ public final class NativeFSDPTrainer implements AutoCloseable {
     /**
      * Snapshot the trainer's local state: shard, module state, optimiser
      * state, configuration header. Rank 0 also writes a manifest that
-     * {@link CheckpointTrainer} can read.
+
      */
     public Map<String, Object> stateDict() {
         Map<String, Object> out = new LinkedHashMap<>();

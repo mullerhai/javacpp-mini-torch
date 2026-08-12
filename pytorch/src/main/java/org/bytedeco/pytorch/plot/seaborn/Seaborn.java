@@ -30,6 +30,11 @@ public final class Seaborn {
     private static String paletteName = "deep";
     private static Color[] palette = BaseChart.PALETTE.clone();
 
+    // ---- context (matplotlib {@code sns.set_context(...)} / {@code plotting_context}) ----
+    private static String context = "notebook";
+    private static double contextScale = 1.0;
+    private static int contextFont = 10;
+
     private Seaborn() {}
 
     // ---- style / palette ----
@@ -92,6 +97,73 @@ public final class Seaborn {
     }
 
     public static String currentStyle() { return style; }
+
+    // ---- context ----
+
+    /**
+     * seaborn {@code sns.set_context(name)} — pick a named context
+     * ({@code paper}, {@code notebook}, {@code talk}, {@code poster}).
+     */
+    public static void set_context(String name) {
+        set_context(name, 1.0, -1);
+    }
+
+    /**
+     * seaborn {@code sns.set_context(name, rc_scale, font_scale)} — set the context
+     * with an explicit scale factor and font size. {@code font_scale=-1} keeps
+     * the per-context default.
+     */
+    public static void set_context(String name, double rcScale, int fontScale) {
+        context = name == null ? "notebook" : name.toLowerCase(Locale.ROOT);
+        contextScale = rcScale > 0 ? rcScale : 1.0;
+        // Apply per-context font defaults unless overridden.
+        int defaultFont;
+        switch (context) {
+            case "paper": defaultFont = 8; break;
+            case "talk": defaultFont = 14; break;
+            case "poster": defaultFont = 18; break;
+            case "notebook":
+            default: defaultFont = 10; break;
+        }
+        contextFont = fontScale > 0 ? fontScale : defaultFont;
+    }
+
+    public static String currentContext() { return context; }
+    public static double currentContextScale() { return contextScale; }
+    public static int currentContextFont() { return contextFont; }
+
+    /**
+     * seaborn {@code plotting_context(name)} / {@code sns.context_context(name)}.
+     * Try-with-resources style: pushes a new context, restores on close.
+     */
+    public static AutoCloseable context_context(String name) {
+        String prevCtx = context;
+        double prevScale = contextScale;
+        int prevFont = contextFont;
+        set_context(name);
+        return () -> {
+            context = prevCtx;
+            contextScale = prevScale;
+            contextFont = prevFont;
+        };
+    }
+
+    /**
+     * seaborn {@code sns.despine()} — strip the top/right spines.
+     * No-op for pure-AWT charts (matplotlib {@code despine} only affects axes
+     * spines); kept as API parity so callers can chain it.
+     */
+    public static void despine() {
+        despine(true, true, false, false);
+    }
+
+    /** matplotlib/seaborn {@code despine(top, right, left, bottom)}. */
+    public static void despine(boolean top, boolean right, boolean left, boolean bottom) {
+        // Pure-AWT charts render without a real spine model. Kept for API parity.
+        // If we later render via JavaFX / chart panels, this becomes a per-axis toggle.
+    }
+
+    public static String currentPalette() { return paletteName; }
 
     // ---- relational ----
 

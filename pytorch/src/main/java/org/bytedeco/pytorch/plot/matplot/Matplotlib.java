@@ -9,6 +9,7 @@ import org.bytedeco.pytorch.plot.TensorPlotUtils;
 import org.bytedeco.pytorch.plot.TensorPlotUtils.Layout;
 import org.bytedeco.pytorch.plot.TensorPlotUtils.Plane;
 import org.bytedeco.pytorch.plot.chart.*;
+import org.bytedeco.pytorch.plot.seaborn.Seaborn;
 
 import java.awt.Color;
 import java.util.List;
@@ -816,6 +817,112 @@ public final class Matplotlib {
         return lastChart;
     }
 
+    // ---- Phase 2: axhline / axvline / text / annotate / colorbar / gcf ----
+
+    /** matplotlib {@code plt.axhline(y=...)}. */
+    public static void axhline(double y) {
+        axhline(y, null, null);
+    }
+
+    /** matplotlib {@code plt.axhline(y=..., color=..., linestyle=...)}. */
+    public static void axhline(double y, Color color, String linestyle) {
+        if (lastChart instanceof LineChart) {
+            ((LineChart) lastChart).addRefHLine(y, color, linestyle);
+        }
+    }
+
+    /** matplotlib {@code plt.axvline(x=..., color=..., linestyle=...)}. */
+    public static void axvline(double x) {
+        axvline(x, null, null);
+    }
+
+    public static void axvline(double x, Color color, String linestyle) {
+        if (lastChart instanceof LineChart) {
+            ((LineChart) lastChart).addRefVLine(x, color, linestyle);
+        }
+    }
+
+    /** matplotlib {@code plt.text(x, y, s)}. */
+    public static void text(double x, double y, String s) {
+        if (lastChart instanceof LineChart) {
+            ((LineChart) lastChart).addAnnotation(new LineChart.Annotation(x, y, s));
+        }
+    }
+
+    /** matplotlib {@code plt.annotate(text, xy, xytext)}. */
+    public static void annotate(String text, double[] xy, double[] xytext) {
+        if (lastChart instanceof LineChart && xy != null && xy.length >= 2) {
+            Double tx = xytext != null && xytext.length >= 1 ? xytext[0] : null;
+            Double ty = xytext != null && xytext.length >= 2 ? xytext[1] : null;
+            ((LineChart) lastChart).addAnnotation(
+                new LineChart.Annotation(xy[0], xy[1], text, tx, ty));
+        }
+    }
+
+    /** matplotlib {@code plt.colorbar()} — toggle the colorbar on the last chart. */
+    public static void colorbar() {
+        if (lastChart == null) return;
+        if (lastChart instanceof HeatmapChart) {
+            HeatmapChart hc = (HeatmapChart) lastChart;
+            hc.setShowColorbar(!hc.isShowColorbar());
+        } else if (lastChart instanceof ScatterChart) {
+            ScatterChart sc = (ScatterChart) lastChart;
+            sc.setShowColorbar(!sc.isShowColorbar());
+        }
+    }
+
+    /** matplotlib {@code plt.gcf()} — get current (last) figure/chart. */
+    public static BaseChart gcf() {
+        return lastChart;
+    }
+
+    // ---- rcParams ----
+
+    private static final java.util.Map<String, Object> RC_PARAMS = new java.util.LinkedHashMap<>();
+
+    /** matplotlib {@code plt.rcParams(name, value)}. */
+    public static void rcParams(String name, int value) { RC_PARAMS.put(name, value); }
+    /** matplotlib {@code plt.rcParams(name, value)}. */
+    public static void rcParams(String name, double value) { RC_PARAMS.put(name, value); }
+    /** matplotlib {@code plt.rcParams(name)} — read back a single value (auto-boxed). */
+    public static Object rcParams(String name) { return RC_PARAMS.get(name); }
+    /** matplotlib {@code plt.rcParams()} (no-arg form) — full rcParams map. */
+    public static java.util.Map<String, Object> rcParams() {
+        return new java.util.LinkedHashMap<>(RC_PARAMS);
+    }
+
+    // ---- suptitle / tight_layout ----
+
+    /** matplotlib {@code plt.suptitle(...)} — set super-title on last chart. */
+    public static BaseChart suptitle(String t) {
+        if (lastChart instanceof LineChart) {
+            ((LineChart) lastChart).setSuptitle(t);
+        } else if (lastChart != null) {
+            // For non-LineChart types, fall back to title.
+            lastChart.setTitle(t);
+        }
+        return lastChart;
+    }
+
+    /** matplotlib {@code plt.tight_layout()} — non-functional no-op for AWT charts. */
+    public static void tight_layout() {
+        // Pure-AWT charts compute their own layout. Kept as API parity.
+    }
+
+    // ---- style_use / style_context (proxy to Seaborn) ----
+
+    /** matplotlib {@code plt.style.use(name)} — proxy to {Seaborn#setStyle(String)}. */
+    public static void style_use(String name) {
+        Seaborn.set_style(name);
+    }
+
+    /** matplotlib {@code plt.style.context(name)} — try-with-resources style restore. */
+    public static AutoCloseable style_context(String name) {
+        String prev = Seaborn.currentStyle();
+        Seaborn.set_style(name);
+        return () -> Seaborn.set_style(prev);
+    }
+
     // ---- show / save ----
 
     /**
@@ -841,9 +948,38 @@ public final class Matplotlib {
         lastChart.savefig(path);
     }
 
+    /**
+     * matplotlib {@code plt.savefig(path, dpi=..., bbox_inches=...)}. Renders at the
+     * requested DPI by upscaling the raster canvas; bbox_inches controls whether
+     * the title / legend margins are trimmed via the chart's own layout.
+     */
+    public static void savefig(String path, int dpi, boolean bboxInches) throws Exception {
+        if (lastChart == null) throw new IllegalStateException("No chart to save");
+        int origW = lastChart.getWidth();
+        int origH = lastChart.getHeight();
+        try {
+            double scale = Math.max(0.1, dpi / 100.0);
+            lastChart.setSize((int) Math.round(origW * scale), (int) Math.round(origH * scale));
+            lastChart.savefig(path);
+        } finally {
+            if (bboxInches) {
+                // bbox_inches="tight" maps to "leave existing size alone" — already done above.
+            }
+            lastChart.setSize(origW, origH);
+        }
+    }
+
     /** Close all non-modal plot windows opened via {@link BaseChart#show(boolean)}. */
     public static void close() {
         BaseChart.closeAll();
+    }
+
+    /** matplotlib {@code plt.close('all')} — same as {@link #close()}. Other args are no-ops. */
+    public static void close(String what) {
+        if (what == null || "all".equalsIgnoreCase(what)) {
+            BaseChart.closeAll();
+        }
+        // 'fig', 'current', etc. would normally close specific figures — not modeled.
     }
 
     private static <T extends BaseChart> T remember(T c) {

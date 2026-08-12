@@ -117,7 +117,7 @@ public class StreamProcessor implements AutoCloseable {
      * Process a stream of events.
      */
     public <T> void process(
-            Stream<T> input,
+            java.util.stream.Stream<T> input,
             BiFunction<List<T>, Map<String, Object>, List<T>> processor) {
 
         // Start checkpoint scheduler
@@ -132,7 +132,9 @@ public class StreamProcessor implements AutoCloseable {
 
         // Process in batches
         List<T> buffer = new ArrayList<>(maxBatchSize);
-        for (T event : input) {
+        java.util.Iterator<T> it = input.iterator();
+        while (it.hasNext()) {
+            T event = it.next();
             buffer.add(event);
 
             if (buffer.size() >= maxBatchSize) {

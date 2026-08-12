@@ -135,7 +135,7 @@ public final class RLOOTrainer extends BaseTrainer {
         Tensor pgLoss = computePolicyGradientLoss(logProbs, advantages);
 
         // Combined loss
-        Tensor totalLoss = pgLoss.add(new Scalar(currentBeta).mul(klPenalty.mean()));
+        Tensor totalLoss = pgLoss.add(new Scalar(currentBeta)).mul(klPenalty.mean());
 
         // Update adaptive KL
         if (config.useAdaptiveKL()) {
@@ -168,14 +168,14 @@ public final class RLOOTrainer extends BaseTrainer {
         double n = batchSize;
         Tensor sumRewards = rewards.sum();
 
-        Tensor looAdvantage = rewards.mul(n).sub(sumRewards).div(n - 1);
+        Tensor looAdvantage = rewards.mul(new Scalar(n)).sub(sumRewards).div(new Scalar(n - 1));
 
         // Optionally apply baseline coefficient
         double alpha = config.baselineCoeff();
         if (alpha < 1.0) {
             // Interpolate between LOO and simple reward baseline
             Tensor simpleAdvantage = rewards.sub(expandedMean);
-            looAdvantage = looAdvantage.mul(alpha).add(simpleAdvantage.mul(1 - alpha));
+            looAdvantage = looAdvantage.mul(new Scalar(alpha)).add(simpleAdvantage.mul(new Scalar(1 - alpha)));
         }
 
         return looAdvantage;

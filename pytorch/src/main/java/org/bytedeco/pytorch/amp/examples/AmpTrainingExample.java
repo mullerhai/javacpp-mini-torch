@@ -17,13 +17,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.bytedeco.pytorch.amp.trainer;
+package org.bytedeco.pytorch.amp.examples;
 
 import org.bytedeco.pytorch.amp.*;
 import org.bytedeco.pytorch.amp.config.AmpConfig;
 import org.bytedeco.pytorch.Device;
 import org.bytedeco.pytorch.Scalar;
-import org.bytedeco.pytorch.ScalarType;
+import org.bytedeco.pytorch.global.torch.ScalarType;
 import org.bytedeco.pytorch.Tensor;
 import org.bytedeco.pytorch.TensorVector;
 import org.bytedeco.pytorch.global.torch;
@@ -73,13 +73,15 @@ public class AmpTrainingExample {
     public static void basicBF16Training() {
         System.out.println("--- Example 1: Basic BF16 Training ---");
 
-        try (AmpConfig config = AmpConfig.bf16();
-             AmpManager amp = AmpManager.builder()
-                     .bf16()
-                     .device("cuda")
-                     .maxGradNorm(1.0)
-                     .build();
-             GradScaler scaler = GradScaler.createForBF16()) {
+        AmpConfig config = AmpConfig.bf16();
+        AmpManager amp = AmpManager.builder()
+                .bf16()
+                .device("cuda")
+                .scalerConfig(AmpManager.GradScalerConfig.builder().maxGradNorm(1.0).build())
+                .build();
+        GradScaler scaler = GradScaler.createForBF16();
+
+        try {
 
             System.out.println("AMP enabled: " + amp.isEnabled());
             System.out.println("Forward precision: " + amp.forwardPrecision());
@@ -127,6 +129,8 @@ public class AmpTrainingExample {
 
         } catch (Exception e) {
             System.err.println("Error in basic BF16 training: " + e.getMessage());
+        } finally {
+            amp.close();
         }
 
         System.out.println();

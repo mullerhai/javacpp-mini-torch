@@ -114,14 +114,14 @@ public class MultiModalRecommender implements AutoCloseable {
 
         try {
             // 1. Extract multi-modal features
-            Tensor userMultiFeatures = featureExtractor.extract(
+            MultiModalFeatureExtractor.MultiModalFeatures userMultiFeatures = featureExtractor.extract(
                     userFeatures.images(),
                     userFeatures.videos(),
                     userFeatures.audio(),
                     userFeatures.text()
             );
 
-            Tensor itemMultiFeatures = featureExtractor.extract(
+            MultiModalFeatureExtractor.MultiModalFeatures itemMultiFeatures = featureExtractor.extract(
                     itemFeatures.images(),
                     itemFeatures.videos(),
                     itemFeatures.audio(),
@@ -129,8 +129,10 @@ public class MultiModalRecommender implements AutoCloseable {
             );
 
             // 2. Encode user and item separately
-            Tensor userEmbed = userEncoder.forward(userMultiFeatures.fusedFeatures());
-            Tensor itemEmbed = itemEncoder.forward(itemMultiFeatures.fusedFeatures());
+            Tensor userFused = userMultiFeatures.fusedFeatures();
+            Tensor itemFused = itemMultiFeatures.fusedFeatures();
+            Tensor userEmbed = userFused != null ? userEncoder.forward(userFused) : null;
+            Tensor itemEmbed = itemFused != null ? itemEncoder.forward(itemFused) : null;
 
             // 3. Cross-modal fusion
             Tensor fused = crossModalFusion.forward(
@@ -209,7 +211,7 @@ public class MultiModalRecommender implements AutoCloseable {
             Tensor t = getter.apply(f);
             if (t != null) tensors.add(t);
         }
-        return tensors.isEmpty() ? null : torch.stack(tensors, 0);
+        return tensors.isEmpty() ? null : torch.stack(new org.bytedeco.pytorch.TensorVector(tensors.toArray(new Tensor[0])), 0);
     }
 
     private Tensor stackVideos(MultiModalUserFeatures[] batch, java.util.function.Function<MultiModalUserFeatures, Tensor> getter) {
@@ -230,7 +232,7 @@ public class MultiModalRecommender implements AutoCloseable {
             Tensor t = getter.apply(f);
             if (t != null) tensors.add(t);
         }
-        return tensors.isEmpty() ? null : torch.stack(tensors, 0);
+        return tensors.isEmpty() ? null : torch.stack(new org.bytedeco.pytorch.TensorVector(tensors.toArray(new Tensor[0])), 0);
     }
 
     private Tensor stackVideos(MultiModalItemFeatures[] batch, java.util.function.Function<MultiModalItemFeatures, Tensor> getter) {
@@ -247,23 +249,23 @@ public class MultiModalRecommender implements AutoCloseable {
 
     // Create default encoders
     private Module createDefaultUserEncoder(MultiModalRecommenderConfig config) {
-        return new LayerNorm(config.embedDim());
+        return new LayerNorm((long) config.embedDim());
     }
 
     private Module createDefaultItemEncoder(MultiModalRecommenderConfig config) {
-        return new LayerNorm(config.embedDim());
+        return new LayerNorm((long) config.embedDim());
     }
 
     private Module createCrossModalFusion(MultiModalRecommenderConfig config) {
-        return torch.nn.linear(config.embedDim() * 2, config.embedDim());
+        return new LinearImpl((long) config.embedDim() * 2, (long) config.embedDim());
     }
 
     private Module createTaskHead(MultiModalRecommenderConfig config, String task) {
-        return torch.nn.linear(config.embedDim(), 1);
+        return new LinearImpl((long) config.embedDim(), 1);
     }
 
     private Module createRankingHead(MultiModalRecommenderConfig config) {
-        return torch.nn.linear(config.embedDim(), 1);
+        return new LinearImpl((long) config.embedDim(), 1);
     }
 
     /**

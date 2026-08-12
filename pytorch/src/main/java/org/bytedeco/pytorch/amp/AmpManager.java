@@ -20,7 +20,7 @@
 package org.bytedeco.pytorch.amp;
 
 import org.bytedeco.pytorch.Device;
-import org.bytedeco.pytorch.DeviceType;
+//import org.bytedeco.pytorch.DeviceType;
 import org.bytedeco.pytorch.Scalar;
 import org.bytedeco.pytorch.Tensor;
 import org.bytedeco.pytorch.TensorVector;
@@ -279,7 +279,7 @@ public class AmpManager implements AutoCloseable {
             Tensor g = p.grad();
             if (g == null || !g.defined()) continue;
 
-            float paramNorm = (float) Math.sqrt(g.doublevalue().sum().item_double());
+            float paramNorm = (float) Math.sqrt(g.sum().item_double());
             totalNorm += paramNorm * paramNorm;
             numParams++;
         }
@@ -365,10 +365,10 @@ public class AmpManager implements AutoCloseable {
     private static Device autoDevice() {
         try {
             if (torch.cuda_is_available()) {
-                return new Device(DeviceType.CUDA, (byte) 0);
+                return new Device(torch.DeviceType.CUDA, (byte) 0);
             }
         } catch (Exception ignored) {}
-        return new Device(DeviceType.CPU);
+        return new Device(torch.DeviceType.CPU);
     }
 
     @Override

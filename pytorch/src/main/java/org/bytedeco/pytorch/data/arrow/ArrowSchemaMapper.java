@@ -44,6 +44,8 @@ public final class ArrowSchemaMapper {
      */
     public static Field toField(String name, Column.DType dtype, int fixedDim, List<String> structKeys) {
         return switch (dtype) {
+//            case INT8 -> primitive(name, new ArrowType.Int(8, true));
+//            case INT16 -> primitive(name, new ArrowType.Int(16, true));
             case INT32 -> primitive(name, new ArrowType.Int(32, true));
             case INT64, DURATION -> primitive(name, new ArrowType.Int(64, true));
             case FLOAT32 -> primitive(name, new ArrowType.FloatingPoint(FloatingPointPrecision.SINGLE));

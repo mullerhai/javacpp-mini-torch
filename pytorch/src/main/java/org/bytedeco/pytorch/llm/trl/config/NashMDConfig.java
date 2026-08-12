@@ -40,9 +40,9 @@ public class NashMDConfig extends TrainerConfig {
     private double equilibriumMomentum = 0.9;          // Momentum for running average
     private boolean useReferenceKl = true;            // Use KL to reference model
 
-    public NashMDConfig() {
-        super();
-    }
+//    public NashMDConfig() {
+//        super();
+//    }
 
     public NashMDConfig(Builder b) {
         super(b);
@@ -97,7 +97,7 @@ public class NashMDConfig extends TrainerConfig {
         public Builder() {}
 
         public Builder(NashMDConfig config) {
-            super(config);
+//            super(config);
             this.numObjectives = config.numObjectives;
             this.eta = config.eta;
             this.klTarget = config.klTarget;

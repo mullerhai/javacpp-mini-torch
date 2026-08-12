@@ -20,9 +20,9 @@
 package org.bytedeco.pytorch.amp;
 
 import org.bytedeco.pytorch.Device;
-import org.bytedeco.pytorch.DeviceType;
+import org.bytedeco.pytorch.global.torch.DeviceType;
 import org.bytedeco.pytorch.Scalar;
-import org.bytedeco.pytorch.ScalarType;
+import org.bytedeco.pytorch.global.torch.ScalarType;
 import org.bytedeco.pytorch.Tensor;
 import org.bytedeco.pytorch.global.torch;
 
@@ -53,7 +53,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public class AutocastContext implements AutoCloseable {
 
     /** Disabled context singleton. */
-    public static final AutocastContext DISABLED = new AutocastContext(null, null, null, true);
+    public static final AutocastContext DISABLED = new AutocastContext(null, null, null, null);
 
     private final AmpManager manager;
     private final Device device;
@@ -265,9 +265,9 @@ public class AutocastContext implements AutoCloseable {
     /**
      * Check if autocast is enabled.
      */
-    public boolean isEnabled() {
-        return !disabled;
-    }
+//    public boolean isEnabled() {
+//        return !disabled;
+//    }
 
     @Override
     public void close() {

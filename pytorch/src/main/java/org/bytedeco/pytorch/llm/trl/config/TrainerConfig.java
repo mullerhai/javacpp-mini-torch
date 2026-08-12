@@ -30,6 +30,7 @@ public class TrainerConfig {
     private final double maxGradNorm;
     private final boolean fp16;
     private final long seed;
+    private final double margin;
 
     protected TrainerConfig(Builder<?> b) {
         this.learningRate = b.learningRate;
@@ -39,6 +40,7 @@ public class TrainerConfig {
         this.maxGradNorm = b.maxGradNorm;
         this.fp16 = b.fp16;
         this.seed = b.seed;
+        this.margin = b.margin;
     }
 
     public double learningRate() { return learningRate; }
@@ -48,6 +50,7 @@ public class TrainerConfig {
     public double maxGradNorm() { return maxGradNorm; }
     public boolean fp16() { return fp16; }
     public long seed() { return seed; }
+    public double margin() { return margin; }
 
     @SuppressWarnings("unchecked")
     public static class Builder<B extends Builder<B>> {
@@ -58,6 +61,7 @@ public class TrainerConfig {
         private double maxGradNorm = 1.0;
         private boolean fp16 = false;
         private long seed = 42L;
+        private double margin = 0.0;
 
         public B learningRate(double v) { this.learningRate = v; return (B) this; }
         public B maxSteps(int v) { this.maxSteps = v; return (B) this; }
@@ -66,6 +70,7 @@ public class TrainerConfig {
         public B maxGradNorm(double v) { this.maxGradNorm = v; return (B) this; }
         public B fp16(boolean v) { this.fp16 = v; return (B) this; }
         public B seed(long v) { this.seed = v; return (B) this; }
+        public B margin(double v) { this.margin = v; return (B) this; }
 
         public TrainerConfig build() { return new TrainerConfig(this); }
     }

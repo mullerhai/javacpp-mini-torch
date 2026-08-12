@@ -21,7 +21,7 @@ package org.bytedeco.pytorch.amp;
 
 import org.bytedeco.pytorch.Device;
 import org.bytedeco.pytorch.Scalar;
-import org.bytedeco.pytorch.ScalarType;
+import org.bytedeco.pytorch.global.torch.ScalarType;
 import org.bytedeco.pytorch.Tensor;
 import org.bytedeco.pytorch.global.torch;
 
@@ -179,7 +179,7 @@ public class FP8Scaler implements AutoCloseable {
         Tensor f32 = input.to(ScalarType.Float);
 
         // Scale down
-        Tensor invScale = new Scalar(1.0f / currentScale);
+        var invScale = new Scalar(1.0f / currentScale);
         Tensor result = f32.mul(invScale);
         f32.close();
 
@@ -237,9 +237,9 @@ public class FP8Scaler implements AutoCloseable {
         }
         try {
             Tensor abs = torch.abs(input);
-            Tensor max = abs.max(dim, true);
+            var max = abs.max(dim*1l, true);
             abs.close();
-            return max;
+            return max.get0();
         } catch (Exception e) {
             return null;
         }

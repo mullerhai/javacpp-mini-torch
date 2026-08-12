@@ -18,6 +18,7 @@
  * limitations under the License.
  */
 package org.bytedeco.pytorch.mlops.monitoring;
+import org.bytedeco.pytorch.jit.*;
 
 import java.io.Closeable;
 import java.lang.management.ManagementFactory;
@@ -30,6 +31,7 @@ import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.DoubleAdder;
 import java.util.function.Consumer;
 
 /**
@@ -128,16 +130,16 @@ public class ResourceMonitor implements AutoCloseable {
         // System metrics
         registerGauge("system_cpu_usage", () -> getCpuUsage());
         registerGauge("system_memory_usage", () -> getMemoryUsage());
-        registerGauge("system_memory_used_bytes", () -> getUsedMemory());
-        registerGauge("system_memory_total_bytes", () -> getTotalMemory());
-        registerGauge("system_threads", () -> threadBean.getThreadCount());
-        registerGauge("system_gc_count", () -> gcBeans.stream().mapToLong(GarbageCollectorMXBean::getCollectionCount).sum());
+        registerGauge("system_memory_used_bytes", () -> (double) getUsedMemory());
+        registerGauge("system_memory_total_bytes", () -> (double) getTotalMemory());
+        registerGauge("system_threads", () -> (double) threadBean.getThreadCount());
+        registerGauge("system_gc_count", () -> (double) gcBeans.stream().mapToLong(GarbageCollectorMXBean::getCollectionCount).sum());
 
         // JVM metrics
-        registerGauge("jvm_heap_used_bytes", () -> memoryBean.getHeapMemoryUsage().getUsed());
-        registerGauge("jvm_heap_max_bytes", () -> memoryBean.getHeapMemoryUsage().getMax());
-        registerGauge("jvm_heap_committed_bytes", () -> memoryBean.getHeapMemoryUsage().getCommitted());
-        registerGauge("jvm_nonheap_used_bytes", () -> memoryBean.getNonHeapMemoryUsage().getUsed());
+        registerGauge("jvm_heap_used_bytes", () -> (double) memoryBean.getHeapMemoryUsage().getUsed());
+        registerGauge("jvm_heap_max_bytes", () -> (double) memoryBean.getHeapMemoryUsage().getMax());
+        registerGauge("jvm_heap_committed_bytes", () -> (double) memoryBean.getHeapMemoryUsage().getCommitted());
+        registerGauge("jvm_nonheap_used_bytes", () -> (double) memoryBean.getNonHeapMemoryUsage().getUsed());
     }
 
     // ============= Lifecycle =============
@@ -381,7 +383,38 @@ public class ResourceMonitor implements AutoCloseable {
     // ============= System Metrics =============
 
     public double getCpuUsage() {
-        return osBean.getSystemCpuLoad() * 100;
+        try {
+            // Prefer the com.sun.management extension API on Hotspot JVMs
+            if (osBean instanceof com.sun.management.OperatingSystemMXBean) {
+                com.sun.management.OperatingSystemMXBean sunBean =
+                        (com.sun.management.OperatingSystemMXBean) osBean;
+                // getProcessCpuLoad is more accurate; fall back to getSystemCpuLoad if unavailable
+                double processLoad = safeProcessCpuLoad(sunBean);
+                if (processLoad >= 0) {
+                    return processLoad * 100.0;
+                }
+                return sunBean.getSystemCpuLoad() * 100;
+            }
+            // Fallback: derive CPU usage from process CPU time deltas
+            return getCpuUsageFromProcessTimeDelta();
+        } catch (Throwable t) {
+            return 0.0;
+        }
+    }
+
+    private static double safeProcessCpuLoad(com.sun.management.OperatingSystemMXBean sunBean) {
+        try {
+            return sunBean.getProcessCpuLoad();
+        } catch (Throwable t) {
+            return -1.0;
+        }
+    }
+
+    private double getCpuUsageFromProcessTimeDelta() {
+        // java.lang.management.OperatingSystemMXBean does NOT expose getProcessCpuTime().
+        // This path only runs when com.sun.management.OperatingSystemMXBean is unavailable,
+        // which on Hotspot is essentially never. Return 0.0 since we cannot measure reliably.
+        return 0.0;
     }
 
     public double getMemoryUsage() {
@@ -492,27 +525,26 @@ public class ResourceMonitor implements AutoCloseable {
     public static class HistogramMetric {
         private final String name;
         private final AtomicLong count = new AtomicLong(0);
-        private final DoubleAdder sum = new DoubleAdder();
-        private final DoubleAdder min = new DoubleAdder();
-        private final DoubleAdder max = new DoubleAdder();
+        private final AtomicReference<Double> sum = new AtomicReference<>(0.0);
+        private final AtomicReference<Double> min = new AtomicReference<>(Double.MAX_VALUE);
+        private final AtomicReference<Double> max = new AtomicReference<>(Double.MIN_VALUE);
 
         public HistogramMetric(String name) {
             this.name = name;
-            min.add(Double.MAX_VALUE);
         }
 
         public String name() { return name; }
         public long getCount() { return count.get(); }
-        public double getSum() { return sum.sum(); }
-        public double getMean() { return count.get() > 0 ? sum.sum() / count.get() : 0; }
-        public double getMin() { return min.sum(); }
-        public double getMax() { return max.sum(); }
+        public double getSum() { return sum.get(); }
+        public double getMean() { return count.get() > 0 ? sum.get() / count.get() : 0; }
+        public double getMin() { return min.get(); }
+        public double getMax() { return max.get(); }
 
         public void record(double value) {
             count.incrementAndGet();
-            sum.add(value);
-            min.add(Math.min(value, min.sum()));
-            max.add(Math.max(value, max.sum()));
+            sum.updateAndGet(s -> s + value);
+            min.updateAndGet(m -> Math.min(m, value));
+            max.updateAndGet(m -> Math.max(m, value));
         }
     }
 

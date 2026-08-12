@@ -18,8 +18,8 @@
  * limitations under the License.
  */
 package org.bytedeco.pytorch.mlops.pipeline;
-import org.bytedeco.pytorch.distributed.*;
 import org.bytedeco.pytorch.c10.*;
+import org.bytedeco.pytorch.distributed.*;
 
 import java.io.Closeable;
 import java.util.*;
@@ -81,7 +81,7 @@ public class PipelineExecutor implements AutoCloseable {
 
         // Track completed steps
         Set<String> completed = Collections.synchronizedSet(new HashSet<>());
-        Map<String, Future<Pipeline.PipelineResult.StepResult>> futures = new ConcurrentHashMap<>();
+        Map<String, java.util.concurrent.Future<Pipeline.StepResult>> futures = new ConcurrentHashMap<>();
 
         // Track which steps are waiting for dependencies
         Map<String, Set<String>> pending = new ConcurrentHashMap<>();
@@ -126,12 +126,12 @@ public class PipelineExecutor implements AutoCloseable {
         }
 
         // Wait for all steps to complete
-        Map<String, Pipeline.PipelineResult.StepResult> results = new LinkedHashMap<>();
+        Map<String, Pipeline.StepResult> results = new LinkedHashMap<>();
         for (String stepName : order) {
-            Future<Pipeline.PipelineResult.StepResult> future = futures.get(stepName);
+            java.util.concurrent.Future<Pipeline.StepResult> future = futures.get(stepName);
             if (future != null) {
                 try {
-                    Pipeline.PipelineResult.StepResult result = future.get();
+                    Pipeline.StepResult result = future.get();
                     results.put(stepName, result);
 
                     // Store outputs in context
@@ -140,7 +140,7 @@ public class PipelineExecutor implements AutoCloseable {
                     }
 
                 } catch (Exception e) {
-                    results.put(stepName, new Pipeline.PipelineResult.StepResult(
+                    results.put(stepName, new Pipeline.StepResult(
                             stepName, Pipeline.StepStatus.FAILED, e.getMessage(), 0, null));
                 }
             }
@@ -154,7 +154,7 @@ public class PipelineExecutor implements AutoCloseable {
     /**
      * Execute a single step with retry logic.
      */
-    private Pipeline.PipelineResult.StepResult executeStep(String name, Pipeline.PipelineStep step) {
+    private Pipeline.StepResult executeStep(String name, Pipeline.PipelineStep step) {
         int attempts = 0;
         Exception lastError = null;
 
@@ -163,15 +163,15 @@ public class PipelineExecutor implements AutoCloseable {
                 step.run();
 
                 if (step.getStatus() == Pipeline.StepStatus.SUCCESS) {
-                    return new Pipeline.PipelineResult.StepResult(
+                    return new Pipeline.StepResult(
                             name,
-                            step.getStatus(),
+                            Pipeline.StepStatus.SUCCESS,
                             step.getError(),
                             step.getDurationMs(),
                             step.getOutputs()
                     );
                 } else if (step.getStatus() == Pipeline.StepStatus.FAILED) {
-                    lastError = new Exception(step.getError());
+                    lastError = step.getError() != null ? new Exception(step.getError()) : null;
                 }
             } catch (Exception e) {
                 lastError = e;
@@ -188,7 +188,7 @@ public class PipelineExecutor implements AutoCloseable {
             }
         }
 
-        return new Pipeline.PipelineResult.StepResult(
+        return new Pipeline.StepResult(
                 name,
                 Pipeline.StepStatus.FAILED,
                 lastError != null ? lastError.getMessage() : "Max retries exceeded",

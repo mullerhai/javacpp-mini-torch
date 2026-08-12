@@ -540,9 +540,19 @@ public final class EnterpriseHybridTrainer implements AutoCloseable {
         extraState.put("global_step", step);
         extraState.put("loss_history", lossHistory);
 
-        return profiler.profile("save_checkpoint", () ->
-                checkpointManager.save(model.getModule(), null, (int) step, extraState)
-        );
+        try {
+            return profiler.profile("save_checkpoint", () -> {
+                try {
+                    return checkpointManager.save(model.getModule(), null, (int) step, extraState);
+                } catch (java.io.IOException ioe) {
+                    throw new RuntimeException(ioe);
+                }
+            });
+        } catch (RuntimeException e) {
+            Throwable cause = e.getCause() != null ? e.getCause() : e;
+            System.err.println("[EnterpriseHybridTrainer] Failed to save checkpoint: " + cause.getMessage());
+            return null;
+        }
     }
 
     /**

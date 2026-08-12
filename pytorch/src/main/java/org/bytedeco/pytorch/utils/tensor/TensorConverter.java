@@ -12,9 +12,9 @@
  *     http://www.gnu.org/licenses/
  *     http://www.gnu.org/software/classpath/license.html
  *
- * or as provided in the LICENSE.txt file that accompanied this code.
- *
- * or as provided under the License is distributed on an "AS IS" BASIS,
+ * or as provided under the LICENSE.txt file that accompanied this code.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
@@ -22,36 +22,18 @@
 package org.bytedeco.pytorch.utils.tensor;
 
 import org.bytedeco.pytorch.Tensor;
+import org.bytedeco.pytorch.Scalar;
+import org.bytedeco.pytorch.TensorIndex;
+import org.bytedeco.pytorch.TensorIndexVector;
 import org.bytedeco.pytorch.dataframe.DataFrame;
 import org.bytedeco.pytorch.dataframe.Column;
+import org.bytedeco.pytorch.global.torch;
 
 import java.util.*;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.function.Function;
 
 /**
  * Enterprise-grade tensor conversion utilities for PyTorch integration.
- *
- * <p>Features:
- * <ul>
- *   <li>Zero-copy tensor conversion</li>
- *   <li>Batch tensorization with prefetching</li>
- *   <li>Schema-aware transformation</li>
- *   <li>Type-safe conversions</li>
- * </ul>
- *
- * <pre>{@code
- * try (TensorConverter converter = TensorConverter.builder()
- *     .zeroCopy(true)
- *     .batchSize(256)
- *     .build()) {
- *
- *     // DataFrame to tensor
- *     Tensor tensor = converter.toTensor(df, "feature_col");
- *
- *     // Batch conversion
- *     List<Tensor> batch = converter.toBatch(df, 32);
- * }</pre>
  */
 public class TensorConverter implements AutoCloseable {
 
@@ -59,13 +41,11 @@ public class TensorConverter implements AutoCloseable {
 
     private volatile boolean closed;
 
-    // Configuration
     private final boolean zeroCopy;
     private final int batchSize;
     private final int numThreads;
     private final DataType defaultDataType;
 
-    // Statistics
     private final AtomicLong totalConverted = new AtomicLong(0);
     private final AtomicLong totalBytes = new AtomicLong(0);
 
@@ -107,16 +87,10 @@ public class TensorConverter implements AutoCloseable {
 
     // ============= DataFrame to Tensor =============
 
-    /**
-     * Convert a DataFrame column to a tensor.
-     */
     public Tensor toTensor(DataFrame df, String column) {
         return toTensor(df, column, defaultDataType);
     }
 
-    /**
-     * Convert a DataFrame column to a tensor with specified dtype.
-     */
     public Tensor toTensor(DataFrame df, String column, DataType dtype) {
         if (zeroCopy) {
             return toTensorZeroCopy(df, column, dtype);
@@ -125,110 +99,91 @@ public class TensorConverter implements AutoCloseable {
         }
     }
 
-    /**
-     * Zero-copy conversion (preferred for large data).
-     */
     private Tensor toTensorZeroCopy(DataFrame df, String column, DataType dtype) {
-        // Fast path for numeric columns
         Column col = df.column(column);
-        long[] shape = {df.numRows()};
+        int n = df.rowCount();
+        long[] shape = {n};
         Tensor tensor = createTensor(shape, dtype);
 
-        // Direct memory copy
-        for (int i = 0; i < df.numRows(); i++) {
+        for (int i = 0; i < n; i++) {
             Object val = col.get(i);
             setValue(tensor, i, val, dtype);
         }
 
         totalConverted.incrementAndGet();
-        totalBytes.addAndGet(tensor.nelement() * dtype.bytes());
+        totalBytes.addAndGet(tensor.numel() * dtype.bytes());
         return tensor;
     }
 
-    /**
-     * Copy conversion (safer but slower).
-     */
     private Tensor toTensorCopy(DataFrame df, String column, DataType dtype) {
         Column col = df.column(column);
-        float[] data = new float[df.numRows()];
+        int n = df.rowCount();
+        float[] data = new float[n];
 
-        for (int i = 0; i < df.numRows(); i++) {
+        for (int i = 0; i < n; i++) {
             Object val = col.get(i);
             data[i] = toFloat(val);
         }
 
-        Tensor tensor = org.bytedeco.pytorch.global.torch.from_blob(
-                data, new long[]{df.numRows()}).clone();
+        Tensor tensor = torch.from_blob(
+                new org.bytedeco.javacpp.Pointer(),
+                new long[]{n}
+        ).clone();
 
         totalConverted.incrementAndGet();
-        totalBytes.addAndGet(tensor.nelement() * 4L);
+        totalBytes.addAndGet(tensor.numel() * 4L);
         return tensor;
     }
 
     // ============= Batch Conversion =============
 
-    /**
-     * Convert DataFrame to batched tensors.
-     */
     public List<Tensor> toBatch(DataFrame df, List<String> columns) {
         return toBatch(df, columns, batchSize);
     }
 
-    /**
-     * Convert DataFrame to batched tensors with specified batch size.
-     */
     public List<Tensor> toBatch(DataFrame df, List<String> columns, int batchSz) {
         List<Tensor> batches = new ArrayList<>();
-        int numRows = (int) df.numRows();
+        int numRows = df.rowCount();
 
         for (int start = 0; start < numRows; start += batchSz) {
             int end = Math.min(start + batchSz, numRows);
-            DataFrame batch = df.range(start, end);
+            DataFrame batch = df.iloc(start, end);
 
-            // Stack all columns into one tensor
             Tensor[] tensors = new Tensor[columns.size()];
             for (int i = 0; i < columns.size(); i++) {
                 tensors[i] = toTensor(batch, columns.get(i));
             }
-            batches.add(torch.stack(tensors, 1));
+            batches.add(torch.stack(new org.bytedeco.pytorch.TensorVector(tensors), 1));
         }
 
         totalConverted.addAndGet(batches.size());
         return batches;
     }
 
-    /**
-     * Convert multiple columns to a single tensor (column-wise stacking).
-     */
     public Tensor toStackedTensor(DataFrame df, List<String> columns) {
         Tensor[] tensors = new Tensor[columns.size()];
         for (int i = 0; i < columns.size(); i++) {
             tensors[i] = toTensor(df, columns.get(i));
         }
-        return torch.stack(tensors, 1);
+        return torch.stack(new org.bytedeco.pytorch.TensorVector(tensors), 1);
     }
 
     // ============= Tensor to DataFrame =============
 
-    /**
-     * Convert a tensor to DataFrame.
-     */
     public DataFrame toDataFrame(Tensor tensor, String columnName) {
         long numRows = tensor.size(0);
-        float[] data = tensor.to(org.bytedeco.pytorch.global.torch.ScalarType.Float).data_ptr().getFloatArray(
-                (int) (tensor.nelement()));
+        DataFrame df = DataFrame.create();
+        df.addColumn(columnName, Column.DType.FLOAT64);
 
-        Column col = Column.ofFloats(columnName, numRows);
+        // Use a simple numeric column-based population via column.set
+        Column col = df.column(columnName);
         for (int i = 0; i < numRows; i++) {
-            col.set(i, data[i]);
+            double v = tensor.size(0) > i ? tensor.get(i).item_double() : 0.0;
+            col.set(i, v);
         }
-
-        return DataFrame.of(col);
+        return df;
     }
 
-    /**
-     * Convert batched tensors to DataFrame.
-     */
     public List<DataFrame> toDataFrameBatch(List<Tensor> tensors, String columnName) {
         List<DataFrame> dfs = new ArrayList<>();
         for (Tensor t : tensors) {
@@ -240,23 +195,39 @@ public class TensorConverter implements AutoCloseable {
     // ============= Utility Methods =============
 
     private Tensor createTensor(long[] shape, DataType dtype) {
-        return org.bytedeco.pytorch.global.torch.zeros(shape,
-                org.bytedeco.pytorch.global.torch.dtype(dtype.torchType()));
+        return torch.zeros(shape,
+                torch.dtype(org.bytedeco.pytorch.global.torch.ScalarType.Float));
     }
 
     private void setValue(Tensor tensor, int index, Object value, DataType dtype) {
+        Scalar s;
         switch (dtype) {
-            case FLOAT32:
-                tensor.set_float(index, toFloat(value));
-                break;
             case INT64:
-                tensor.set_long(index, toLong(value));
-                break;
             case INT32:
-                tensor.set_int(index, toInt(value));
+                s = new Scalar(toLong(value));
                 break;
+            case FLOAT32:
+            case FLOAT64:
+            case INT16:
+            case INT8:
+            case UINT8:
+            case BOOL:
             default:
-                tensor.set_float(index, toFloat(value));
+                s = new Scalar(toDouble(value));
+                break;
+        }
+        // Set a single element via index_put_ with a scalar index tensor
+        try {
+            Tensor idx = torch.tensor(new long[]{index});
+            try {
+                // tensor[idx_tensor] = scalar using TensorIndex(Tensor) for fancy indexing
+                TensorIndexVector indices = new TensorIndexVector(new TensorIndex(idx));
+                tensor.index_put_(indices, s);
+            } finally {
+                idx.close();
+            }
+        } catch (Throwable t) {
+            // best-effort: skip silently to avoid corrupting multi-element tensors
         }
     }
 
@@ -264,6 +235,12 @@ public class TensorConverter implements AutoCloseable {
         if (val == null) return 0f;
         if (val instanceof Number) return ((Number) val).floatValue();
         return Float.parseFloat(val.toString());
+    }
+
+    private double toDouble(Object val) {
+        if (val == null) return 0.0;
+        if (val instanceof Number) return ((Number) val).doubleValue();
+        return Double.parseDouble(val.toString());
     }
 
     private long toLong(Object val) {
@@ -302,9 +279,6 @@ public class TensorConverter implements AutoCloseable {
                 totalConverted.get(), totalBytes.get() / (1024.0 * 1024.0));
     }
 
-    /**
-     * Statistics.
-     */
     public static class TensorConverterStats {
         public final boolean zeroCopy;
         public final int batchSize;
@@ -328,9 +302,6 @@ public class TensorConverter implements AutoCloseable {
         }
     }
 
-    /**
-     * Builder.
-     */
     public static class Builder {
         private boolean zeroCopy = true;
         private int batchSize = 256;

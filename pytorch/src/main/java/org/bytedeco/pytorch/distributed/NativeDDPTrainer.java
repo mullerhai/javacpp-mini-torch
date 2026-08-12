@@ -28,7 +28,7 @@ import org.bytedeco.pytorch.BoolVector;
 import org.bytedeco.pytorch.Device;
 import org.bytedeco.pytorch.LongVector;
 import org.bytedeco.pytorch.Scalar;
-import org.bytedeco.pytorch.ScalarType;
+import org.bytedeco.pytorch.global.torch.ScalarType;
 import org.bytedeco.pytorch.SizeTStringMap;
 import org.bytedeco.pytorch.SizeTVector;
 import org.bytedeco.pytorch.SizeTVectorVector;
@@ -71,7 +71,6 @@ import static org.bytedeco.pytorch.global.torch.ScalarType;
  *       — respects actual module dtype, leaves weights in fp32).</li>
  *   <li><b>Distributed state_dict</b>: {@link #stateDict()} /
  *       {@link #loadStateDict(java.util.Map)} implement a sharded checkpoint
- *       format that round-trips with {@link CheckpointTrainer}.</li>
  *   <li><b>Hooks chain</b> via {@link TrainerStats.Hook} for
  *       profiling / tensorboard instrumentation.</li>
  *   <li><b>Volatile state</b>: {@code requireBackwardSync} is
@@ -317,10 +316,9 @@ public final class NativeDDPTrainer implements AutoCloseable {
                 } catch (Throwable ignored) {
                 }
             }
-            if (mixedPrecision.paramDtype() != ScalarType.Float.value) {
+            if (mixedPrecision.paramDtype() != ScalarType.Float) {
                 try {
-                    reducer.set_mixed_precision_param_dtype(
-                            org.bytedeco.pytorch.global.torch.ScalarType.intern(mixedPrecision.paramDtype()));
+                    reducer.set_mixed_precision_param_dtype(mixedPrecision.paramDtype());
                 } catch (Throwable ignored) {
                 }
             }
@@ -374,7 +372,7 @@ public final class NativeDDPTrainer implements AutoCloseable {
         // Mixed precision: only cast if input is fp32 — never downcast existing fp16/bf16.
         try {
             if (input.scalar_type().value == ScalarType.Float.value) {
-                return input.to(ScalarType.intern(mixedPrecision.bufferDtype()));
+                return input.to(mixedPrecision.paramDtype());
             }
         } catch (Throwable ignored) {
         }
@@ -536,7 +534,6 @@ public final class NativeDDPTrainer implements AutoCloseable {
     /**
      * Snapshot the local model state plus a header with the worldSize /
      * rank / dtype. The snapshot is per-rank (caller aggregates via
-     * {@link CheckpointTrainer}).
      */
     public java.util.Map<String, Object> stateDict() {
         java.util.LinkedHashMap<String, Object> out = new java.util.LinkedHashMap<>();

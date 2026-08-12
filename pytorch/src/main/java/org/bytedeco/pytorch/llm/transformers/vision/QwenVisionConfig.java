@@ -117,7 +117,7 @@ public class QwenVisionConfig {
      * Create config from JSON string.
      */
     @SuppressWarnings("unchecked")
-    public static QwenVisionConfig fromJson(String json) {
+    public static QwenVisionConfig fromJson(String json) throws IOException {
         Map<String, Object> m = Json.decodeObject(json);
         Builder builder = builder();
 
@@ -150,8 +150,8 @@ public class QwenVisionConfig {
         builder.rmsNormEps(getDouble(config, "rms_norm_eps", 1e-6));
         builder.hiddenAct(getString(config, "hidden_act", "silu"));
         builder.attentionBias(getBool(config, "attention_bias", false));
-        builder.attentionDropout(getBool(config, "attention_dropout", 0.0));
-        builder.hiddenDropout(getBool(config, "hidden_dropout", 0.0));
+        builder.attentionDropout(getBool(config, "attention_dropout", false));
+        builder.hiddenDropout(getBool(config, "hidden_dropout", false));
 
         // Image processing
         builder.imageSize(getInt(config, "image_size", 224));

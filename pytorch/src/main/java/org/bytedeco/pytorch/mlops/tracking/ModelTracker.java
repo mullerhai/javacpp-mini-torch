@@ -283,7 +283,7 @@ public class ModelTracker implements AutoCloseable {
         public Run getBestRun(String metric) {
             return runs.stream()
                     .filter(r -> r.getMetrics().containsKey(metric))
-                    .max(Comparator.comparingDouble(r -> r.getMetrics().get(metric)))
+                    .max(Comparator.comparingDouble(r -> r.getMetrics().get(metric).latest()))
                     .orElse(null);
         }
 

@@ -19,6 +19,7 @@
  */
 package org.bytedeco.pytorch.llm.llamafactory;
 
+import org.bytedeco.pytorch.llm.llamafactory.hparams.FactoryArgs;
 import org.bytedeco.pytorch.nn.Module;
 import org.bytedeco.pytorch.optim.Optimizer;
 import org.bytedeco.pytorch.llm.trainer.EnterpriseTrainer;
@@ -96,7 +97,7 @@ public class LlamaFactoryEnterpriseTrainer implements EnterpriseTrainer {
     }
 
     private void initializeTrainers() {
-        String stage = factoryArgs.stage();
+        String stage = factoryArgs.finetuning().stage().wireName();
 
         switch (stage.toLowerCase()) {
             case "orpo":
@@ -231,7 +232,7 @@ public class LlamaFactoryEnterpriseTrainer implements EnterpriseTrainer {
     public void removeCallback(TrainingCallback callback) { delegate.removeCallback(callback); }
 
     @Override
-    public void close() {
+    public void close() throws Exception {
         if (closed) return;
         closed = true;
 

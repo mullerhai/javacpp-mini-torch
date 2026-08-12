@@ -57,9 +57,9 @@ public class EnterpriseRLTrainer implements EnterpriseTrainer {
     private final Algorithm algorithm;
 
     // Trainers
-    private final ORPOTrainer orpoTrainer;
-    private final SimPOTrainer simpoTrainer;
-    private final RLOOTrainer rlooTrainer;
+    private ORPOTrainer orpoTrainer;
+    private SimPOTrainer simpoTrainer;
+    private RLOOTrainer rlooTrainer;
 
     // Delegate
     private final EnterpriseTrainer delegate;
@@ -244,7 +244,7 @@ public class EnterpriseRLTrainer implements EnterpriseTrainer {
     public void removeCallback(TrainingCallback callback) { delegate.removeCallback(callback); }
 
     @Override
-    public void close() {
+    public void close() throws Exception {
         if (closed) return;
         closed = true;
 

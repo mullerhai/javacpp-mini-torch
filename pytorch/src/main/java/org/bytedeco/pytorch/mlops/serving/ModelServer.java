@@ -20,6 +20,8 @@
 package org.bytedeco.pytorch.mlops.serving;
 
 import org.bytedeco.pytorch.Tensor;
+import org.bytedeco.pytorch.TensorVector;
+import org.bytedeco.pytorch.global.torch;
 import org.bytedeco.pytorch.nn.Module;
 
 import java.io.Closeable;
@@ -27,6 +29,7 @@ import java.nio.file.Path;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Consumer;
 
 /**
  * Enterprise-grade model serving platform.
@@ -207,7 +210,7 @@ public class ModelServer implements AutoCloseable {
                 int end = Math.min(i + maxBatchSize, inputs.size());
                 List<Tensor> batch = inputs.subList(i, end);
 
-                Tensor batched = torch.stack(batch, 0);
+                Tensor batched = torch.stack(new TensorVector(batch.toArray(new Tensor[0])), 0);
                 Tensor output = predict(modelName, batched);
 
                 if (output != null) {
@@ -394,7 +397,7 @@ public class ModelServer implements AutoCloseable {
 
         private Tensor predictGpu(Tensor input) {
             // Move to GPU, predict, move back
-            return model.forward(input.to("cuda")).to("cpu");
+            return model.forward(input.cuda()).cpu();
         }
 
         @Override

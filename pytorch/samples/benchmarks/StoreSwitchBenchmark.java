@@ -3,6 +3,7 @@
  * REDIS / MILVUS probed and skipped cleanly when unreachable.
  */
 package org.bytedeco.pytorch.feature.benchmarks;
+import org.bytedeco.pytorch.distributed.*;
 
 import org.bytedeco.pytorch.feature.FeaturePlatform;
 import org.bytedeco.pytorch.feature.core.Entity;

@@ -21,6 +21,7 @@
  * limitations under the License.
  */
 package org.bytedeco.pytorch.distributed;
+import org.bytedeco.pytorch.global.torch;
 import org.bytedeco.pytorch.nn.modules.*;
 import org.bytedeco.pytorch.optim.*;
 
@@ -169,13 +170,13 @@ public final class FullyShardedDataParallelV2Trainer implements AutoCloseable {
                                 owner.device, mixedPrecision.paramDtype())
                                 .detach().clone();
                         this.flatShard = shard.reshape(shardSize);
-                        this.gradShard = zerosLike(shard);
+                        this.gradShard = torch.zeros_like(shard);
                         try { slice.close(); } catch (Throwable ignored) {}
                         try { flat.close(); } catch (Throwable ignored) {}
                     } else {
                         this.shard = zeros(shardSize).to(owner.device, mixedPrecision.paramDtype());
                         this.flatShard = shard;
-                        this.gradShard = zeros_like(shard);
+                        this.gradShard = torch.zeros_like(shard);
                     }
                 }
             }

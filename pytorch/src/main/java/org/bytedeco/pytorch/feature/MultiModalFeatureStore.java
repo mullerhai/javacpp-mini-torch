@@ -20,11 +20,13 @@
 package org.bytedeco.pytorch.feature;
 
 import org.bytedeco.pytorch.Tensor;
+import org.bytedeco.pytorch.TensorVector;
 import org.bytedeco.pytorch.dataframe.DataFrame;
 import org.bytedeco.pytorch.dataframe.Column;
 import org.bytedeco.pytorch.global.torch;
 
 import java.io.Closeable;
+import java.io.IOException;
 import java.sql.*;
 import java.time.Instant;
 import java.util.*;
@@ -120,7 +122,7 @@ public class MultiModalFeatureStore implements AutoCloseable {
             cache.put(cacheKey, new CachedFeature(
                     embedding.clone(),
                     System.currentTimeMillis(),
-                    embedding.nelement() * 4L
+                    embedding.numel() * 4L
             ));
 
             totalWrites.incrementAndGet();
@@ -170,7 +172,7 @@ public class MultiModalFeatureStore implements AutoCloseable {
                 cache.put(cacheKey, new CachedFeature(
                         embedding.clone(),
                         System.currentTimeMillis(),
-                        embedding.nelement() * 4L
+                        embedding.numel() * 4L
                 ));
             }
 
@@ -320,7 +322,7 @@ public class MultiModalFeatureStore implements AutoCloseable {
     public void writeOffline(DataFrame df, String entityColumn) throws Exception {
         // Write to offline path
         String path = offlinePath + "/" + name + "/" + System.currentTimeMillis() + ".parquet";
-        df.write().format("parquet").option("path", path).save();
+        df.writeParquet(path);
     }
 
     /**
@@ -387,7 +389,7 @@ public class MultiModalFeatureStore implements AutoCloseable {
     public boolean isClosed() { return closed; }
 
     @Override
-    public void close() {
+    public void close() throws IOException {
         if (closed) return;
         closed = true;
 
@@ -471,7 +473,9 @@ public class MultiModalFeatureStore implements AutoCloseable {
             if (tensors.isEmpty()) return null;
 
             // Stack and flatten
-            Tensor stacked = tensors.size() == 1 ? tensors.get(0) : torch.stack(tensors, 0);
+            TensorVector tv = new TensorVector();
+            for (Tensor t : tensors) tv.push_back(t);
+            Tensor stacked = tensors.size() == 1 ? tensors.get(0) : torch.stack(tv, 0);
             return stacked.reshape(-1);
         }
     }

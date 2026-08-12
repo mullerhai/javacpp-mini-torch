@@ -20,6 +20,7 @@
 package org.bytedeco.pytorch.vision.processing;
 
 import org.bytedeco.pytorch.Tensor;
+import org.bytedeco.pytorch.TensorVector;
 import org.bytedeco.pytorch.global.torch;
 
 import java.io.Closeable;
@@ -157,7 +158,7 @@ public class VideoProcessor implements AutoCloseable {
             // 5. Stack frames
             Tensor frames = frameTensors.isEmpty() ?
                     torch.empty(0, 3, targetSize, targetSize) :
-                    torch.stack(frameTensors, 0);
+                    torch.stack(new TensorVector(frameTensors.toArray(new Tensor[0])), 0);
 
             // Cleanup
             for (Tensor t : frameTensors) {

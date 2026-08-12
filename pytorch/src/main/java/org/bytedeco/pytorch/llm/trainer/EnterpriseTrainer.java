@@ -22,7 +22,6 @@ package org.bytedeco.pytorch.llm.trainer;
 import org.bytedeco.pytorch.nn.Module;
 import org.bytedeco.pytorch.optim.Optimizer;
 import org.bytedeco.pytorch.Tensor;
-import org.bytedeco.pytorch.TrainableModule;
 
 import java.io.Closeable;
 import java.util.List;

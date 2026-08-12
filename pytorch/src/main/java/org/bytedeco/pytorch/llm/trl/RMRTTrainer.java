@@ -96,6 +96,8 @@ public final class RMRTTrainer extends BaseTrainer {
 
     /**
      * Joint reward model + policy training (RMT + online RL).
+     *   training mode: true for JOINT, false for POLICY_ONLY (freezes reward model)
+     *
      */
     public RMRTTrainer(
             Module rewardModel,
@@ -103,38 +105,22 @@ public final class RMRTTrainer extends BaseTrainer {
             Module policy,
             LlmForward policyForward,
             Optimizer optimizer,
-            TrainerConfig config) {
+            TrainerConfig config,
+            boolean jointMode) {
         super(config, optimizer);
         this.rewardModel = Objects.requireNonNull(rewardModel, "rewardModel");
         this.rewardForward = Objects.requireNonNull(rewardForward, "rewardForward");
         this.policy = Objects.requireNonNull(policy, "policy");
         this.policyForward = Objects.requireNonNull(policyForward, "policyForward");
         this.config = Objects.requireNonNull(config, "config");
-        this.params = joinParams(rewardModel, policy);
-        this.mode = Mode.JOINT;
-    }
-
-    /**
-     * Policy only training with frozen reward model.
-     */
-    public RMRTTrainer(
-            Module rewardModel,
-            LlmForward rewardForward,
-            Module policy,
-            LlmForward policyForward,
-            Optimizer policyOptimizer,
-            TrainerConfig config) {
-        super(config, policyOptimizer);
-        this.rewardModel = Objects.requireNonNull(rewardModel, "rewardModel");
-        this.rewardForward = Objects.requireNonNull(rewardForward, "rewardForward");
-        this.policy = Objects.requireNonNull(policy, "policy");
-        this.policyForward = Objects.requireNonNull(policyForward, "policyForward");
-        this.config = Objects.requireNonNull(config, "config");
-        this.params = policy.parameters();
-        this.mode = Mode.POLICY_ONLY;
-
-        // Freeze reward model
-        freeze(rewardModel);
+        if (jointMode) {
+            this.params = joinParams(rewardModel, policy);
+            this.mode = Mode.JOINT;
+        } else {
+            this.params = policy.parameters();
+            this.mode = Mode.POLICY_ONLY;
+            freeze(rewardModel);
+        }
     }
 
     public Module rewardModel() { return rewardModel; }

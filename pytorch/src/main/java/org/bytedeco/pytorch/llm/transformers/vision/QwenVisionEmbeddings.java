@@ -19,10 +19,15 @@
  */
 package org.bytedeco.pytorch.llm.transformers.vision;
 
+import org.bytedeco.javacpp.LongPointer;
 import org.bytedeco.pytorch.Tensor;
 import org.bytedeco.pytorch.global.torch;
 import org.bytedeco.pytorch.nn.Module;
 import org.bytedeco.pytorch.llm.modules.RMSNorm;
+import org.bytedeco.pytorch.nn.modules.Conv2dImpl;
+import org.bytedeco.pytorch.nn.modules.LinearImpl;
+import org.bytedeco.pytorch.nn.options.Conv2dOptions;
+import org.bytedeco.pytorch.nn.options.LinearOptions;
 
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -109,11 +114,11 @@ public class QwenVisionEmbeddings implements AutoCloseable {
         this.temporalMerge = createTemporalMergeMLP();
 
         // Initialize layer norms
-        this.imageNorm = new RMSNorm(hiddenSize);
-        this.imageNorm.setEps(builder.rmsNormEps);
+        this.imageNorm = new RMSNorm(hiddenSize,builder.rmsNormEps);
+//        this.imageNorm.setEps(builder.rmsNormEps);
 
-        this.videoNorm = new RMSNorm(hiddenSize);
-        videoNorm.setEps(builder.rmsNormEps);
+        this.videoNorm = new RMSNorm(hiddenSize,builder.rmsNormEps);
+//        videoNorm.setEps(builder.rmsNormEps);
     }
 
     /**
@@ -130,7 +135,7 @@ public class QwenVisionEmbeddings implements AutoCloseable {
             long batchSize = pixelValues.size(0);
             long channels = pixelValues.size(1);
             long height = pixelValues.size(2);
-            long width = pixelValues.size.size(3);
+            long width = pixelValues.size(3);
 
             // 1. Patch embedding
             // [B, C, H, W] -> [B, hidden_size, H/patch_size, W/patch_size]
@@ -288,12 +293,12 @@ public class QwenVisionEmbeddings implements AutoCloseable {
      * Create patch embedding module.
      */
     private Module createPatchEmbedding() {
-        // Conv2d(in_channels=3, out_channels=hidden_size, kernel_size=patch_size, stride=patch_size)
-        return torch.nn.conv2d(
-                3, hiddenSize,
-                new long[]{patchSize, patchSize},
-                new long[]{patchSize, patchSize}
-        );
+        var opts = new Conv2dOptions(3, hiddenSize,new LongPointer(patchSize,patchSize))
+                .in_channels(3)
+                .out_channels(hiddenSize)
+                .kernel_size(new LongPointer(patchSize, patchSize))
+                .stride(new LongPointer(patchSize, patchSize));
+        return new Conv2dImpl(opts);
     }
 
     /**
@@ -301,7 +306,7 @@ public class QwenVisionEmbeddings implements AutoCloseable {
      */
     private Module createSpatialMergeMLP() {
         // MLP that merges spatial patches: hidden_size -> hidden_size
-        return torch.nn.linear(hiddenSize, hiddenSize);
+        return new LinearImpl(new LinearOptions(hiddenSize, hiddenSize));
     }
 
     /**
@@ -309,7 +314,7 @@ public class QwenVisionEmbeddings implements AutoCloseable {
      */
     private Module createTemporalMergeMLP() {
         // MLP that merges temporal patches: hidden_size -> hidden_size
-        return torch.nn.linear(hiddenSize, hiddenSize);
+        return new LinearImpl(new LinearOptions(hiddenSize, hiddenSize));
     }
 
     /**

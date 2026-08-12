@@ -12,6 +12,7 @@
  *   8) replace_vs_append    — replace semantics clear prior offline rows
  */
 package org.bytedeco.pytorch.feature.benchmarks;
+import org.bytedeco.pytorch.distributed.*;
 
 import org.bytedeco.pytorch.dataframe.Column;
 import org.bytedeco.pytorch.dataframe.DataFrame;

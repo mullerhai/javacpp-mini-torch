@@ -64,6 +64,17 @@ public class ZeroCopyBuffer implements AutoCloseable {
     private final ByteBuffer buffer;
     private final long address;
 
+    /**
+     * Wrap a raw native address into a Pointer. javacpp's Pointer does not have a
+     * Pointer(long) constructor, so we use an anonymous subclass to set the
+     * protected {@code address} field directly.
+     */
+    private static org.bytedeco.javacpp.Pointer pointerAt(long addr) {
+        return new org.bytedeco.javacpp.Pointer() {
+            { this.address = addr; }
+        };
+    }
+
     // Statistics
     private final AtomicLong totalAllocated = new AtomicLong(0);
     private final AtomicLong totalUsed = new AtomicLong(0);
@@ -235,11 +246,12 @@ public class ZeroCopyBuffer implements AutoCloseable {
             throw new IllegalStateException("Not enough buffer remaining");
         }
 
-        // Create tensor view of buffer (zero-copy)
+        // Create tensor view of buffer (zero-copy) - default to Float
         long pos = position();
         Tensor tensor = torch.from_blob(
-                address + pos,
-                shape
+                pointerAt(address + pos),
+                shape,
+                org.bytedeco.pytorch.global.torch.dtype(org.bytedeco.pytorch.global.torch.ScalarType.Float)
         ).clone();  // Clone to own the memory
 
         position(pos + requiredBytes);
@@ -269,9 +281,9 @@ public class ZeroCopyBuffer implements AutoCloseable {
 
         long pos = position();
         Tensor tensor = torch.from_blob(
-                address + pos,
+                pointerAt(address + pos),
                 shape,
-                org.bytedeco.pytorch.global.torch.ScalarType.Int
+                org.bytedeco.pytorch.global.torch.dtype(org.bytedeco.pytorch.global.torch.ScalarType.Int)
         ).clone();
 
         position(pos + requiredBytes);
@@ -294,9 +306,9 @@ public class ZeroCopyBuffer implements AutoCloseable {
 
         long pos = position();
         Tensor tensor = torch.from_blob(
-                address + pos,
+                pointerAt(address + pos),
                 shape,
-                org.bytedeco.pytorch.global.torch.ScalarType.Long
+                org.bytedeco.pytorch.global.torch.dtype(org.bytedeco.pytorch.global.torch.ScalarType.Long)
         ).clone();
 
         position(pos + requiredBytes);

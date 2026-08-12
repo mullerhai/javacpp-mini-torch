@@ -26,7 +26,7 @@ import org.bytedeco.pytorch.jit.*;
 import org.bytedeco.javacpp.Loader;
 import org.bytedeco.javacpp.annotation.Properties;
 import org.bytedeco.pytorch.Scalar;
-import org.bytedeco.pytorch.ScalarType;
+import org.bytedeco.pytorch.global.torch.ScalarType;
 import org.bytedeco.pytorch.Tensor;
 import org.bytedeco.pytorch.TensorVector;
 
@@ -124,7 +124,7 @@ public final class TrainerOps {
      * requested dtype. Returns an empty 1D tensor (zero elements) when
      * {@code params} is empty. Caller owns the returned tensor.
      */
-    public static Tensor flatten(List<Tensor> params, org.bytedeco.pytorch.Device device, byte dtype) {
+    public static Tensor flatten(List<Tensor> params, org.bytedeco.pytorch.Device device, ScalarType dtype) {
         if (params.isEmpty()) {
             return zeros(0L).to(device, dtype);
         }
@@ -146,7 +146,7 @@ public final class TrainerOps {
      * empty tensor when {@code totalNumel == 0}.
      */
     public static Tensor flattenGrads(List<Tensor> grads, List<Tensor> params,
-                                     org.bytedeco.pytorch.Device device, byte dtype) {
+                                     org.bytedeco.pytorch.Device device, ScalarType dtype) {
         long total = totalNumel(params);
         if (total == 0) {
             return zeros(0L).to(device, dtype);
@@ -234,7 +234,7 @@ public final class TrainerOps {
      * brand new contiguous tensor (caller owns it).
      */
     public static Tensor pad1D(Tensor src, long targetSize,
-                               org.bytedeco.pytorch.Device device, byte dtype) {
+                               org.bytedeco.pytorch.Device device, ScalarType dtype) {
         if (src == null || src.isNull()) {
             return zeros(targetSize).to(device, dtype);
         }
@@ -267,7 +267,7 @@ public final class TrainerOps {
     // ── Buffers & uniform tensors ─────────────────────────────────────────
 
     /** Allocate an uninitialised 1D tensor on the requested device. */
-    public static Tensor empty1D(long size, org.bytedeco.pytorch.Device device, byte dtype) {
+    public static Tensor empty1D(long size, org.bytedeco.pytorch.Device device, ScalarType dtype) {
         if (size <= 0) {
             return zeros(0L).to(device, dtype);
         }
@@ -275,7 +275,7 @@ public final class TrainerOps {
     }
 
     /** Allocate a zeros 1D tensor on the requested device. */
-    public static Tensor zeros1D(long size, org.bytedeco.pytorch.Device device, byte dtype) {
+    public static Tensor zeros1D(long size, org.bytedeco.pytorch.Device device, ScalarType dtype) {
         if (size <= 0) {
             return zeros(0L).to(device, dtype);
         }

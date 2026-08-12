@@ -21,9 +21,11 @@
  * limitations under the License.
  */
 package org.bytedeco.pytorch.distributed;
+import org.bytedeco.pytorch.TensorVector;
 import org.bytedeco.pytorch.data.*;
 import org.bytedeco.pytorch.jit.*;
 import org.bytedeco.pytorch.optim.*;
+import org.bytedeco.pytorch.StringTensorDict;
 
 import org.bytedeco.pytorch.Tensor;
 import org.bytedeco.pytorch.Scalar;
@@ -183,41 +185,22 @@ public final class MixedPrecisionManager implements AutoCloseable {
     public boolean unscaleAndStep(Optimizer optimizer, float maxGradNorm) {
         totalSteps.incrementAndGet();
 
-        // Get model parameters with gradients
-        Module model = optimizer.parameters().iterator().hasNext()
-            ? optimizer.parameters().iterator().next().__module__()
-            : null;
+        // Get all parameters from optimizer
+        TensorVector params = optimizer.parameters();
 
-        if (model == null) {
-            optimizer.step();
-            return true;
-        }
-
-        // Get all gradients
-        List<Tensor> grads = new ArrayList<>();
-        List<String> paramNames = new ArrayList<>();
-        for (String name : model.named_parameters()) {
-            Tensor param = model.get_parameter(name);
-            Tensor grad = param.grad();
-            if (grad != null) {
-                grads.add(grad);
-                paramNames.add(name);
-            }
-        }
-
-        // Unscale gradients
-        boolean hasInfNan = unscaleGradients(grads);
+        // Unscale gradients in place
+        boolean hasInfNan = unscaleGradients(params);
 
         // Check for inf/nan
         if (hasInfNan) {
-            handleInfNan(model);
+            handleInfNan();
             optimizer.zero_grad();
             return false;
         }
 
         // Clip gradients
         if (maxGradNorm > 0) {
-            clipGradients(grads, maxGradNorm);
+            clipGradients(params, maxGradNorm);
         }
 
         // Perform optimizer step
@@ -233,15 +216,20 @@ public final class MixedPrecisionManager implements AutoCloseable {
     /**
      * Unscale gradients in place.
      *
-     * @param grads list of gradient tensors
+     * @param params tensor vector of parameters (gradients attached)
      * @return true if any gradient has inf/nan
      */
-    private boolean unscaleGradients(List<Tensor> grads) {
+    private boolean unscaleGradients(TensorVector params) {
         boolean hasInfNan = false;
         Scalar invScale = new Scalar(1.0 / currentScale);
 
-        for (Tensor grad : grads) {
-            // Unscale
+        for (long i = 0, n = params.size(); i < n; i++) {
+            Tensor param = params.get(i);
+            if (param == null || !param.defined()) continue;
+            Tensor grad = param.grad();
+            if (grad == null || !grad.defined()) continue;
+
+            // Unscale in place
             grad.div_(invScale);
 
             // Check for inf/nan
@@ -276,20 +264,29 @@ public final class MixedPrecisionManager implements AutoCloseable {
     /**
      * Clip gradients by global norm.
      */
-    private void clipGradients(List<Tensor> grads, float maxGradNorm) {
+    private void clipGradients(TensorVector params, float maxGradNorm) {
         // Compute total norm
         double totalNorm = 0;
-        for (Tensor grad : grads) {
-            totalNorm += Math.pow(grad.norm(2.0).item().toDouble(), 2);
+        for (long i = 0, n = params.size(); i < n; i++) {
+            Tensor param = params.get(i);
+            if (param == null || !param.defined()) continue;
+            Tensor grad = param.grad();
+            if (grad == null || !grad.defined()) continue;
+            totalNorm += Math.pow(torch.norm(grad, new Scalar(2.0)).item().toDouble(), 2);
         }
         totalNorm = Math.sqrt(totalNorm);
 
         // Clip if needed
         if (totalNorm > maxGradNorm) {
             double clipCoef = maxGradNorm / totalNorm;
-            Scalar coef = new Scalar(clipCoef);
-            for (Tensor grad : grads) {
-                grad.mul_(coef);
+            Tensor coef = torch.tensor(clipCoef);
+            for (long i = 0, n = params.size(); i < n; i++) {
+                Tensor param = params.get(i);
+                if (param == null || !param.defined()) continue;
+                Tensor grad = param.grad();
+                if (grad != null && grad.defined()) {
+                    grad.mul_(coef);
+                }
             }
         }
     }
@@ -358,7 +355,7 @@ public final class MixedPrecisionManager implements AutoCloseable {
     /**
      * Handle inf/nan detection.
      */
-    private void handleInfNan(Module model) {
+    private void handleInfNan() {
         infNanCount.incrementAndGet();
         consecutiveNonfiniteSteps.incrementAndGet();
 
@@ -366,7 +363,7 @@ public final class MixedPrecisionManager implements AutoCloseable {
         currentScale = Math.max(currentScale * backoffFactor, minScale);
 
         if (rank == 0) {
-            System.out.printf("[MixedPrecision] ⚠️ Inf/Nan detected! Scale: %.1f -> %.1f (total: %d)%n",
+            System.out.printf("[MixedPrecision] WARNING: Inf/Nan detected! Scale: %.1f -> %.1f (total: %d)%n",
                     currentScale / backoffFactor, currentScale, infNanCount.get());
         }
 
@@ -471,12 +468,19 @@ public final class MixedPrecisionManager implements AutoCloseable {
      * @param model model whose gradients to scale
      */
     public void multiplyGradientsByScale(Module model) {
-        Scalar scale = new Scalar(currentScale);
-        for (String name : model.named_parameters()) {
-            Tensor param = model.get_parameter(name);
-            Tensor grad = param.grad();
-            if (grad != null) {
-                grad.mul_(scale);
+        Tensor scale = torch.tensor(currentScale);
+        StringTensorDict dict = model.named_parameters();
+        if (dict != null && !dict.isNull()) {
+            long n = dict.size();
+            for (long i = 0; i < n; i++) {
+                String name = dict.keys().get(i).getString();
+                Tensor param = dict.get(name);
+                if (param != null && param.defined()) {
+                    Tensor grad = param.grad();
+                    if (grad != null) {
+                        grad.mul_(scale);
+                    }
+                }
             }
         }
     }
@@ -484,10 +488,10 @@ public final class MixedPrecisionManager implements AutoCloseable {
     /**
      * Find inf/nan in gradients and mask them.
      *
-     * @param grads list of gradients to check
+     * @param grads tensor vector of gradients to check
      * @return mask tensor (1 for valid, 0 for inf/nan)
      */
-    public Tensor findInfNanMask(List<Tensor> grads) {
+    public Tensor findInfNanMask(TensorVector grads) {
         // Simplified implementation
         // Real implementation would create element-wise mask
         return torch.ones(1);
@@ -596,7 +600,7 @@ public final class MixedPrecisionManager implements AutoCloseable {
         double[] scaleHistory
     ) {
         public double scaleFactor() {
-            return Math.log2(currentScale / initialScale);
+            return (Math.log(currentScale / initialScale) / Math.log(2));
         }
     }
 }

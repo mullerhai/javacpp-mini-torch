@@ -19,7 +19,9 @@
  */
 package org.bytedeco.pytorch.recommend.multimodal;
 
+import org.bytedeco.pytorch.Scalar;
 import org.bytedeco.pytorch.Tensor;
+import org.bytedeco.pytorch.TensorVector;
 import org.bytedeco.pytorch.global.torch;
 import org.bytedeco.pytorch.nn.Module;
 
@@ -275,7 +277,7 @@ public class MultiModalFeatureExtractor implements AutoCloseable {
             count++;
         }
 
-        return fused != null ? fused.div(count) : null;
+        return fused != null ? fused.div(new Scalar((double) count)) : null;
     }
 
     /**
@@ -375,7 +377,7 @@ public class MultiModalFeatureExtractor implements AutoCloseable {
 
             Tensor[] nonNull = new Tensor[count];
             System.arraycopy(features, 0, nonNull, 0, count);
-            return torch.cat(nonNull, -1);
+            return torch.cat(new TensorVector(nonNull), -1);
         }
 
         public static class Builder {

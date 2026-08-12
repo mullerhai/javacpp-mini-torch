@@ -19,10 +19,7 @@
  */
 package org.bytedeco.pytorch.llm.trl;
 
-import org.bytedeco.pytorch.NoGradGuard;
-import org.bytedeco.pytorch.Scalar;
-import org.bytedeco.pytorch.Tensor;
-import org.bytedeco.pytorch.TensorVector;
+import org.bytedeco.pytorch.*;
 import org.bytedeco.pytorch.llm.trl.config.MultiModalGRPOConfig;
 import org.bytedeco.pytorch.nn.Module;
 import org.bytedeco.pytorch.optim.Optimizer;
@@ -139,9 +136,10 @@ public final class MultiModalGRPOTrainer extends BaseTrainer {
         // Compute entropy bonus
         Tensor entropyLoss = computeEntropyLoss(logProbs);
 
-        // Combined loss
-        Tensor totalLoss = policyLoss
-                .sub(new Scalar(config.entropyCoeff()).mul(entropyLoss.mean()));
+        // Combined loss: policy - entropy_coef * (entropy.mean())
+        Tensor totalLoss = policyLoss.sub(
+                entropyLoss.mul(new Scalar(config.entropyCoeff())).mean()
+        );
 
         // Update running statistics
         updateStatistics(rewards, logProbs, refLogProbs);
@@ -206,7 +204,7 @@ public final class MultiModalGRPOTrainer extends BaseTrainer {
         if (normScale > 0) {
             Tensor mean = advantages.mean();
             Tensor std = advantages.std();
-            advantages = (advantages.sub(mean)).div(std.add(normScale));
+            advantages = (advantages.sub(mean)).div(std.add(new Scalar(normScale)));
         }
 
         return advantages;
@@ -224,18 +222,18 @@ public final class MultiModalGRPOTrainer extends BaseTrainer {
         int numModalities = (int) modalityRewards.size(1);
         if (numModalities >= 1) {
             Tensor textReward = modalityRewards.select(1, 0);
-            combinedRewards = combinedRewards.mul(wText)
-                    .add(textReward.mul(1 - wText));
+            combinedRewards = combinedRewards.mul(new Scalar(wText))
+                    .add(textReward.mul(new Scalar(1 - wText)));
         }
         if (numModalities >= 2) {
             Tensor imageReward = modalityRewards.select(1, 1);
-            combinedRewards = combinedRewards.mul(1 - wImage)
-                    .add(imageReward.mul(wImage));
+            combinedRewards = combinedRewards.mul(new Scalar(1 - wImage))
+                    .add(imageReward.mul(new Scalar(wImage)));
         }
         if (numModalities >= 3) {
             Tensor audioReward = modalityRewards.select(1, 2);
-            combinedRewards = combinedRewards.mul(1 - wAudio)
-                    .add(audioReward.mul(wAudio));
+            combinedRewards = combinedRewards.mul(new Scalar(1 - wAudio))
+                    .add(audioReward.mul(new Scalar(wAudio)));
         }
 
         return combinedRewards;
@@ -249,13 +247,14 @@ public final class MultiModalGRPOTrainer extends BaseTrainer {
 
         // Clipped surrogate loss (GRPO-style)
         double clipEps = 0.2;
-        Tensor ratioClipped = ratio.clamp(1 - clipEps, 1 + clipEps);
+        Tensor ratioClipped = ratio.clamp(new ScalarOptional(new Scalar(1 - clipEps)), new ScalarOptional(new Scalar(1 + clipEps)));
 
         Tensor surr1 = ratio.mul(advantages);
         Tensor surr2 = ratioClipped.mul(advantages);
 
-        // Take minimum for clipped loss
-        Tensor clippedLoss = surr1.lt(surr2).select(surr1, surr2);
+        // Take minimum for clipped loss (elementwise via torch.where)
+        Tensor clippedLoss = org.bytedeco.pytorch.global.torch.where(
+                surr1.lt(surr2), surr1, surr2);
 
         return clippedLoss.neg().mean();
     }

@@ -20,6 +20,7 @@
  * limitations under the License.
  */
 package org.bytedeco.pytorch.distributed;
+import org.bytedeco.pytorch.TensorVector;
 import org.bytedeco.pytorch.jit.*;
 import org.bytedeco.pytorch.optim.*;
 
@@ -230,7 +231,9 @@ public final class ExpertParallelTrainer implements AutoCloseable {
         }
 
         // Concatenate received chunks
-        Tensor received = cat(recvChunks);
+        TensorVector tv1 = new TensorVector();
+        for (Tensor t : recvChunks) tv1.push_back(t);
+        Tensor received = cat(tv1);
 
         // Local expert processing
         Tensor localOut = processLocalExperts(received);
@@ -262,7 +265,9 @@ public final class ExpertParallelTrainer implements AutoCloseable {
         }
 
         List<Tensor> finalChunks = new ArrayList<>(recvReturn);
-        Tensor finalOut = cat(finalChunks);
+        TensorVector tv2 = new TensorVector();
+        for (Tensor t : finalChunks) tv2.push_back(t);
+        Tensor finalOut = cat(tv2);
         try { received.close(); } catch (Throwable ignored) {}
         return finalOut;
     }
@@ -287,7 +292,7 @@ public final class ExpertParallelTrainer implements AutoCloseable {
             float[] counts = new float[numExperts];
             int n = (int) topkIndices.sizes().get(0);
             for (int i = 0; i < n; i++) {
-                long idx = topkIndices.getLong(i);
+                long idx = topkIndices.get(i).item().toLong();
                 if (idx >= 0 && idx < numExperts) {
                     counts[(int) idx] += 1.0f / topK;
                 }
@@ -298,7 +303,7 @@ public final class ExpertParallelTrainer implements AutoCloseable {
                 total += (float) (counts[e] * Math.log(Math.max(counts[e], 1e-9f)));
             }
             float aux = -auxLossCoeff * total / numExperts;
-            auxLossBuffer.copy_(new Scalar(aux));
+            auxLossBuffer.fill_(new Scalar(aux));
             return auxLossBuffer.clone();
         } catch (Throwable t) {
             return zeros(1).to(device, ScalarType.Float);

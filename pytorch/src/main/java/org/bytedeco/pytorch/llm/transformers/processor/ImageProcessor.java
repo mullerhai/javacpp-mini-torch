@@ -19,6 +19,7 @@
  */
 package org.bytedeco.pytorch.llm.transformers.processor;
 
+import org.bytedeco.pytorch.Scalar;
 import org.bytedeco.pytorch.Tensor;
 import org.bytedeco.pytorch.global.torch;
 
@@ -58,8 +59,8 @@ public class ImageProcessor implements AutoCloseable {
     // Configuration
     private final ResizeMode resizeMode;
     private final int targetSize;
-    private final int imageMean[];
-    private final int imageStd[];
+    private final float imageMean[];
+    private final float imageStd[];
     private final boolean doNormalize;
     private final boolean doRescale;
     private final DataFormat outputFormat;
@@ -118,8 +119,8 @@ public class ImageProcessor implements AutoCloseable {
         return builder()
                 .resizeMode(ResizeMode.SQUARE)
                 .targetSize(224)
-                .imageMean(new int[]{123.675f, 116.28f, 103.53f})
-                .imageStd(new int[]{58.395f, 57.12f, 57.375f})
+                .imageMean(new float[]{123.675f, 116.28f, 103.53f})
+                .imageStd(new float[]{58.395f, 57.12f, 57.375f})
                 .doNormalize(true)
                 .doRescale(true)
                 .build();
@@ -132,8 +133,8 @@ public class ImageProcessor implements AutoCloseable {
         return builder()
                 .resizeMode(ResizeMode.SQUARE)
                 .targetSize(336)
-                .imageMean(new int[]{0.48145466f, 0.4578275f, 0.40821073f})
-                .imageStd(new int[]{0.26862954f, 0.26130258f, 0.27577711f})
+                .imageMean(new float[]{0.48145466f, 0.4578275f, 0.40821073f})
+                .imageStd(new float[]{0.26862954f, 0.26130258f, 0.27577711f})
                 .doNormalize(true)
                 .doRescale(true)
                 .build();
@@ -146,8 +147,8 @@ public class ImageProcessor implements AutoCloseable {
         return builder()
                 .resizeMode(ResizeMode.KEEP_ASPECT_RATIO)
                 .targetSize(1280)
-                .imageMean(new int[]{0.48145466f, 0.4578275f, 0.40821073f})
-                .imageStd(new int[]{0.26862954f, 0.26130258f, 0.27577711f})
+                .imageMean(new float[]{0.48145466f, 0.4578275f, 0.40821073f})
+                .imageStd(new float[]{0.26862954f, 0.26130258f, 0.27577711f})
                 .doNormalize(true)
                 .doRescale(true)
                 .useDynamicResolution(true)
@@ -163,8 +164,8 @@ public class ImageProcessor implements AutoCloseable {
         return builder()
                 .resizeMode(ResizeMode.KEEP_ASPECT_RATIO)
                 .targetSize(384)
-                .imageMean(new int[]{0.485f, 0.456f, 0.406f})
-                .imageStd(new int[]{0.229f, 0.224f, 0.225f})
+                .imageMean(new float[]{0.485f, 0.456f, 0.406f})
+                .imageStd(new float[]{0.229f, 0.224f, 0.225f})
                 .doNormalize(true)
                 .doRescale(true)
                 .maxImageSize(384)
@@ -297,7 +298,7 @@ public class ImageProcessor implements AutoCloseable {
         if (!doRescale) {
             return input;
         }
-        return input.div(255.0f);
+        return input.div(new Scalar((255.0f)));
     }
 
     /**
@@ -347,7 +348,7 @@ public class ImageProcessor implements AutoCloseable {
     public DataFormat outputFormat() { return outputFormat; }
     public boolean useDynamicResolution() { return useDynamicResolution; }
 
-    private Tensor createEmptyOutput(int height, int width) {
+    private Processor.ImageOutput createEmptyOutput(int height, int width) {
         Tensor empty = torch.zeros(new long[]{1, 3, height, width});
         return new Processor.ImageOutput(
                 empty, height, width, 0, 0, 0,
@@ -400,8 +401,8 @@ public class ImageProcessor implements AutoCloseable {
     public static class Builder {
         private ResizeMode resizeMode = ResizeMode.SQUARE;
         private int targetSize = 224;
-        private int[] imageMean;
-        private int[] imageStd;
+        private float[] imageMean;
+        private float[] imageStd;
         private boolean doNormalize = true;
         private boolean doRescale = true;
         private DataFormat outputFormat = DataFormat.NCHW;
@@ -421,28 +422,20 @@ public class ImageProcessor implements AutoCloseable {
             return this;
         }
 
-        public Builder imageMean(int[] imageMean) {
-            this.imageMean = imageMean;
-            return this;
-        }
 
         public Builder imageMean(float[] imageMean) {
-            this.imageMean = new int[imageMean.length];
+            this.imageMean = new float[imageMean.length];
             for (int i = 0; i < imageMean.length; i++) {
-                this.imageMean[i] = (int) imageMean[i];
+                this.imageMean[i] = imageMean[i];
             }
             return this;
         }
 
-        public Builder imageStd(int[] imageStd) {
-            this.imageStd = imageStd;
-            return this;
-        }
 
         public Builder imageStd(float[] imageStd) {
-            this.imageStd = new int[imageStd.length];
+            this.imageStd = new float[imageStd.length];
             for (int i = 0; i < imageStd.length; i++) {
-                this.imageStd[i] = (int) imageStd[i];
+                this.imageStd[i] = imageStd[i];
             }
             return this;
         }
@@ -491,8 +484,8 @@ public class ImageProcessor implements AutoCloseable {
          * Configure for ImageNet normalization.
          */
         public Builder imagenet() {
-            this.imageMean = new int[]{123.675f, 116.28f, 103.53f};
-            this.imageStd = new int[]{58.395f, 57.12f, 57.375f};
+            this.imageMean = new float[]{123.675f, 116.28f, 103.53f};
+            this.imageStd = new float[]{58.395f, 57.12f, 57.375f};
             return this;
         }
 
@@ -500,8 +493,8 @@ public class ImageProcessor implements AutoCloseable {
          * Configure for CLIP normalization.
          */
         public Builder clip() {
-            this.imageMean = new int[]{0.48145466f, 0.4578275f, 0.40821073f};
-            this.imageStd = new int[]{0.26862954f, 0.26130258f, 0.27577711f};
+            this.imageMean = new float[]{0.48145466f, 0.4578275f, 0.40821073f};
+            this.imageStd = new float[]{0.26862954f, 0.26130258f, 0.27577711f};
             return this;
         }
 

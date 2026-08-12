@@ -9,23 +9,20 @@
 package org.bytedeco.pytorch.utils.yaml;
 
 import java.io.IOException;
+import java.lang.reflect.*;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.Collections;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Locale;
-import java.util.Map;
-import java.util.Objects;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.util.*;
 
 /**
  * Encode / decode a practical YAML subset used by Compose + K8s.
  *
  * <pre>{@code
- * Map&lt;String, Object&gt; doc = Yaml.load("""
+ * Map<String, Object> doc = Yaml.load("""
  *   apiVersion: apps/v1
  *   kind: Deployment
  *   metadata:
@@ -34,15 +31,25 @@ import java.util.Objects;
  *     replicas: 2
  *     """);
  * String out = Yaml.dump(doc);
- * List&lt;Object&gt; all = Yaml.loadAll(multiDocText);
+ * List<Object> all = Yaml.loadAll(multiDocText);
  * }</pre>
+ *
+ * <p>Enterprise features added:
+ * <ul>
+ *   <li>Type-safe POJO binding: {@code Yaml.loadAs(path, MyConfig.class)}</li>
+ *   <li>Path-based navigation: {@code Yaml.get(doc, "/spec/replicas")}</li>
+ *   <li>Deep merge: {@code Yaml.merge(base, override)}</li>
+ *   <li>Environment expansion: {@code Yaml.expandEnv("${VAR:-default}")}</li>
+ *   <li>Schema validation: {@code Yaml.validate(doc, schema)}</li>
+ *   <li>Diff/Patch: {@code Yaml.diff(base, override)}</li>
+ * </ul>
  */
 public final class Yaml {
 
     private Yaml() {}
 
     // =========================================================================
-    // Public load / dump
+    // Public load / dump (legacy API)
     // =========================================================================
 
     public static Object load(String text) throws IOException {
@@ -55,7 +62,7 @@ public final class Yaml {
     public static Map<String, Object> loadMap(String text) throws IOException {
         Object v = load(text);
         if (v == null) return new LinkedHashMap<>();
-        if (v instanceof Map<?, ?> m) return (Map<String, Object>) m;
+        if (v instanceof Map) return (Map<String, Object>) v;
         throw new IOException("expected YAML mapping, got " + v.getClass().getSimpleName());
     }
 
@@ -108,31 +115,572 @@ public final class Yaml {
     }
 
     // =========================================================================
+    // POJO binding
+    // =========================================================================
+
+    /**
+     * Load YAML and bind to a POJO class.
+     */
+    public static <T> T loadAs(String text, Class<T> clazz) throws IOException {
+        Object doc = load(text);
+        return bindTo(doc, clazz);
+    }
+
+    /**
+     * Load YAML file and bind to a POJO class.
+     */
+    public static <T> T loadAs(Path path, Class<T> clazz) throws IOException {
+        Object doc = load(path);
+        return bindTo(doc, clazz);
+    }
+
+    private static <T> T bindTo(Object doc, Class<T> clazz) throws IOException {
+        if (doc == null) {
+            try {
+                return clazz.newInstance();
+            } catch (Exception e) {
+                throw new IOException("Cannot instantiate " + clazz.getName(), e);
+            }
+        }
+        if (clazz.isInstance(doc)) return clazz.cast(doc);
+        if (doc instanceof Map) {
+            return bindMapTo((Map<?, ?>) doc, clazz);
+        }
+        throw new IOException("cannot bind " + doc.getClass() + " to " + clazz);
+    }
+
+    private static <T> T bindMapTo(Map<?, ?> map, Class<T> clazz) throws IOException {
+        try {
+            Constructor<T> cons = clazz.getDeclaredConstructor();
+            cons.setAccessible(true);
+            T instance = cons.newInstance();
+            for (Map.Entry<?, ?> e : map.entrySet()) {
+                String key = String.valueOf(e.getKey());
+                Object value = e.getValue();
+                String setterName = "set" + Character.toUpperCase(key.charAt(0)) + key.substring(1);
+                try {
+                    Method setter = findSetter(clazz, setterName);
+                    if (setter != null) {
+                        setter.setAccessible(true);
+                        Object converted = convertValue(value, setter.getParameterTypes()[0]);
+                        setter.invoke(instance, converted);
+                    }
+                } catch (NoSuchMethodException ignored) {
+                    try {
+                        Field field = findField(clazz, key);
+                        if (field != null) {
+                            field.setAccessible(true);
+                            Object converted = convertValue(value, field.getType());
+                            field.set(instance, converted);
+                        }
+                    } catch (NoSuchFieldException ignored2) {}
+                }
+            }
+            return instance;
+        } catch (Exception e) {
+            throw new IOException("Failed to bind to " + clazz.getName(), e);
+        }
+    }
+
+    private static Method findSetter(Class<?> clazz, String setterName) {
+        for (Method m : clazz.getDeclaredMethods()) {
+            if (m.getName().equals(setterName) && m.getParameterCount() == 1) {
+                return m;
+            }
+        }
+        return null;
+    }
+
+    private static Field findField(Class<?> clazz, String fieldName) {
+        for (Field f : clazz.getDeclaredFields()) {
+            if (f.getName().equalsIgnoreCase(fieldName) || f.getName().equals(fieldName)) {
+                return f;
+            }
+        }
+        return null;
+    }
+
+    private static Object convertValue(Object value, Class<?> targetType) throws Exception {
+        if (value == null) return null;
+        if (targetType.isInstance(value)) return value;
+
+        if (targetType == String.class) return String.valueOf(value);
+        if (targetType == int.class || targetType == Integer.class) {
+            if (value instanceof Number) return ((Number) value).intValue();
+            return Integer.parseInt(String.valueOf(value));
+        }
+        if (targetType == long.class || targetType == Long.class) {
+            if (value instanceof Number) return ((Number) value).longValue();
+            return Long.parseLong(String.valueOf(value));
+        }
+        if (targetType == double.class || targetType == Double.class) {
+            if (value instanceof Number) return ((Number) value).doubleValue();
+            return Double.parseDouble(String.valueOf(value));
+        }
+        if (targetType == float.class || targetType == Float.class) {
+            if (value instanceof Number) return ((Number) value).floatValue();
+            return Float.parseFloat(String.valueOf(value));
+        }
+        if (targetType == boolean.class || targetType == Boolean.class) {
+            if (value instanceof Boolean) return value;
+            String s = String.valueOf(value).toLowerCase();
+            return "true".equals(s) || "yes".equals(s) || "on".equals(s);
+        }
+        if (targetType == Instant.class && value instanceof String) {
+            return Instant.parse((String) value);
+        }
+        if (targetType == LocalDate.class && value instanceof String) {
+            return LocalDate.parse((String) value);
+        }
+        if (targetType == LocalDateTime.class && value instanceof String) {
+            return LocalDateTime.parse((String) value);
+        }
+        if (value instanceof Map && !targetType.isPrimitive() && targetType != Object.class) {
+            return bindMapTo((Map<?, ?>) value, (Class) targetType);
+        }
+        return value;
+    }
+
+    // =========================================================================
+    // Path-based navigation (RFC 6901 JSON Pointer)
+    // =========================================================================
+
+    /**
+     * Get value at JSON Pointer path (e.g. "/spec/replicas", "/items/0/name").
+     */
+    @SuppressWarnings("unchecked")
+    public static Object get(Object root, String path) {
+        if (root == null || path == null) return null;
+        String[] parts = parsePath(path);
+        Object cur = root;
+        for (int i = 0; i < parts.length; i++) {
+            if (cur == null) return null;
+            String part = parts[i];
+            if (cur instanceof Map) {
+                Map<?, ?> m = (Map<?, ?>) cur;
+                cur = m.get(part);
+            } else if (cur instanceof List) {
+                List<?> l = (List<?>) cur;
+                if ("-".equals(part)) {
+                    cur = l.isEmpty() ? null : l.get(l.size() - 1);
+                } else {
+                    int idx;
+                    try { idx = Integer.parseInt(part); }
+                    catch (NumberFormatException e) { return null; }
+                    if (idx < 0 || idx >= l.size()) return null;
+                    cur = l.get(idx);
+                }
+            } else {
+                return null;
+            }
+        }
+        return cur;
+    }
+
+    public static String getString(Object root, String path) {
+        Object v = get(root, path);
+        return v == null ? null : String.valueOf(v);
+    }
+
+    public static int getInt(Object root, String path, int def) {
+        Object v = get(root, path);
+        if (v == null) return def;
+        if (v instanceof Number) return ((Number) v).intValue();
+        try { return Integer.parseInt(String.valueOf(v).trim()); }
+        catch (NumberFormatException e) { return def; }
+    }
+
+    public static long getLong(Object root, String path, long def) {
+        Object v = get(root, path);
+        if (v == null) return def;
+        if (v instanceof Number) return ((Number) v).longValue();
+        try { return Long.parseLong(String.valueOf(v).trim()); }
+        catch (NumberFormatException e) { return def; }
+    }
+
+    public static boolean getBool(Object root, String path, boolean def) {
+        Object v = get(root, path);
+        if (v == null) return def;
+        if (v instanceof Boolean) return (Boolean) v;
+        String s = String.valueOf(v).trim().toLowerCase();
+        if ("true".equals(s) || "yes".equals(s) || "on".equals(s)) return true;
+        if ("false".equals(s) || "no".equals(s) || "off".equals(s)) return false;
+        return def;
+    }
+
+    private static String[] parsePath(String path) {
+        if (path == null || path.isEmpty()) return new String[0];
+        if (!path.startsWith("/")) path = "/" + path;
+        return path.substring(1).split("/");
+    }
+
+    /**
+     * Set value at JSON Pointer path, creating intermediate structures.
+     */
+    @SuppressWarnings("unchecked")
+    public static Object set(Object root, String path, Object value) {
+        if (root == null) root = new LinkedHashMap<>();
+        if (!(root instanceof Map || root instanceof List)) {
+            throw new IllegalArgumentException("Root must be Map or List for set");
+        }
+        String[] parts = parsePath(path);
+        if (parts.length == 0) return value;
+
+        Object cur = root;
+        for (int i = 0; i < parts.length - 1; i++) {
+            String part = parts[i];
+            if (cur instanceof Map) {
+                Map<?, ?> m = (Map<?, ?>) cur;
+                Object existing = m.get(part);
+                if (existing == null) {
+                    existing = createContainer(parts, i + 1);
+                    ((Map<Object, Object>) cur).put(part, existing);
+                }
+                cur = existing;
+            } else if (cur instanceof List) {
+                List<?> l = (List<?>) cur;
+                int idx = "-".equals(part) ? l.size() - 1 : Integer.parseInt(part);
+                while (((List<?>) l).size() <= idx) {
+                    ((List<Object>) l).add(createContainer(parts, i + 1));
+                }
+                cur = l.get(idx);
+            }
+        }
+
+        String lastPart = parts[parts.length - 1];
+        if (cur instanceof Map) {
+            ((Map<Object, Object>) cur).put(lastPart, value);
+        } else if (cur instanceof List) {
+            List<?> l = (List<?>) cur;
+            int idx = "-".equals(lastPart) ? l.size() - 1 : Integer.parseInt(lastPart);
+            while (((List<?>) l).size() <= idx) {
+                ((List<Object>) l).add(null);
+            }
+            ((List<Object>) l).set(idx, value);
+        }
+        return root;
+    }
+
+    private static Object createContainer(String[] parts, int fromIndex) {
+        String next = fromIndex < parts.length ? parts[fromIndex] : null;
+        if (next != null) {
+            try { Integer.parseInt(next); return new ArrayList<>(); }
+            catch (NumberFormatException e) { return new LinkedHashMap<>(); }
+        }
+        return new LinkedHashMap<>();
+    }
+
+    /**
+     * Delete value at JSON Pointer path.
+     */
+    @SuppressWarnings("unchecked")
+    public static Object delete(Object root, String path) {
+        if (root == null || path == null) return root;
+        String[] parts = parsePath(path);
+        if (parts.length == 0) return root;
+
+        Object cur = root;
+        for (int i = 0; i < parts.length - 1; i++) {
+            if (cur instanceof Map) {
+                cur = ((Map<?, ?>) cur).get(parts[i]);
+            } else if (cur instanceof List) {
+                List<?> l = (List<?>) cur;
+                int idx = "-".equals(parts[i]) ? l.size() - 1 : Integer.parseInt(parts[i]);
+                if (idx < 0 || idx >= l.size()) return root;
+                cur = l.get(idx);
+            } else { return root; }
+            if (cur == null) return root;
+        }
+
+        String lastPart = parts[parts.length - 1];
+        if (cur instanceof Map) {
+            ((Map<?, ?>) cur).remove(lastPart);
+        } else if (cur instanceof List) {
+            List<?> l = (List<?>) cur;
+            int idx = "-".equals(lastPart) ? l.size() - 1 : Integer.parseInt(lastPart);
+            if (idx >= 0 && idx < l.size()) {
+                ((List<Object>) l).remove(idx);
+            }
+        }
+        return root;
+    }
+
+    // =========================================================================
+    // Deep merge
+    // =========================================================================
+
+    /**
+     * Deep merge two YAML documents. Values in override take precedence.
+     */
+    @SuppressWarnings("unchecked")
+    public static Map<String, Object> merge(Map<String, Object> base, Map<String, Object> override) {
+        if (base == null) return override != null ? new LinkedHashMap<>(override) : new LinkedHashMap<>();
+        if (override == null) return new LinkedHashMap<>(base);
+        Map<String, Object> result = new LinkedHashMap<>(base);
+        for (Map.Entry<String, Object> e : override.entrySet()) {
+            Object baseVal = result.get(e.getKey());
+            if (baseVal instanceof Map && e.getValue() instanceof Map) {
+                result.put(e.getKey(), merge((Map<String, Object>) baseVal, (Map<String, Object>) e.getValue()));
+            } else {
+                result.put(e.getKey(), deepCopy(e.getValue()));
+            }
+        }
+        return result;
+    }
+
+    public static Map<String, Object> mergeAll(Map<String, Object>... docs) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        for (Map<String, Object> doc : docs) {
+            if (doc != null) result = merge(result, doc);
+        }
+        return result;
+    }
+
+    private static Object deepCopy(Object o) {
+        if (o == null) return null;
+        if (o instanceof Map) {
+            Map<Object, Object> m = new LinkedHashMap<>();
+            for (Map.Entry<Object, Object> e : ((Map<Object, Object>) o).entrySet()) {
+                m.put(e.getKey(), deepCopy(e.getValue()));
+            }
+            return m;
+        }
+        if (o instanceof List) {
+            List<Object> l = new ArrayList<>();
+            for (Object item : (List<?>) o) l.add(deepCopy(item));
+            return l;
+        }
+        if (o instanceof byte[]) return ((byte[]) o).clone();
+        if (o instanceof int[]) return ((int[]) o).clone();
+        if (o instanceof long[]) return ((long[]) o).clone();
+        return o;
+    }
+
+    // =========================================================================
+    // Environment variable expansion
+    // =========================================================================
+
+    /**
+     * Expand ${VAR} and ${VAR:-default} in a string.
+     */
+    public static String expandEnv(String text) {
+        return expandEnv(text, System.getenv());
+    }
+
+    public static String expandEnv(String text, Map<String, String> env) {
+        if (text == null) return null;
+        java.util.regex.Pattern p = java.util.regex.Pattern.compile("\\$\\{([^}:]+)(?::-([^}]*))?\\}");
+        java.util.regex.Matcher m = p.matcher(text);
+        StringBuilder sb = new StringBuilder();
+        while (m.find()) {
+            String var = m.group(1);
+            String def = m.group(2);
+            String replacement = env.getOrDefault(var, def != null ? def : "");
+            m.appendReplacement(sb, java.util.regex.Matcher.quoteReplacement(replacement));
+        }
+        m.appendTail(sb);
+        return sb.toString();
+    }
+
+    /**
+     * Expand env vars recursively in a YAML document.
+     */
+    @SuppressWarnings("unchecked")
+    public static Object expandEnvDoc(Object doc) {
+        if (doc == null) return null;
+        if (doc instanceof String) return expandEnv((String) doc);
+        if (doc instanceof Map) {
+            Map<Object, Object> out = new LinkedHashMap<>();
+            for (Map.Entry<Object, Object> e : ((Map<Object, Object>) doc).entrySet()) {
+                out.put(e.getKey(), expandEnvDoc(e.getValue()));
+            }
+            return out;
+        }
+        if (doc instanceof List) {
+            List<Object> out = new ArrayList<>();
+            for (Object item : (List<?>) doc) out.add(expandEnvDoc(item));
+            return out;
+        }
+        return doc;
+    }
+
+    // =========================================================================
+    // Schema validation
+    // =========================================================================
+
+    /**
+     * Validate a document against a schema.
+     * Schema keys: required[], type, properties{}, items{}, enum[], pattern, minimum, maximum.
+     */
+    public static List<ValidationError> validate(Object doc, Map<String, Object> schema) {
+        List<ValidationError> errors = new ArrayList<>();
+        validateNode(doc, schema, "", errors);
+        return errors;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void validateNode(Object node, Map<String, Object> schema, String path,
+                                    List<ValidationError> errors) {
+        if (schema == null) return;
+
+        List<String> required = (List<String>) schema.get("required");
+        if (required != null && node instanceof Map) {
+            Map<?, ?> m = (Map<?, ?>) node;
+            for (String req : required) {
+                if (!m.containsKey(req)) {
+                    errors.add(new ValidationError(path + "/" + req, "required field missing"));
+                }
+            }
+        }
+
+        String expectedType = (String) schema.get("type");
+        if (expectedType != null && !validateType(node, expectedType)) {
+            errors.add(new ValidationError(path, "expected type " + expectedType + " but got " +
+                    (node == null ? "null" : node.getClass().getSimpleName())));
+        }
+
+        Map<String, Object> props = (Map<String, Object>) schema.get("properties");
+        if (props != null && node instanceof Map) {
+            Map<?, ?> m = (Map<?, ?>) node;
+            for (Map.Entry<String, Object> e : props.entrySet()) {
+                String key = e.getKey();
+                Object propSchema = e.getValue();
+                if (propSchema instanceof Map) {
+                    Object propVal = m.get(key);
+                    validateNode(propVal, (Map<String, Object>) propSchema, path + "/" + key, errors);
+                }
+            }
+        }
+
+        Map<String, Object> itemsSchema = (Map<String, Object>) schema.get("items");
+        if (itemsSchema != null && node instanceof List) {
+            List<?> l = (List<?>) node;
+            for (int i = 0; i < l.size(); i++) {
+                validateNode(l.get(i), itemsSchema, path + "/" + i, errors);
+            }
+        }
+
+        List<Object> enumVals = (List<Object>) schema.get("enum");
+        if (enumVals != null && node != null) {
+            boolean found = false;
+            for (Object ev : enumVals) {
+                if (Objects.equals(node, ev) || Objects.equals(String.valueOf(node), String.valueOf(ev))) {
+                    found = true; break;
+                }
+            }
+            if (!found) {
+                errors.add(new ValidationError(path, "value must be one of: " + enumVals));
+            }
+        }
+
+        String pattern = (String) schema.get("pattern");
+        if (pattern != null && node instanceof String) {
+            if (!((String) node).matches(pattern)) {
+                errors.add(new ValidationError(path, "value '" + node + "' does not match pattern: " + pattern));
+            }
+        }
+
+        if (node instanceof Number) {
+            Number n = (Number) node;
+            Object min = schema.get("minimum");
+            Object max = schema.get("maximum");
+            if (min instanceof Number && n.doubleValue() < ((Number) min).doubleValue()) {
+                errors.add(new ValidationError(path, "value " + n + " < minimum " + min));
+            }
+            if (max instanceof Number && n.doubleValue() > ((Number) max).doubleValue()) {
+                errors.add(new ValidationError(path, "value " + n + " > maximum " + max));
+            }
+        }
+    }
+
+    private static boolean validateType(Object node, String expectedType) {
+        if (node == null) return "null".equals(expectedType);
+        if ("string".equals(expectedType)) return node instanceof String;
+        if ("number".equals(expectedType)) return node instanceof Number;
+        if ("integer".equals(expectedType)) return node instanceof Number && !((Number) node).toString().contains(".");
+        if ("boolean".equals(expectedType)) return node instanceof Boolean;
+        if ("array".equals(expectedType) || "list".equals(expectedType)) return node instanceof List;
+        if ("object".equals(expectedType) || "map".equals(expectedType)) return node instanceof Map;
+        return true;
+    }
+
+    // =========================================================================
+    // Diff / Patch
+    // =========================================================================
+
+    /**
+     * Compute diff between two YAML documents.
+     */
+    public static YamlPatch diff(Object base, Object override) {
+        YamlPatch patch = new YamlPatch();
+        diffNodes(base, override, "", patch);
+        return patch;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void diffNodes(Object base, Object override, String path, YamlPatch patch) {
+        if (Objects.equals(base, override)) return;
+
+        if (base instanceof Map && override instanceof Map) {
+            Map<String, Object> bm = (Map<String, Object>) base;
+            Map<String, Object> om = (Map<String, Object>) override;
+            Set<String> allKeys = new LinkedHashSet<>();
+            allKeys.addAll(bm.keySet());
+            allKeys.addAll(om.keySet());
+            for (String key : allKeys) {
+                String childPath = path.isEmpty() ? "/" + key : path + "/" + key;
+                diffNodes(bm.get(key), om.get(key), childPath, patch);
+            }
+        } else if (base instanceof List && override instanceof List) {
+            List<Object> bl = (List<Object>) base;
+            List<Object> ol = (List<Object>) override;
+            int maxLen = Math.max(bl.size(), ol.size());
+            for (int i = 0; i < maxLen; i++) {
+                String childPath = path + "/" + i;
+                diffNodes(i < bl.size() ? bl.get(i) : null,
+                          i < ol.size() ? ol.get(i) : null, childPath, patch);
+            }
+        } else {
+            patch.add(new YamlPatch.Operation("replace", path, override));
+        }
+    }
+
+    /**
+     * Apply a patch to a document.
+     */
+    public static Object patch(Object doc, YamlPatch patch) {
+        Object result = deepCopy(doc);
+        for (YamlPatch.Operation op : patch.operations()) {
+            String opName = op.op;
+            if ("add".equals(opName) || "replace".equals(opName)) {
+                set(result, op.path, op.value);
+            } else if ("remove".equals(opName)) {
+                delete(result, op.path);
+            }
+        }
+        return result;
+    }
+
+    // =========================================================================
     // Navigation helpers (same spirit as HttpJson)
     // =========================================================================
 
     @SuppressWarnings("unchecked")
     public static Map<String, Object> asMap(Object o) {
         if (o == null) return Map.of();
-        if (o instanceof Map<?, ?> m) return (Map<String, Object>) m;
+        if (o instanceof Map) return (Map<String, Object>) o;
         throw new IllegalArgumentException("expected map, got " + o.getClass().getSimpleName());
     }
 
     @SuppressWarnings("unchecked")
     public static List<Object> asList(Object o) {
         if (o == null) return List.of();
-        if (o instanceof List<?> l) return (List<Object>) l;
+        if (o instanceof List) return (List<Object>) o;
         throw new IllegalArgumentException("expected list, got " + o.getClass().getSimpleName());
     }
 
     public static Object dig(Object root, String... path) {
-        Object cur = root;
-        for (String p : path) {
-            if (cur == null) return null;
-            if (cur instanceof Map<?, ?> m) cur = m.get(p);
-            else return null;
-        }
-        return cur;
+        return get(root, "/" + String.join("/", path));
     }
 
     public static String asString(Object o) {
@@ -140,25 +688,25 @@ public final class Yaml {
     }
 
     public static int asInt(Object o, int def) {
-        if (o instanceof Number n) return n.intValue();
-        if (o instanceof String s) {
-            try { return Integer.parseInt(s.trim()); } catch (NumberFormatException ignored) {}
+        if (o instanceof Number) return ((Number) o).intValue();
+        if (o instanceof String) {
+            try { return Integer.parseInt(((String) o).trim()); } catch (NumberFormatException ignored) {}
         }
         return def;
     }
 
     public static long asLong(Object o, long def) {
-        if (o instanceof Number n) return n.longValue();
-        if (o instanceof String s) {
-            try { return Long.parseLong(s.trim()); } catch (NumberFormatException ignored) {}
+        if (o instanceof Number) return ((Number) o).longValue();
+        if (o instanceof String) {
+            try { return Long.parseLong(((String) o).trim()); } catch (NumberFormatException ignored) {}
         }
         return def;
     }
 
     public static boolean asBool(Object o, boolean def) {
-        if (o instanceof Boolean b) return b;
-        if (o instanceof String s) {
-            String t = s.trim().toLowerCase(Locale.ROOT);
+        if (o instanceof Boolean) return (Boolean) o;
+        if (o instanceof String) {
+            String t = ((String) o).trim().toLowerCase();
             if ("true".equals(t) || "yes".equals(t) || "on".equals(t)) return true;
             if ("false".equals(t) || "no".equals(t) || "off".equals(t)) return false;
         }
@@ -181,10 +729,9 @@ public final class Yaml {
 
     private static final class Parser {
         final String[] rawLines;
-        int line; // current line index
+        int line;
 
         Parser(String text) {
-            // Normalize newlines; keep original content
             String norm = text.replace("\r\n", "\n").replace('\r', '\n');
             this.rawLines = norm.split("\n", -1);
             this.line = 0;
@@ -206,7 +753,6 @@ public final class Yaml {
                 if (line >= rawLines.length) break;
                 Object doc = parseBlock(0);
                 if (doc != null || !docs.isEmpty() || line < rawLines.length) {
-                    // allow null document only if explicit
                     docs.add(doc == null ? new LinkedHashMap<>() : doc);
                 }
                 skipEmptyAndComments();
@@ -214,16 +760,12 @@ public final class Yaml {
                     line++;
                     skipEmptyAndCommentsAndDocMarkers();
                 } else if (line < rawLines.length) {
-                    // next doc without marker — still accept as new if indent 0 key
                     skipEmptyAndCommentsAndDocMarkers();
                 }
             }
             return docs;
         }
 
-        /**
-         * Parse a block node whose content starts at indent {@code >= minIndent}.
-         */
         Object parseBlock(int minIndent) throws IOException {
             skipEmptyAndComments();
             if (line >= rawLines.length) return null;
@@ -234,17 +776,14 @@ public final class Yaml {
             if (L.content.startsWith("- ") || L.content.equals("-")) {
                 return parseList(L.indent);
             }
-            // flow
             if (L.content.startsWith("{") || L.content.startsWith("[")) {
                 Object v = parseFlow(L.content);
                 line++;
                 return v;
             }
-            // key: value or key:
             if (looksLikeMapEntry(L.content)) {
                 return parseMap(L.indent);
             }
-            // bare scalar
             Object v = parseScalar(L.content);
             line++;
             return v;
@@ -287,16 +826,6 @@ public final class Yaml {
             return map;
         }
 
-        /**
-         * After {@code key:} with empty inline value, parse nested map/list.
-         * Accepts both indented children and compact sequences at the same indent:
-         * <pre>
-         * key:
-         *   nested: 1
-         * key:
-         * - item   # same indent as key — common in kubeconfig
-         * </pre>
-         */
         Object parseNestedAfterKey(int keyIndent) throws IOException {
             skipEmptyAndComments();
             Line next = peekLine();
@@ -304,9 +833,7 @@ public final class Yaml {
             if (next.indent > keyIndent) {
                 return parseBlock(keyIndent + 1);
             }
-            // compact sequence: dash at same indent as the parent key
-            if (next.indent == keyIndent
-                    && (next.content.startsWith("- ") || next.content.equals("-"))) {
+            if (next.indent == keyIndent && (next.content.startsWith("- ") || next.content.equals("-"))) {
                 return parseList(keyIndent);
             }
             return null;
@@ -338,9 +865,6 @@ public final class Yaml {
                         item = null;
                     }
                 } else if (looksLikeMapEntry(rest)) {
-                    // inline map start on same line as "- key: val"
-                    // Put back a synthetic map parse at indent+2 conceptually:
-                    // We parse the rest as first map entry, then continue map at greater indent.
                     KeyVal kv = splitKeyVal(rest);
                     Map<String, Object> m = new LinkedHashMap<>();
                     if (kv.valuePart != null && !kv.valuePart.trim().isEmpty()) {
@@ -361,7 +885,6 @@ public final class Yaml {
                             m.put(kv.key, null);
                         }
                     }
-                    // more keys of the same list-item map
                     while (true) {
                         skipEmptyAndComments();
                         Line n = peekLine();
@@ -369,7 +892,6 @@ public final class Yaml {
                         if (n.indent <= indent) break;
                         if (n.content.startsWith("- ") || n.content.equals("-")) break;
                         if (!looksLikeMapEntry(n.content)) break;
-                        // nested map entries at n.indent
                         Map<String, Object> more = parseMap(n.indent);
                         m.putAll(more);
                         break;
@@ -388,20 +910,14 @@ public final class Yaml {
         }
 
         String parseLiteralBlock(int parentIndent, boolean literal) {
-            // Consume following lines with indent > parentIndent
             StringBuilder sb = new StringBuilder();
             int blockIndent = -1;
             while (line < rawLines.length) {
                 String raw = rawLines[line];
                 if (isDocStart(raw) || isDocEnd(raw)) break;
-                if (raw.isEmpty()) {
-                    sb.append('\n');
-                    line++;
-                    continue;
-                }
+                if (raw.isEmpty()) { sb.append('\n'); line++; continue; }
                 int ind = countIndent(raw);
                 String content = raw.substring(ind);
-                // comment-only lines inside block still count if indented
                 if (ind <= parentIndent && !raw.isBlank()) break;
                 if (blockIndent < 0 && !raw.isBlank()) blockIndent = ind;
                 if (blockIndent >= 0 && ind >= blockIndent) {
@@ -417,10 +933,8 @@ public final class Yaml {
             }
             String s = sb.toString();
             if (!literal) {
-                // folded: collapse single newlines to space (simplified)
                 s = s.replaceAll("(?<!\n)\n(?!\n)", " ").replaceAll("\n+", "\n").trim() + "\n";
             }
-            // chomp strip trailing newlines to single or none — keep one trailing stripped
             while (s.endsWith("\n\n")) s = s.substring(0, s.length() - 1);
             if (s.endsWith("\n")) s = s.substring(0, s.length() - 1);
             return s;
@@ -437,7 +951,6 @@ public final class Yaml {
             if (raw == null) return null;
             String s = raw.trim();
             if (s.isEmpty()) return "";
-            // strip inline comment if unquoted
             if (s.charAt(0) != '"' && s.charAt(0) != '\'') {
                 int hash = indexOfUnquotedComment(s);
                 if (hash >= 0) s = s.substring(0, hash).trim();
@@ -454,7 +967,6 @@ public final class Yaml {
             if ("null".equals(lower) || "~".equals(s) || "null".equals(s)) return null;
             if ("true".equals(lower) || "yes".equals(lower) || "on".equals(lower)) return Boolean.TRUE;
             if ("false".equals(lower) || "no".equals(lower) || "off".equals(lower)) return Boolean.FALSE;
-            // number
             if (isNumber(s)) {
                 try {
                     if (s.contains(".") || s.contains("e") || s.contains("E")) {
@@ -463,8 +975,7 @@ public final class Yaml {
                     long lv = Long.parseLong(s);
                     if (lv >= Integer.MIN_VALUE && lv <= Integer.MAX_VALUE) return (int) lv;
                     return lv;
-                } catch (NumberFormatException ignored) {
-                }
+                } catch (NumberFormatException ignored) {}
             }
             return s;
         }
@@ -519,14 +1030,12 @@ public final class Yaml {
         static boolean looksLikeMapEntry(String content) {
             if (content == null || content.isEmpty()) return false;
             if (content.startsWith("- ") || content.equals("-")) return false;
-            // find first unquoted ':'
             boolean inSingle = false, inDouble = false;
             for (int i = 0; i < content.length(); i++) {
                 char c = content.charAt(i);
                 if (c == '\'' && !inDouble) inSingle = !inSingle;
                 else if (c == '"' && !inSingle) inDouble = !inDouble;
                 else if (c == ':' && !inSingle && !inDouble) {
-                    // must not be part of URL-only midword without space — allow "key:" or "key: value"
                     if (i == 0) return false;
                     return true;
                 }
@@ -536,7 +1045,7 @@ public final class Yaml {
 
         static final class KeyVal {
             final String key;
-            final String valuePart; // null means key only with bare ':'
+            final String valuePart;
             KeyVal(String key, String valuePart) {
                 this.key = key;
                 this.valuePart = valuePart;
@@ -558,7 +1067,6 @@ public final class Yaml {
             if (colon < 0) throw new IOException("expected key: value in: " + content);
             String keyRaw = content.substring(0, colon).trim();
             String valRaw = content.substring(colon + 1);
-            // if valRaw is only spaces → empty value part meaning nested
             String key;
             if ((keyRaw.startsWith("\"") && keyRaw.endsWith("\""))
                     || (keyRaw.startsWith("'") && keyRaw.endsWith("'"))) {
@@ -568,7 +1076,6 @@ public final class Yaml {
                 key = keyRaw;
             }
             if (valRaw.isEmpty()) return new KeyVal(key, null);
-            // keep valuePart even if blank-ish for nested detection
             return new KeyVal(key, valRaw);
         }
 
@@ -606,7 +1113,6 @@ public final class Yaml {
             int ind = countIndent(raw);
             String content = raw.substring(ind);
             if (content.startsWith("#")) return null;
-            // strip trailing comment for structure detection only when not quoted start
             return new Line(ind, content, raw);
         }
 
@@ -615,7 +1121,7 @@ public final class Yaml {
             while (i < raw.length()) {
                 char c = raw.charAt(i);
                 if (c == ' ') i++;
-                else if (c == '\t') i += 2; // treat tab as 2
+                else if (c == '\t') i += 2;
                 else break;
             }
             return i;
@@ -679,7 +1185,7 @@ public final class Yaml {
         }
 
         Map<String, Object> parseObject() throws IOException {
-            next(); // {
+            next();
             Map<String, Object> map = new LinkedHashMap<>();
             skipWs();
             if (peek() == '}') { next(); return map; }
@@ -699,7 +1205,7 @@ public final class Yaml {
         }
 
         List<Object> parseArray() throws IOException {
-            next(); // [
+            next();
             List<Object> list = new ArrayList<>();
             skipWs();
             if (peek() == ']') { next(); return list; }
@@ -746,9 +1252,8 @@ public final class Yaml {
             int start = i;
             while (i < s.length()) {
                 char c = s.charAt(i);
-                if (c == ',' || c == ']' || c == '}' || c == ':' || c == '#' ) break;
+                if (c == ',' || c == ']' || c == '}' || c == ':' || c == '#') break;
                 if (c == ' ' || c == '\t') {
-                    // look ahead — stop plain at trailing spaces before delimiter
                     int j = i;
                     while (j < s.length() && (s.charAt(j) == ' ' || s.charAt(j) == '\t')) j++;
                     if (j >= s.length()) break;
@@ -786,7 +1291,8 @@ public final class Yaml {
                 sb.append("null");
                 return;
             }
-            if (value instanceof Map<?, ?> map) {
+            if (value instanceof Map) {
+                Map<?, ?> map = (Map<?, ?>) value;
                 if (map.isEmpty()) {
                     if (atLineStart) indentWrite(indent);
                     sb.append("{}");
@@ -794,25 +1300,17 @@ public final class Yaml {
                 }
                 boolean first = true;
                 for (Map.Entry<?, ?> e : map.entrySet()) {
-                    if (!first) {
-                        sb.append('\n');
-                        indentWrite(indent);
-                    } else if (atLineStart) {
-                        // nested block after "key:\n" — must emit indent even for first entry
-                        indentWrite(indent);
-                    } else {
-                        // shouldn't normally happen for block maps
-                        sb.append('\n');
-                        indentWrite(indent);
-                    }
+                    if (!first) { sb.append('\n'); indentWrite(indent); }
+                    else if (atLineStart) { indentWrite(indent); }
+                    else { sb.append('\n'); indentWrite(indent); }
                     first = false;
-                    String key = String.valueOf(e.getKey());
-                    sb.append(formatKey(key)).append(':');
+                    sb.append(formatKey(String.valueOf(e.getKey()))).append(':');
                     writeMapValue(e.getValue(), indent);
                 }
                 return;
             }
-            if (value instanceof Collection<?> col) {
+            if (value instanceof Collection) {
+                Collection<?> col = (Collection<?>) value;
                 if (col.isEmpty()) {
                     if (atLineStart) indentWrite(indent);
                     sb.append("[]");
@@ -820,40 +1318,26 @@ public final class Yaml {
                 }
                 boolean first = true;
                 for (Object item : col) {
-                    if (!first) {
-                        sb.append('\n');
-                        indentWrite(indent);
-                    } else if (atLineStart) {
-                        indentWrite(indent);
-                    } else {
-                        sb.append('\n');
-                        indentWrite(indent);
-                    }
+                    if (!first) { sb.append('\n'); indentWrite(indent); }
+                    else if (atLineStart) { indentWrite(indent); }
+                    else { sb.append('\n'); indentWrite(indent); }
                     first = false;
                     sb.append('-');
-                    if (item == null) {
-                        sb.append(' ').append("null");
-                    } else if (isScalar(item)) {
-                        sb.append(' ').append(formatScalar(item));
-                    } else if (item instanceof Map<?, ?> m) {
-                        if (m.isEmpty()) {
-                            sb.append(' ').append("{}");
-                        } else {
+                    if (item == null) sb.append(' ').append("null");
+                    else if (isScalar(item)) sb.append(' ').append(formatScalar(item));
+                    else if (item instanceof Map) {
+                        Map<?, ?> m = (Map<?, ?>) item;
+                        if (m.isEmpty()) sb.append(' ').append("{}");
+                        else {
                             boolean fk = true;
                             for (Map.Entry<?, ?> e : m.entrySet()) {
-                                if (fk) {
-                                    sb.append(' ').append(formatKey(String.valueOf(e.getKey()))).append(':');
-                                    writeMapValue(e.getValue(), indent + 2);
-                                    fk = false;
-                                } else {
-                                    sb.append('\n');
-                                    indentWrite(indent + 2);
-                                    sb.append(formatKey(String.valueOf(e.getKey()))).append(':');
-                                    writeMapValue(e.getValue(), indent + 2);
-                                }
+                                if (fk) sb.append(' ').append(formatKey(String.valueOf(e.getKey()))).append(':');
+                                else { sb.append('\n'); indentWrite(indent + 2); sb.append(formatKey(String.valueOf(e.getKey()))).append(':'); }
+                                writeMapValue(e.getValue(), indent + 2);
+                                fk = false;
                             }
                         }
-                    } else if (item instanceof Collection<?>) {
+                    } else if (item instanceof Collection) {
                         sb.append('\n');
                         dumpNode(item, indent + 2, true);
                     } else {
@@ -862,34 +1346,30 @@ public final class Yaml {
                 }
                 return;
             }
-            // scalar at block position
             if (atLineStart) indentWrite(indent);
             sb.append(formatScalar(value));
         }
 
-        /** Write value after {@code key:} — scalar inline, nested block on next line. */
         void writeMapValue(Object v, int keyIndent) {
-            if (v == null) {
-                sb.append(' ').append("null");
-            } else if (isScalar(v)) {
-                sb.append(' ').append(formatScalar(v));
-            } else if (v instanceof Map<?, ?> m2 && m2.isEmpty()) {
-                sb.append(' ').append("{}");
-            } else if (v instanceof Collection<?> c2 && c2.isEmpty()) {
-                sb.append(' ').append("[]");
-            } else {
-                sb.append('\n');
-                dumpNode(v, keyIndent + 2, true);
+            if (v == null) sb.append(' ').append("null");
+            else if (isScalar(v)) sb.append(' ').append(formatScalar(v));
+            else if (v instanceof Map) {
+                Map<?, ?> m2 = (Map<?, ?>) v;
+                if (m2.isEmpty()) sb.append(' ').append("{}");
+                else { sb.append('\n'); dumpNode(v, keyIndent + 2, true); }
             }
+            else if (v instanceof Collection) {
+                Collection<?> c2 = (Collection<?>) v;
+                if (c2.isEmpty()) sb.append(' ').append("[]");
+                else { sb.append('\n'); dumpNode(v, keyIndent + 2, true); }
+            }
+            else { sb.append('\n'); dumpNode(v, keyIndent + 2, true); }
         }
 
-        void indentWrite(int n) {
-            for (int i = 0; i < n; i++) sb.append(' ');
-        }
+        void indentWrite(int n) { for (int i = 0; i < n; i++) sb.append(' '); }
 
         static boolean isScalar(Object v) {
-            return v instanceof String || v instanceof Number || v instanceof Boolean
-                    || v instanceof Character;
+            return v instanceof String || v instanceof Number || v instanceof Boolean || v instanceof Character;
         }
 
         static String formatKey(String key) {
@@ -903,22 +1383,15 @@ public final class Yaml {
 
         static String formatScalar(Object v) {
             if (v == null) return "null";
-            if (v instanceof Boolean b) return b ? "true" : "false";
-            if (v instanceof Number n) {
-                double d = n.doubleValue();
+            if (v instanceof Boolean) return (Boolean) v ? "true" : "false";
+            if (v instanceof Number) {
+                double d = ((Number) v).doubleValue();
                 if (Double.isNaN(d) || Double.isInfinite(d)) return "null";
-                if (n instanceof Float || n instanceof Double) return Double.toString(d);
-                return n.toString();
+                if (v instanceof Float || v instanceof Double) return Double.toString(d);
+                return v.toString();
             }
             String s = String.valueOf(v);
             if (s.indexOf('\n') >= 0) {
-                // literal block
-                StringBuilder b = new StringBuilder("|\n");
-                String[] lines = s.split("\n", -1);
-                for (String line : lines) {
-                    b.append("  ").append(line).append('\n');
-                }
-                // caller expects inline use mostly — for multi-line return quoted
                 return quote(s);
             }
             if (needsQuoting(s) || s.isEmpty() || looksLikeNumber(s) || isBooleanish(s)

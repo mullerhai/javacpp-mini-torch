@@ -74,6 +74,8 @@ public final class ScatterChart extends BaseChart {
     }
 
     public ScatterChart setShowColorbar(boolean v) { this.showColorbar = v; return this; }
+    /** Current colorbar visibility (read-only view of {@link #setShowColorbar}). */
+    public boolean isShowColorbar() { return showColorbar; }
     public ScatterChart setColorbarLabel(String lab) { this.colorbarLabel = lab == null ? "" : lab; return this; }
 
     public ScatterChart setPointSize(int s) { this.pointSize = s; return this; }

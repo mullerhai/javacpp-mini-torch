@@ -21,7 +21,9 @@ package org.bytedeco.pytorch.llm.trl;
 
 import org.bytedeco.pytorch.Scalar;
 import org.bytedeco.pytorch.Tensor;
+import org.bytedeco.pytorch.TensorOptional;
 import org.bytedeco.pytorch.TensorVector;
+import org.bytedeco.pytorch.global.torch;
 import org.bytedeco.pytorch.llm.trl.config.EnsembleRewardConfig;
 import org.bytedeco.pytorch.nn.Module;
 import org.bytedeco.pytorch.optim.Optimizer;
@@ -127,14 +129,14 @@ public final class EnsembleRewardTrainer extends BaseTrainer {
             Tensor targetR = targetRewards.select(1, r);
 
             // MSE loss for each reward
-            Tensor lossR = predR.sub(targetR).pow(2).mean();
+            Tensor lossR = predR.sub(targetR).pow(new Scalar(2)).mean();
 
             // Update running statistics
             updateRewardStatistics(r, targetR.mean().item_double(), lossR.mean().item_double());
 
             // Weight the loss
             double weight = currentWeights[r];
-            Tensor weightedLoss = lossR.mul(weight);
+            Tensor weightedLoss = lossR.mul(new Scalar(weight));
 
             if (totalLoss == null) {
                 totalLoss = weightedLoss;
@@ -165,12 +167,15 @@ public final class EnsembleRewardTrainer extends BaseTrainer {
         Tensor prefProb = org.bytedeco.pytorch.global.torch.sigmoid(prefLogits);
 
         // Binary cross-entropy with target preference
-        // If chosen reward > rejected reward, target = 1
-        Tensor target = prefLogits.gt(0).select(prefLogits, 1.0);
+        // If chosen reward > rejected reward, target = 1, else 0
+        Tensor target = org.bytedeco.pytorch.global.torch.where(
+                prefLogits.gt(new Scalar(0)),
+                prefLogits.mul(new Scalar(0)).add(new Scalar(1)),
+                prefLogits.mul(new Scalar(0)));
 
         Tensor bceLoss = org.bytedeco.pytorch.global.torch.binary_cross_entropy(
-                prefProb, target, new Scalar(1.0),
-                org.bytedeco.pytorch.global.torch.Reduction.Mean);
+                prefProb, target, new TensorOptional(new Scalar(1.0)),
+                torch.Reduction.Mean.value);
 
         return bceLoss;
     }

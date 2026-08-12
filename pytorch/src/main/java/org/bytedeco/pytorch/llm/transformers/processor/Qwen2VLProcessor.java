@@ -20,6 +20,7 @@
 package org.bytedeco.pytorch.llm.transformers.processor;
 
 import org.bytedeco.pytorch.Tensor;
+import org.bytedeco.pytorch.TensorVector;
 import org.bytedeco.pytorch.global.torch;
 import org.bytedeco.pytorch.llm.tokenizers.FastTokenizer;
 
@@ -148,7 +149,16 @@ public class Qwen2VLProcessor implements Processor {
     public TextOutput processTextBatch(List<String> texts) {
         long start = System.currentTimeMillis();
         try {
-            int[] ids = tokenizer.encodeBatch(texts).ids();
+            List<org.bytedeco.pytorch.llm.tokenizers.Encoding> encodings =
+                    tokenizer.encodeBatch(texts, false);
+            int totalLen = 0;
+            for (var enc : encodings) totalLen += enc.ids().length;
+            int[] ids = new int[totalLen];
+            int pos = 0;
+            for (var enc : encodings) {
+                System.arraycopy(enc.ids(), 0, ids, pos, enc.ids().length);
+                pos += enc.ids().length;
+            }
             textProcessed.incrementAndGet();
             totalProcessingTimeMs.addAndGet(System.currentTimeMillis() - start);
             return new TextOutput(ids, null, 0);
@@ -196,7 +206,17 @@ public class Qwen2VLProcessor implements Processor {
             if (input.text() != null) {
                 inputIds = tokenizer.encode(input.text(), true).ids();
             } else if (input.texts() != null) {
-                inputIds = tokenizer.encodeBatch(input.texts()).ids();
+                // Flatten batch encodings
+                List<org.bytedeco.pytorch.llm.tokenizers.Encoding> encodings =
+                        tokenizer.encodeBatch(input.texts(), false);
+                int totalLen = 0;
+                for (var enc : encodings) totalLen += enc.ids().length;
+                inputIds = new int[totalLen];
+                int pos = 0;
+                for (var enc : encodings) {
+                    System.arraycopy(enc.ids(), 0, inputIds, pos, enc.ids().length);
+                    pos += enc.ids().length;
+                }
             } else {
                 inputIds = new int[0];
             }
@@ -214,7 +234,7 @@ public class Qwen2VLProcessor implements Processor {
                         .toArray(Tensor[]::new);
 
                 if (pixelTensors.length > 0) {
-                    pixelValues = torch.cat(Arrays.asList(pixelTensors), 0);
+                    pixelValues = torch.cat(new TensorVector(pixelTensors), 0);
                 }
 
                 // Calculate image grid (batch, temporal, height, width)

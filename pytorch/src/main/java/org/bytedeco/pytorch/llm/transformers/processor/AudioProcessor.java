@@ -19,6 +19,8 @@
  */
 package org.bytedeco.pytorch.llm.transformers.processor;
 
+import org.bytedeco.pytorch.Scalar;
+import org.bytedeco.pytorch.ScalarOptional;
 import org.bytedeco.pytorch.Tensor;
 import org.bytedeco.pytorch.global.torch;
 
@@ -171,7 +173,9 @@ public class AudioProcessor implements AutoCloseable {
             );
 
             // Log scale (log mel spectrogram)
-            Tensor logMel = torch.log(torch.clamp(melSpectrogram, 1e-10, Double.MAX_VALUE));
+            Tensor logMel = torch.log(torch.clamp(melSpectrogram,
+                    new ScalarOptional(new Scalar(1e-10)),
+                    new ScalarOptional(new Scalar(1e10))));
 
             // Compute number of frames
             int numFrames = (resampled.length - nFft) / hopLength + 1;
@@ -208,7 +212,7 @@ public class AudioProcessor implements AutoCloseable {
 
             // Copy tensor data (simplified)
             for (int i = 0; i < numSamples; i++) {
-                audioData[i] = audioTensor.get(i);
+                audioData[i] = (float) audioTensor.get(i).item().toDouble();
             }
 
             audioProcessed.incrementAndGet();
@@ -245,7 +249,9 @@ public class AudioProcessor implements AutoCloseable {
         );
 
         // Log scale
-        return torch.log(torch.clamp(melSpectrogram, 1e-10, Double.MAX_VALUE));
+        return torch.log(torch.clamp(melSpectrogram,
+                new ScalarOptional(new Scalar(1e-10)),
+                new ScalarOptional(new Scalar(1e10))));
     }
 
     /**
@@ -316,7 +322,7 @@ public class AudioProcessor implements AutoCloseable {
     private float[] computeMelFilterBank() {
         // Compute mel frequency points
         double fMin = 0;
-        double fMax = melToHertz(hertzToMel(fMax) - 1000);
+        double fMax = sampleRate / 2.0;
 
         double[] melPoints = new double[nMels + 2];
         for (int i = 0; i < nMels + 2; i++) {

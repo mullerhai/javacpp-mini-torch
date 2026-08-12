@@ -105,7 +105,7 @@ public class MiniMaxVisionConfig {
      * Create config from JSON string.
      */
     @SuppressWarnings("unchecked")
-    public static MiniMaxVisionConfig fromJson(String json) {
+    public static MiniMaxVisionConfig fromJson(String json) throws IOException {
         Map<String, Object> m = Json.decodeObject(json);
         Builder builder = builder();
 

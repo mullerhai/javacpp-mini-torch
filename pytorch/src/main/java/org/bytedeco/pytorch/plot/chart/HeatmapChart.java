@@ -14,6 +14,8 @@ public final class HeatmapChart extends BaseChart {
     private String cmap = "coolwarm";
     private Double vmin = null;
     private Double vmax = null;
+    /** Whether to render a vertical color-scale bar to the right of the plot (matplotlib {@code plt.colorbar}). */
+    private boolean showColorbar = false;
 
     public HeatmapChart(String title, double[][] matrix, List<String> rowLabels, List<String> colLabels) {
         super(title);
@@ -25,6 +27,10 @@ public final class HeatmapChart extends BaseChart {
     public HeatmapChart setShowValues(boolean v) { this.showValues = v; return this; }
     /** Alias of setShowValues — seaborn {@code annot=True}. */
     public HeatmapChart setAnnot(boolean v) { return setShowValues(v); }
+    /** Toggle the right-hand color-scale bar (matplotlib {@code plt.colorbar}). */
+    public HeatmapChart setShowColorbar(boolean v) { this.showColorbar = v; return this; }
+    /** Current colorbar visibility. */
+    public boolean isShowColorbar() { return showColorbar; }
     public HeatmapChart setCmap(String name) {
         this.cmap = name == null ? "coolwarm" : name.toLowerCase(Locale.ROOT);
         return this;
@@ -101,6 +107,28 @@ public final class HeatmapChart extends BaseChart {
                 FontMetrics fm = g.getFontMetrics();
                 g.drawString(lab, left + c * cellW + (cellW - fm.stringWidth(lab)) / 2, top + plotH + 14);
             }
+        }
+
+        // Color-scale bar on the right (matplotlib plt.colorbar). Vertical strip.
+        if (showColorbar) {
+            int barW = 14;
+            int barX = width - 30;
+            int barY0 = top;
+            int barY1 = top + plotH;
+            int barH = barY1 - barY0;
+            // gradient (low → high)
+            for (int i = 0; i < barH; i++) {
+                float t = 1f - (float) i / Math.max(1, barH - 1);
+                g.setColor(mapColor(t, cmap));
+                g.drawLine(barX, barY0 + i, barX + barW, barY0 + i);
+            }
+            g.setColor(Color.DARK_GRAY);
+            g.drawRect(barX, barY0, barW, barH);
+            // tick labels (lo / hi)
+            g.setFont(new Font("SansSerif", Font.PLAIN, 10));
+            FontMetrics fm = g.getFontMetrics();
+            g.drawString(formatTick(hi), barX + barW + 3, barY0 + fm.getAscent() - 2);
+            g.drawString(formatTick(lo), barX + barW + 3, barY1 - 2);
         }
         g.dispose();
         return img;

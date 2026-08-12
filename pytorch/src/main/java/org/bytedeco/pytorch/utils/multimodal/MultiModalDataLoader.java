@@ -22,14 +22,14 @@
 package org.bytedeco.pytorch.utils.multimodal;
 
 import org.bytedeco.pytorch.Tensor;
+import org.bytedeco.pytorch.TensorVector;
 import org.bytedeco.pytorch.global.torch;
 
-import java.io.Closeable;
 import java.nio.file.Path;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.function.Consumer;
+import java.util.LinkedHashMap;
 
 /**
  * Enterprise-grade multi-modal data loader for image, video, and audio.
@@ -105,17 +105,17 @@ public class MultiModalDataLoader implements Iterable<MultiModalBatch>, AutoClos
 
     @Override
     public Iterator<MultiModalBatch> iterator() {
-        return new DataLoaderIterator();
+        return new BatchIterator();
     }
 
     /**
      * Data loader iterator.
      */
-    private class DataLoaderIterator implements Iterator<MultiModalBatch> {
+    private class BatchIterator implements Iterator<MultiModalBatch> {
         private int currentIndex = 0;
         private final List<Integer> indices;
 
-        DataLoaderIterator() {
+        BatchIterator() {
             this.indices = new ArrayList<>(imagePaths.size());
             for (int i = 0; i < imagePaths.size(); i++) indices.add(i);
             if (shuffle) {
@@ -179,15 +179,21 @@ public class MultiModalDataLoader implements Iterable<MultiModalBatch>, AutoClos
             }
 
             // Stack into batch tensors
-            Tensor imageBatch = images.isEmpty() ? null : torch.stack(images, 0);
-            Tensor audioBatch = audios.isEmpty() ? null : torch.stack(audios, 0);
+            Tensor imageBatch = images.isEmpty() ? null : torch.stack(new TensorVector(images.toArray(new Tensor[0])), 0);
+            Tensor audioBatch = audios.isEmpty() ? null : torch.stack(new TensorVector(audios.toArray(new Tensor[0])), 0);
 
             currentIndex = end;
             totalBatches.incrementAndGet();
             totalItems.addAndGet(batchIndices.size());
             totalTimeMs.addAndGet(System.currentTimeMillis() - start);
 
-            return new MultiModalBatch(imageBatch, audioBatch, null, batchIndices);
+            // Build batch data map
+            Map<String, Object> batchData = new LinkedHashMap<>();
+            if (imageBatch != null) batchData.put("images", imageBatch);
+            if (audioBatch != null) batchData.put("audios", audioBatch);
+            batchData.put("indices", batchIndices);
+
+            return new MultiModalBatch(batchData, batchIndices.size());
         }
     }
 
@@ -249,29 +255,6 @@ public class MultiModalDataLoader implements Iterable<MultiModalBatch>, AutoClos
     }
 
     // ============= Inner Types =============
-
-    /**
-     * Multi-modal batch containing all modalities.
-     */
-    public static class MultiModalBatch {
-        private final Tensor images;     // [B, C, H, W]
-        private final Tensor audios;     // [B, F, T]
-        private final Tensor videos;     // [B, T, C, H, W]
-        private final List<Integer> indices;
-
-        public MultiModalBatch(Tensor images, Tensor audios, Tensor videos, List<Integer> indices) {
-            this.images = images;
-            this.audios = audios;
-            this.videos = videos;
-            this.indices = indices;
-        }
-
-        public Tensor images() { return images; }
-        public Tensor audios() { return audios; }
-        public Tensor videos() { return videos; }
-        public List<Integer> indices() { return indices; }
-        public int size() { return indices.size(); }
-    }
 
     /**
      * Statistics.

@@ -138,7 +138,7 @@ public final class ConstitutionalAITrainer extends BaseTrainer {
         Tensor revisedResponse = reviseResponse(inputIds, initialResponse, critique);
 
         // Step 3: Compute loss
-        Tensor totalLoss;
+        Tensor totalLoss = null;
 
         if (config.useSLICF()) {
             // Supervised Learning from AI Feedback
@@ -149,7 +149,7 @@ public final class ConstitutionalAITrainer extends BaseTrainer {
             // RL from AI Feedback
             Tensor rlaifLoss = computeRLAIFLoss(inputIds, revisedResponse, critique);
             if (config.useSLICF()) {
-                totalLoss = totalLoss.add(rlaifLoss.mul(0.5));
+                totalLoss = totalLoss.add(rlaifLoss.mul(new Scalar(0.5)));
             } else {
                 totalLoss = rlaifLoss;
             }
@@ -206,8 +206,7 @@ public final class ConstitutionalAITrainer extends BaseTrainer {
         // Cross-entropy loss between response and target
         Tensor loss = org.bytedeco.pytorch.global.torch.cross_entropy(
                 logits.reshape(-1, logits.size(logits.dim() - 1)),
-                target.reshape(-1),
-                new Scalar("none")
+                target.reshape(-1)
         );
 
         return loss.mean();
@@ -228,7 +227,7 @@ public final class ConstitutionalAITrainer extends BaseTrainer {
 
         // Simplified advantage
         Tensor advantage = org.bytedeco.pytorch.global.torch.full_like(
-                logProbs.select(-1, 0), reward);
+                logProbs.select(-1, 0), new Scalar(reward));
 
         // Policy gradient
         Tensor pgLoss = logProbs.mul(advantage).neg().mean();
@@ -238,7 +237,7 @@ public final class ConstitutionalAITrainer extends BaseTrainer {
             Tensor refLogits = policyForward.forward(inputIds, null);
             Tensor refLogProbs = refLogits.log_softmax(-1);
             Tensor klDiv = logProbs.sub(refLogProbs).mul(logProbs.exp());
-            pgLoss = pgLoss.add(new Scalar(config.critiqueWeight()).mul(klDiv.mean()));
+            pgLoss = pgLoss.add(new Scalar(config.critiqueWeight())).mul(new Scalar(klDiv.mean()));
         }
 
         return pgLoss;
@@ -260,9 +259,9 @@ public final class ConstitutionalAITrainer extends BaseTrainer {
         double honestWeight = config.honestyWeight();
         Tensor honestLoss = computeObjectiveLoss(inputIds, response, "honest");
 
-        return harmLoss.mul(harmWeight)
-                .add(helpLoss.mul(helpWeight))
-                .add(honestLoss.mul(honestWeight));
+        return harmLoss.mul(new Scalar(harmWeight))
+                .add(helpLoss.mul(new Scalar(helpWeight)))
+                .add(honestLoss.mul(new Scalar(honestWeight)));
     }
 
     private Tensor computeObjectiveLoss(Tensor inputIds, Tensor response, String objective) {

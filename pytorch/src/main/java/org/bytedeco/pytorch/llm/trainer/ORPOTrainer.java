@@ -127,7 +127,7 @@ public class ORPOTrainer implements AutoCloseable {
      * Compute log probabilities for a sequence.
      */
     private Tensor computeLogProbs(Module model, Tensor input) {
-        model.train();
+        model.train(true);
         // Simplified - real implementation would use log_softmax
         return torch.randn(new long[]{1});
     }

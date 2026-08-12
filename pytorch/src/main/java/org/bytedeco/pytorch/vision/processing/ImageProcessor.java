@@ -20,6 +20,7 @@
 package org.bytedeco.pytorch.vision.processing;
 
 import org.bytedeco.pytorch.Tensor;
+import org.bytedeco.pytorch.TensorVector;
 import org.bytedeco.pytorch.global.torch;
 import org.bytedeco.pytorch.global.torch.ScalarType;
 
@@ -150,7 +151,7 @@ public class ImageProcessor implements AutoCloseable {
         if (tensors.isEmpty()) {
             return torch.empty(0, 3, targetSize, targetSize);
         }
-        return torch.stack(tensors, 0);
+        return torch.stack(new TensorVector(tensors.toArray(new Tensor[0])), 0);
     }
 
     /**
@@ -177,7 +178,7 @@ public class ImageProcessor implements AutoCloseable {
             }
 
             mat.close();
-            totalBytes.addAndGet(tensor.nelement() * 4L);
+            totalBytes.addAndGet(tensor.numel() * 4L);
 
             return tensor;
 

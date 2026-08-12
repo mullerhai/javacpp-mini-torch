@@ -100,7 +100,7 @@ public class RLOOTrainer implements AutoCloseable {
             float[] rewardArray = new float[K];
             for (int i = 0; i < K; i++) {
                 logProbArray[i] = logProbs.select(0, i);
-                rewardArray[i] = rewards.get(i);
+                rewardArray[i] = (float) rewards.get(i).item().toDouble();
             }
 
             // 3. Compute advantage for each response

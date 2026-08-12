@@ -24,10 +24,7 @@ package org.bytedeco.pytorch.llm.trl;
 
 import org.bytedeco.javacpp.Loader;
 import org.bytedeco.javacpp.annotation.Properties;
-import org.bytedeco.pytorch.NoGradGuard;
-import org.bytedeco.pytorch.Scalar;
-import org.bytedeco.pytorch.Tensor;
-import org.bytedeco.pytorch.TensorVector;
+import org.bytedeco.pytorch.*;
 import org.bytedeco.pytorch.llm.trl.config.NashMDConfig;
 import org.bytedeco.pytorch.nn.Module;
 import org.bytedeco.pytorch.optim.Optimizer;
@@ -192,9 +189,9 @@ public final class NashMDTrainer extends BaseTrainer {
         double klTarget = nashConfig.klTarget();
         Tensor klLoss;
         if (klTarget > 0 && refKl != null) {
-            klLoss = refKl.sub(new Scalar(klTarget)).pow(2);
+            klLoss = refKl.sub(new Scalar(klTarget)).pow(new Scalar(2));
         } else if (klTarget > 0) {
-            klLoss = newLogprobs.sub(oldLogprobs.detach()).pow(2).mean();
+            klLoss = newLogprobs.sub(oldLogprobs.detach()).pow(new Scalar(2)).mean();
         } else {
             klLoss = zeros_like(policyLoss);
         }
@@ -215,7 +212,7 @@ public final class NashMDTrainer extends BaseTrainer {
 
         // Softmax over objectives to find equilibrium
         Tensor expRewards = rewards.div(new Scalar(temperature)).exp();
-        Tensor partition = expRewards.sum(1, true);
+        Tensor partition = expRewards.sum(new long[]{1}, true,new ScalarTypeOptional());
         Tensor weights = expRewards.div(partition);
 
         // Track running average for stability

@@ -18,15 +18,17 @@
  * limitations under the License.
  */
 package org.bytedeco.pytorch.llm.trainer;
+import org.bytedeco.pytorch.Tensor;
 import org.bytedeco.pytorch.optim.schedulers.*;
 
 import org.bytedeco.pytorch.amp.GradScaler;
-import org.bytedeco.pytorch.amp.config.AmpConfig;
 import org.bytedeco.pytorch.global.torch;
 import org.bytedeco.pytorch.nn.Module;
 import org.bytedeco.pytorch.optim.Optimizer;
-import org.bytedeco.pytorch.optim.lr_scheduler.LRScheduler;
-import org.bytedeco.pytorch.schedulers.WarmupScheduler;
+import org.bytedeco.pytorch.optim.schedulers.LRScheduler;
+import org.bytedeco.pytorch.optim.schedulers.ExponentialLR;
+import org.bytedeco.pytorch.serialize.InputArchive;
+import org.bytedeco.pytorch.serialize.OutputArchive;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -77,16 +79,10 @@ public class EnterpriseTrainerImpl implements EnterpriseTrainer {
 
         // Initialize AMP if enabled
         if (this.config.useAmp()) {
-            AmpConfig ampConfig = AmpConfig.builder()
-                    .enabled(true)
+            this.gradScaler = GradScaler.builder()
                     .initScale(this.config.ampInitScale())
                     .growthFactor(this.config.ampGrowthFactor())
                     .backoffFactor(this.config.ampBackoffFactor())
-                    .build();
-            this.gradScaler = GradScaler.builder()
-                    .initScale(ampConfig.initScale())
-                    .growthFactor(ampConfig.growthFactor())
-                    .backoffFactor(ampConfig.backoffFactor())
                     .build();
         } else {
             this.gradScaler = null;
@@ -311,7 +307,7 @@ public class EnterpriseTrainerImpl implements EnterpriseTrainer {
             return model.forward(input);
         } finally {
             if (state.get() == TrainingState.TRAINING) {
-                model.train();
+                model.train(true);
             }
         }
     }
@@ -391,11 +387,13 @@ public class EnterpriseTrainerImpl implements EnterpriseTrainer {
     @Override
     public void saveCheckpoint(String path) {
         try {
-            model.save(path);
+            OutputArchive archive = new OutputArchive();
+            model.save(archive);
+            archive.save_to(path);
             for (TrainingCallback cb : callbacks) {
                 try { cb.onCheckpointSave(this, path); } catch (Exception ignored) {}
             }
-        } catch (IOException e) {
+        } catch (Exception e) {
             throw new RuntimeException("Failed to save checkpoint: " + path, e);
         }
     }
@@ -403,11 +401,13 @@ public class EnterpriseTrainerImpl implements EnterpriseTrainer {
     @Override
     public void loadCheckpoint(String path) {
         try {
-            model.load(path);
+            InputArchive archive = new InputArchive();
+            archive.load_from(path);
+            model.load(archive);
             for (TrainingCallback cb : callbacks) {
                 try { cb.onCheckpointLoad(this, path); } catch (Exception ignored) {}
             }
-        } catch (IOException e) {
+        } catch (Exception e) {
             throw new RuntimeException("Failed to load checkpoint: " + path, e);
         }
     }

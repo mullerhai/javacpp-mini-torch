@@ -218,8 +218,7 @@ public final class STRTrainer extends BaseTrainer {
         Tensor finalOutput = reasoningChain[reasoningChain.length - 1];
         Tensor targetLoss = org.bytedeco.pytorch.global.torch.cross_entropy(
                 finalOutput.reshape(-1, finalOutput.size(finalOutput.dim() - 1)),
-                target.reshape(-1),
-                new Scalar("none")
+                target.reshape(-1)
         ).mean();
 
         // Reasoning bonus if enabled
@@ -250,7 +249,7 @@ public final class STRTrainer extends BaseTrainer {
                     critiqueLoss = critiqueLoss.add(critique.mean());
                 }
             }
-            critiqueLoss = critiqueLoss.mul(critiqueWeight);
+            critiqueLoss = critiqueLoss.mul(new Scalar(critiqueWeight));
         }
 
         return targetLoss.neg().add(reasoningBonus).sub(critiqueLoss);

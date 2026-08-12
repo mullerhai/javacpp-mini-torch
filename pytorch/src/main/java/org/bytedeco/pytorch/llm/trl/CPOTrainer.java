@@ -62,7 +62,7 @@ public final class CPOTrainer extends BaseTrainer {
     private final TensorVector params;
     private final double beta;
 
-    public CPO trainer(
+    public CPOTrainer(
             Module policy,
             LlmForward policyForward,
             Module reference,
@@ -83,7 +83,7 @@ public final class CPOTrainer extends BaseTrainer {
     }
 
     /** Policy-only constructor (no reference model). */
-    public CPO trainer(Module policy, LlmForward policyForward, Optimizer optimizer, CPOConfig config) {
+    public CPOTrainer(Module policy, LlmForward policyForward, Optimizer optimizer, CPOConfig config) {
         this(policy, policyForward, null, null, optimizer, config);
     }
 
@@ -144,14 +144,15 @@ public final class CPOTrainer extends BaseTrainer {
     private Tensor computeCpoLoss(Tensor chosenLogps, Tensor rejectedLogps) {
         // CPO Loss (similar to DPO but with contrastive term)
         Tensor logRatio = chosenLogps.sub(rejectedLogps);
-        Tensor cpoLoss = -logRatio.logaddexp(logRatio.div(new Scalar(beta)).neg()).mul(beta);
+        // CPO loss: -beta * log(1 + exp((log_ratio) / beta))
+        Tensor cpoLoss = logRatio.div(new Scalar(beta)).exp().add(new Scalar(1.0)).log().mul(new Scalar(-beta));
 
         // Contrastive loss: push chosen away from rejected with margin
         Tensor contrastiveLoss = computeContrastiveLoss(chosenLogps, rejectedLogps);
 
         // Combined loss
         double alpha = cpoConfig.contrastiveAlpha();
-        Tensor totalLoss = cpoLoss.add(new Scalar(alpha).mul(contrastiveLoss));
+        Tensor totalLoss = cpoLoss.add(contrastiveLoss.mul(new Scalar(alpha)));
 
         numTrainingSteps++;
         return totalLoss;
@@ -167,9 +168,8 @@ public final class CPOTrainer extends BaseTrainer {
         double margin = cpoConfig.margin();
         Tensor rewardDiff = chosenLogps.sub(rejectedLogps);
         Tensor marginTensor = org.bytedeco.pytorch.global.torch.full_like(
-                chosenLogps, margin);
-        return org.bytedeco.pytorch.global.torch.clamp_min(
-                marginTensor.sub(rewardDiff), 0);
+                chosenLogps, new Scalar(margin));
+        return marginTensor.sub(rewardDiff).clamp_min(new Scalar(0.0));
     }
 
     private static void freeze(Module m) {

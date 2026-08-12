@@ -19,6 +19,8 @@
  */
 package org.bytedeco.pytorch.llm.transformers.processor;
 
+import org.bytedeco.pytorch.global.torch;
+import org.bytedeco.pytorch.llm.tokenizers.Encoding;
 import org.bytedeco.pytorch.llm.tokenizers.FastTokenizer;
 import org.bytedeco.pytorch.utils.json.Json;
 
@@ -62,15 +64,15 @@ public class AutoProcessor {
 
     static {
         // Register default factories
-        registerFactory("qwen2_vl", Qwen2VLProcessor::builder);
-        registerFactory("qwen3_vl", Qwen2VLProcessor::builder);  // Qwen3-VL uses same processor
-        registerFactory("qwen_vl", Qwen2VLProcessor::builder);
-        registerFactory("minimax_vl", MiniMaxVLProcessor::builder);
-        registerFactory("llava", LlavaProcessor::builder);
-        registerFactory("cogvlm", CogVLMProcessor::builder);
-        registerFactory("idefics", IdeficsProcessor::builder);
-        registerFactory("fuyu", FuyuProcessor::builder);
-        registerFactory("paligemma", PaliGemmaProcessor::builder);
+        registerFactory("qwen2_vl", () -> Qwen2VLProcessor.builder().build());
+        registerFactory("qwen3_vl", () -> Qwen2VLProcessor.builder().build());  // Qwen3-VL uses same processor
+        registerFactory("qwen_vl", () -> Qwen2VLProcessor.builder().build());
+        registerFactory("minimax_vl", () -> MiniMaxVLProcessor.builder().build());
+        registerFactory("llava", () -> new LlavaProcessor());
+        registerFactory("cogvlm", () -> new CogVLMProcessor());
+        registerFactory("idefics", () -> new IdeficsProcessor());
+        registerFactory("fuyu", () -> new FuyuProcessor());
+        registerFactory("paligemma", () -> new PaliGemmaProcessor());
     }
 
     /**
@@ -78,31 +80,7 @@ public class AutoProcessor {
      */
     @FunctionalInterface
     public interface ProcessorFactory {
-        Builder create();
-    }
-
-    /**
-     * Abstract builder for processors.
-     */
-    public abstract static class Builder implements AutoCloseable {
-        protected FastTokenizer tokenizer;
-        protected Path modelPath;
-
-        public abstract Builder tokenizer(FastTokenizer tokenizer);
-        public abstract Builder modelPath(Path modelPath);
-        public abstract Processor build();
-
-        public Builder tokenizer(String tokenizerPath) {
-            try {
-                return tokenizer(FastTokenizer.fromFile(tokenizerPath));
-            } catch (IOException e) {
-                throw new RuntimeException("Failed to load tokenizer: " + tokenizerPath, e);
-            }
-        }
-
-        public Builder modelPath(String modelPath) {
-            return modelPath(Path.of(modelPath));
-        }
+        Processor create();
     }
 
     /**
@@ -180,9 +158,7 @@ public class AutoProcessor {
         String type = detectModelType(config);
         ProcessorFactory factory = REGISTERED_FACTORIES.get(type);
         if (factory != null) {
-            Builder builder = factory.create();
-            builder.modelPath(modelPath);
-            return builder.build();
+            return factory.create();
         }
 
         throw new IOException("Unknown processor type: " + processorClass + " / " + modelType);
@@ -254,7 +230,7 @@ public class AutoProcessor {
         // Load tokenizer
         Path tokenizerPath = modelPath.resolve("tokenizer.json");
         if (Files.exists(tokenizerPath)) {
-            builder.tokenizer(FastTokenizer.fromFile(tokenizerPath.toString()));
+            builder.tokenizer(FastTokenizer.fromFile(tokenizerPath));
         }
 
         // Configure from vision config
@@ -278,7 +254,7 @@ public class AutoProcessor {
         // Load tokenizer
         Path tokenizerPath = modelPath.resolve("tokenizer.json");
         if (Files.exists(tokenizerPath)) {
-            builder.tokenizer(FastTokenizer.fromFile(tokenizerPath.toString()));
+            builder.tokenizer(FastTokenizer.fromFile(tokenizerPath));
         }
 
         return builder.build();
@@ -286,19 +262,19 @@ public class AutoProcessor {
 
     private static Processor createLlava(Path modelPath, Map<String, Object> config) {
         // Llava processor (placeholder for full implementation)
-        return new LlavaProcessor(modelPath.toString());
+        return new LlavaProcessor();
     }
 
     private static Processor createCogVLM(Path modelPath, Map<String, Object> config) {
         // CogVLM processor (placeholder for full implementation)
-        return new CogVLMProcessor(modelPath.toString());
+        return new CogVLMProcessor();
     }
 
     @SuppressWarnings("unchecked")
     private static Processor createTextOnly(Path modelPath, Map<String, Object> config) throws IOException {
         Path tokenizerPath = modelPath.resolve("tokenizer.json");
         if (Files.exists(tokenizerPath)) {
-            return new TextOnlyProcessor(FastTokenizer.fromFile(tokenizerPath.toString()));
+            return new TextOnlyProcessor(FastTokenizer.fromFile(tokenizerPath));
         }
         throw new IOException("Tokenizer not found at: " + tokenizerPath);
     }
@@ -312,9 +288,7 @@ public class AutoProcessor {
             throw new IOException("Unknown processor type: " + processorType);
         }
 
-        Builder builder = factory.create();
-        builder.modelPath(modelPath);
-        return builder.build();
+        return factory.create();
     }
 
     /**
@@ -333,8 +307,8 @@ public class AutoProcessor {
         private volatile boolean closed;
         private final FastTokenizer tokenizer;
 
-        public LlavaProcessor(String modelPath) {
-            this.tokenizer = null;  // Would load from modelPath
+        public LlavaProcessor() {
+            this.tokenizer = null;
         }
 
         @Override public String version() { return "1.0"; }
@@ -360,7 +334,7 @@ public class AutoProcessor {
         private volatile boolean closed;
         private final FastTokenizer tokenizer;
 
-        public CogVLMProcessor(String modelPath) {
+        public CogVLMProcessor() {
             this.tokenizer = null;
         }
 
@@ -387,7 +361,7 @@ public class AutoProcessor {
         private volatile boolean closed;
         private final FastTokenizer tokenizer;
 
-        public IdeficsProcessor(String modelPath) {
+        public IdeficsProcessor() {
             this.tokenizer = null;
         }
 
@@ -414,7 +388,7 @@ public class AutoProcessor {
         private volatile boolean closed;
         private final FastTokenizer tokenizer;
 
-        public FuyuProcessor(String modelPath) {
+        public FuyuProcessor() {
             this.tokenizer = null;
         }
 
@@ -441,7 +415,7 @@ public class AutoProcessor {
         private volatile boolean closed;
         private final FastTokenizer tokenizer;
 
-        public PaliGemmaProcessor(String modelPath) {
+        public PaliGemmaProcessor() {
             this.tokenizer = null;
         }
 
@@ -494,8 +468,21 @@ public class AutoProcessor {
 
         @Override
         public TextOutput processTextBatch(List<String> texts) {
+            if (texts == null || texts.isEmpty()) {
+                return new TextOutput(new int[0], null, 0);
+            }
             long start = System.currentTimeMillis();
-            int[] ids = tokenizer.encodeBatch(texts).ids();
+            List<Encoding> encodings = tokenizer.encodeBatch(texts, true);
+            // Flatten all token IDs from all encodings
+            int totalLen = 0;
+            for (Encoding e : encodings) totalLen += e.ids().length;
+            int[] ids = new int[totalLen];
+            int pos = 0;
+            for (Encoding e : encodings) {
+                int[] eids = e.ids();
+                System.arraycopy(eids, 0, ids, pos, eids.length);
+                pos += eids.length;
+            }
             processingTimeMs += System.currentTimeMillis() - start;
             textProcessed += texts.size();
             return new TextOutput(ids, null, 0);

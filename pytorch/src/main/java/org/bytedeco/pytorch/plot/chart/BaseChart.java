@@ -51,6 +51,17 @@ public abstract class BaseChart {
     public BaseChart setTitle(String t) { this.title = t; return this; }
     public BaseChart setXAxisLabel(String label) { this.xAxisLabel = label; return this; }
     public BaseChart setYAxisLabel(String label) { this.yAxisLabel = label; return this; }
+
+    /** matplotlib {@code plt.title()}. */
+    public String title() { return title; }
+    /** matplotlib {@code plt.xlabel()}. */
+    public String xAxisLabel() { return xAxisLabel; }
+    /** matplotlib {@code plt.ylabel()}. */
+    public String yAxisLabel() { return yAxisLabel; }
+    /** Image width in pixels (after {@link #setSize}). */
+    public int getWidth() { return width; }
+    /** Image height in pixels (after {@link #setSize}). */
+    public int getHeight() { return height; }
     public BaseChart setSize(int width, int height) {
         this.width = width; this.height = height; return this;
     }

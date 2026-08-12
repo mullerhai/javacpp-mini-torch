@@ -21,7 +21,7 @@ package org.bytedeco.pytorch.amp;
 
 import org.bytedeco.pytorch.Device;
 import org.bytedeco.pytorch.Scalar;
-import org.bytedeco.pytorch.ScalarType;
+import org.bytedeco.pytorch.global.torch.ScalarType;
 import org.bytedeco.pytorch.Tensor;
 
 import java.util.ArrayList;

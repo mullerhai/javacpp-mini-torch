@@ -23,10 +23,7 @@ package org.bytedeco.pytorch.llm.trl;
 
 import org.bytedeco.javacpp.Loader;
 import org.bytedeco.javacpp.annotation.Properties;
-import org.bytedeco.pytorch.NoGradGuard;
-import org.bytedeco.pytorch.Scalar;
-import org.bytedeco.pytorch.Tensor;
-import org.bytedeco.pytorch.TensorVector;
+import org.bytedeco.pytorch.*;
 import org.bytedeco.pytorch.llm.trl.config.KTOConfig;
 import org.bytedeco.pytorch.nn.Module;
 import org.bytedeco.pytorch.optim.Optimizer;
@@ -218,7 +215,7 @@ public final class KTOTrainer extends BaseTrainer {
 
         // Sigmoid with temperature
         Tensor chosenProb = sigmoid(chosenAdvantage.sub(new Scalar(alpha)));
-        Tensor rejectedProb = sigmoid(new Scalar(alpha).sub(rejectedAdvantage));
+        Tensor rejectedProb = sigmoid(rejectedAdvantage.sub(new Scalar(alpha)));
 
         // Weighted loss
         Tensor chosenLoss = chosenProb.mul(new Scalar(gammaC)).neg();
@@ -236,8 +233,8 @@ public final class KTOTrainer extends BaseTrainer {
     private static Tensor sigmoid(Tensor x) {
         // sigmoid(x) = 1 / (1 + exp(-x))
         // For stability: use clamp on x first
-        Tensor clamped = x.clamp(-50, 50);
-        return clamped.neg().exp().add(1).recip();
+        Tensor clamped = x.clamp(new ScalarOptional(new Scalar(-50)), new ScalarOptional(new Scalar(50)));
+        return clamped.neg().exp().add(new Scalar(1)).reciprocal();
     }
 
     private static void freeze(Module m) {

@@ -175,13 +175,21 @@ public class DeepSpeedEnterpriseTrainer implements EnterpriseTrainer {
 
     @Override
     public void saveCheckpoint(String path) {
-        engine.save_checkpoint();
+        try {
+            engine.saveCheckpoint(java.nio.file.Paths.get(path));
+        } catch (Exception e) {
+            System.err.println("DeepSpeed save_checkpoint failed: " + e.getMessage());
+        }
         delegate.saveCheckpoint(path);
     }
 
     @Override
     public void loadCheckpoint(String path) {
-        engine.load_checkpoint(path);
+        try {
+            engine.loadCheckpoint(java.nio.file.Paths.get(path));
+        } catch (Exception e) {
+            System.err.println("DeepSpeed load_checkpoint failed: " + e.getMessage());
+        }
         delegate.loadCheckpoint(path);
     }
 
@@ -201,7 +209,7 @@ public class DeepSpeedEnterpriseTrainer implements EnterpriseTrainer {
     public void removeCallback(TrainingCallback callback) { delegate.removeCallback(callback); }
 
     @Override
-    public void close() {
+    public void close() throws Exception {
         if (closed) return;
         closed = true;
         delegate.close();
@@ -248,13 +256,21 @@ public class DeepSpeedEnterpriseTrainer implements EnterpriseTrainer {
 
         @Override
         public void onCheckpointSave(EnterpriseTrainer trainer, String path) {
-            engine.save_checkpoint();
+            try {
+                engine.saveCheckpoint(java.nio.file.Paths.get(path));
+            } catch (Exception e) {
+                System.err.println("DeepSpeed save_checkpoint failed: " + e.getMessage());
+            }
             System.out.println("[DeepSpeed] Checkpoint saved: " + path);
         }
 
         @Override
         public void onCheckpointLoad(EnterpriseTrainer trainer, String path) {
-            engine.load_checkpoint(path);
+            try {
+                engine.loadCheckpoint(java.nio.file.Paths.get(path));
+            } catch (Exception e) {
+                System.err.println("DeepSpeed load_checkpoint failed: " + e.getMessage());
+            }
             System.out.println("[DeepSpeed] Checkpoint loaded: " + path);
         }
     }

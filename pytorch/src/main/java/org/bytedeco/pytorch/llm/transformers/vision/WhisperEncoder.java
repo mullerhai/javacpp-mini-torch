@@ -19,11 +19,17 @@
  */
 package org.bytedeco.pytorch.llm.transformers.vision;
 
+import org.bytedeco.pytorch.Scalar;
 import org.bytedeco.pytorch.Tensor;
 import org.bytedeco.pytorch.global.torch;
 import org.bytedeco.pytorch.nn.Module;
 import org.bytedeco.pytorch.geometric.nn.norm.LayerNorm;
 import org.bytedeco.pytorch.llm.modules.RMSNorm;
+import org.bytedeco.pytorch.nn.modules.Conv1dImpl;
+import org.bytedeco.pytorch.nn.options.Conv1dOptions;
+import org.bytedeco.pytorch.nn.modules.EmbeddingImpl;
+import org.bytedeco.pytorch.nn.modules.LinearImpl;
+import org.bytedeco.javacpp.LongPointer;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -140,24 +146,18 @@ public class WhisperEncoder implements AutoCloseable {
 
         // Initialize conv layers (mel -> d_model)
         // Conv1d(in_channels=n_mel_bins, out_channels=d_model, kernel_size=3, padding=1)
-        this.conv1 = torch.nn.conv1d(
-                nMelBins, dModel,
-                new long[]{3},
-                new long[]{1},
-                new long[]{1}  // padding=1
-        );
+        Conv1dOptions conv1Opt = new Conv1dOptions(nMelBins, dModel, new LongPointer(new long[]{3}));
+        conv1Opt.stride(new LongPointer(new long[]{1}));
+        this.conv1 = new Conv1dImpl(conv1Opt);
 
         // Conv1d(in_channels=d_model, out_channels=d_model, kernel_size=3, stride=2, padding=1)
-        this.conv2 = torch.nn.conv1d(
-                dModel, dModel,
-                new long[]{3},
-                new long[]{2},
-                new long[]{1}
-        );
+        Conv1dOptions conv2Opt = new Conv1dOptions(dModel, dModel, new LongPointer(new long[]{3}));
+        conv2Opt.stride(new LongPointer(new long[]{2}));
+        this.conv2 = new Conv1dImpl(conv2Opt);
 
         // Initialize positional embedding
         int maxLen = builder.maxLen;
-        this.positionalEmbedding = torch.nn.embedding(maxLen, dModel);
+        this.positionalEmbedding = new EmbeddingImpl(maxLen, dModel);
 
         // Initialize transformer blocks
         this.blocks = new ArrayList<>();
@@ -195,7 +195,7 @@ public class WhisperEncoder implements AutoCloseable {
             // 4. Add positional embedding
             int seqLen = (int) x.size(1);
             Tensor posEmbed = positionalEmbedding.forward(
-                    torch.arange(0, seqLen)
+                    torch.arange(new Scalar(0), new Scalar(seqLen))
             );
             x = x.add(posEmbed);
 
@@ -229,7 +229,7 @@ public class WhisperEncoder implements AutoCloseable {
         // - Feed-forward network
         // - Layer normalization
         // - Residual connections
-        return torch.nn.linear(dModel, dModel);
+        return new LinearImpl(dModel, dModel);
     }
 
     /**

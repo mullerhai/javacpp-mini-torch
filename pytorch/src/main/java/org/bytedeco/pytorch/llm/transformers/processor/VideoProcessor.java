@@ -20,6 +20,7 @@
 package org.bytedeco.pytorch.llm.transformers.processor;
 
 import org.bytedeco.pytorch.Tensor;
+import org.bytedeco.pytorch.TensorVector;
 import org.bytedeco.pytorch.global.torch;
 
 import java.util.ArrayList;
@@ -182,7 +183,7 @@ public class VideoProcessor implements AutoCloseable {
             // Stack frames: [T, C, H, W]
             Tensor videoTensor;
             if (!processedFrames.isEmpty()) {
-                videoTensor = torch.stack(processedFrames, 0);
+                videoTensor = torch.stack(new TensorVector(processedFrames.toArray(new Tensor[0])), 0);
             } else {
                 videoTensor = torch.zeros(new long[]{numFrames, 3, targetHeight, targetWidth});
             }

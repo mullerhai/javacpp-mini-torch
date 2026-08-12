@@ -34,6 +34,7 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
 /**
@@ -234,16 +235,19 @@ public final class ExpertLoadBalancer implements AutoCloseable {
         // Get top-k expert assignments
         int batch = (int) routingOutput.sizes().get(0);
         int seq = (int) routingOutput.sizes().get(1);
-        int experts = (int) routingOutput.sizes().get(2);
+        int numExperts = (int) routingOutput.sizes().get(2);
 
         // Count tokens assigned to each expert
         for (int b = 0; b < batch; b++) {
             for (int s = 0; s < seq; s++) {
-                // Find expert with highest probability
-                double maxProb = 0;
+                // Find expert with highest probability using index_select
+                double maxProb = Double.NEGATIVE_INFINITY;
                 int bestExpert = 0;
-                for (int e = 0; e < experts; e++) {
-                    double prob = routingOutput.get(new long[]{b, s, e}).item().toDouble();
+                for (int e = 0; e < numExperts; e++) {
+                    // Use index_select to get the value at [b, s, e]
+                    Tensor idx = torch.tensor(new long[]{e}).to(org.bytedeco.pytorch.global.torch.ScalarType.Long);
+                    Tensor expertVal = routingOutput.select(2, e).select(0, b).select(0, s);
+                    double prob = expertVal.item().toDouble();
                     if (prob > maxProb) {
                         maxProb = prob;
                         bestExpert = e;

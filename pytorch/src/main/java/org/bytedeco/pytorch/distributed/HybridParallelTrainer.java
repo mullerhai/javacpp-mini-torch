@@ -27,7 +27,7 @@ import org.bytedeco.javacpp.Loader;
 import org.bytedeco.javacpp.annotation.Properties;
 import org.bytedeco.pytorch.Device;
 import org.bytedeco.pytorch.Scalar;
-import org.bytedeco.pytorch.ScalarType;
+import org.bytedeco.pytorch.global.torch.ScalarType;
 import org.bytedeco.pytorch.Tensor;
 import org.bytedeco.pytorch.nn.Module;
 import org.bytedeco.pytorch.optim.Optimizer;
@@ -225,7 +225,7 @@ public final class HybridParallelTrainer implements AutoCloseable {
         return new SubProcessGroupWrapper(pg, (r) -> {
             int[] c = compute3DCoords(r, dpSize, tpSize, ppSize);
             return c[1] == tpRank && c[2] == myStage;
-        });
+        }).parent;
     }
 
     private ProcessGroupWrapper createTpGroup() {
@@ -233,7 +233,7 @@ public final class HybridParallelTrainer implements AutoCloseable {
         return new SubProcessGroupWrapper(pg, (r) -> {
             int[] c = compute3DCoords(r, dpSize, tpSize, ppSize);
             return c[0] == dpRank && c[2] == myStage;
-        });
+        }).parent;
     }
 
     private ProcessGroupWrapper createPpGroup() {
@@ -241,7 +241,7 @@ public final class HybridParallelTrainer implements AutoCloseable {
         return new SubProcessGroupWrapper(pg, (r) -> {
             int[] c = compute3DCoords(r, dpSize, tpSize, ppSize);
             return c[0] == dpRank && c[1] == tpRank;
-        });
+        }).parent;
     }
 
     // ── Forward / backward ─────────────────────────────────────────────────

@@ -20,7 +20,7 @@ import org.bytedeco.javacpp.Loader;
 import org.bytedeco.javacpp.annotation.Properties;
 import org.bytedeco.pytorch.Device;
 import org.bytedeco.pytorch.Scalar;
-import org.bytedeco.pytorch.ScalarType;
+import org.bytedeco.pytorch.global.torch.ScalarType;
 import org.bytedeco.pytorch.Tensor;
 import org.bytedeco.pytorch.nn.Module;
 import org.bytedeco.pytorch.optim.Optimizer;
@@ -241,6 +241,18 @@ public final class DistributedCheckpointTrainer implements AutoCloseable {
      * Write a state dict Map to a binary file.
      * Format: JSON header + raw tensor data.
      */
+    private long estimateTensorSizeBytes(Tensor t) {
+        if (t == null || t.isNull() || !t.defined()) return 0;
+        long numel = t.numel();
+        if (numel <= 0) return 0;
+        return numel * Math.max(1, t.element_size());
+    }
+
+    private long estimateTensorBytes(Tensor t) {
+        if (t == null || t.isNull() || !t.defined()) return 0;
+        return t.numel() * Math.max(1, t.element_size());
+    }
+
     private void writeStateMap(Map<String, Object> state, Path file) throws IOException {
         if (state == null || state.isEmpty()) return;
 
@@ -283,11 +295,6 @@ public final class DistributedCheckpointTrainer implements AutoCloseable {
         }
     }
 
-    private long estimateTensorBytes(Tensor t) {
-        if (t == null || t.isNull() || !t.defined()) return 0;
-        return t.numel() * Math.max(1, t.element_size());
-    }
-
     private void writeTensorBinary(DataOutputStream out, Tensor t) throws IOException {
         if (t == null || t.isNull() || !t.defined()) {
             out.writeLong(0);
@@ -304,7 +311,9 @@ public final class DistributedCheckpointTrainer implements AutoCloseable {
             org.bytedeco.javacpp.FloatPointer p = cpu.data_ptr_float();
             for (int i = 0; i < ni; i++) data[i] = p.get((long) i);
         }
-        byte[] raw = ByteBuffer.allocate(ni * 4).order(ByteOrder.LITTLE_ENDIAN).put(data).array();
+        // Convert float[] to byte[] properly
+        byte[] raw = new byte[ni * 4];
+        ByteBuffer.wrap(raw).order(ByteOrder.LITTLE_ENDIAN).asFloatBuffer().put(data);
         out.writeLong(n);
         out.write(raw);
         if (cpu != t) {

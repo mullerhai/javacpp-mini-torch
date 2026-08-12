@@ -91,7 +91,7 @@ public final class Scheduler implements AutoCloseable {
         if (running.remove(seq)) return;
     }
 
-    public boolean isClosed() { return closed; }
+//    public boolean isClosed() { return closed; }
 
     /**
      * Return a list of running sequences that are not finished. */
@@ -100,12 +100,12 @@ public final class Scheduler implements AutoCloseable {
     }
 
     /** Number of waiting requests. */
-    public int waitingCount() { return waiting.size(); }
+//    public int waitingCount() { return waiting.size(); }
 
     /** Return a list of running sequences that are not finished. */
-    public List<Sequence> running() {
-        return running;
-    }
+//    public List<Sequence> running() {
+//        return running;
+//    }
 
     /** Number of waiting requests. */
     public int waitingCount() { return waiting.size(); }

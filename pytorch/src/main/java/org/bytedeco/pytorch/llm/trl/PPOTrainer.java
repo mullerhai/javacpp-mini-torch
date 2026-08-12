@@ -65,8 +65,6 @@ public final class PPOTrainer extends BaseTrainer {
     /**
      * Policy + value head forward for online PPO.
      *
-     * @param inputIds      {@code [B, T]}
-     * @param attentionMask optional
      * @return {@link PolicyValueOutput}
      */
     @FunctionalInterface

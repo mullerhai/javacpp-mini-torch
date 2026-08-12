@@ -166,20 +166,20 @@ public final class IPOTrainer extends BaseTrainer {
 
         // IPO-specific: apply tau parameter
         // The IPO loss uses: 1/(2*tau) * || log_ratio - tau ||^2
-        Tensor diff = policyLogRatio.sub(tau + margin);
+        Tensor diff = policyLogRatio.sub(new Scalar(tau + margin));
 
         // Quadratic loss
-        Tensor ipoLoss = diff.pow(2).div(2 * tau);
+        Tensor ipoLoss = diff.pow(new Scalar(2)).div(new Scalar(2 * tau));
 
         // Optional label smoothing
         double smoothing = config.labelSmoothing();
         if (smoothing > 0) {
             // Soft targets: blend with uniform preference
-            Tensor sigmoid = org.bytedeco.pytorch.global.torch.sigmoid(policyLogRatio.div(tau));
-            Tensor target = sigmoid.mul(1 - smoothing).add(smoothing / 2);
+            Tensor sigmoid = org.bytedeco.pytorch.global.torch.sigmoid(policyLogRatio.div(new Scalar(tau)));
+            Tensor target = sigmoid.mul(new Scalar(1 - smoothing)).add(new Scalar(smoothing / 2));
             Tensor crossEntropy = policyLogRatio.mul(target).sub(
                     org.bytedeco.pytorch.global.torch.log1p(policyLogRatio.exp()));
-            ipoLoss = ipoLoss.add(new Scalar(smoothing).mul(crossEntropy));
+            ipoLoss = ipoLoss.add(new Scalar(smoothing)).mul(crossEntropy);
         }
 
         numTrainingSteps++;

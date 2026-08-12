@@ -77,7 +77,6 @@ public class ClaudeProvider implements LLMProvider {
     public int maxContextLength() {
         switch (model) {
             case "claude-opus-4-20250514":
-            case "claude-opus-4-20250514":
                 return 200 * 1024;
             case "claude-3-5-sonnet-20241022":
             case "claude-3-5-haiku-20241022":

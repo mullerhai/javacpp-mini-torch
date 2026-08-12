@@ -118,16 +118,21 @@ public final class ActivationCheckpoint {
         checkpointCount++;
 
         if (trackStats) {
-            long size = result.elementSize() * result.numel();
-            memoryUsage.put(layerName + "_output", size);
+            long sizeBytes = estimateTensorSizeBytes(result);
+            memoryUsage.put(layerName + "_output", sizeBytes);
 
             if (strategy == CheckpointStrategy.ADAPTIVE) {
-                currentMemoryBytes += size;
+                currentMemoryBytes += sizeBytes;
                 maybeEvict();
             }
         }
 
         return result;
+    }
+
+    private long estimateTensorSizeBytes(Tensor t) {
+        if (t == null || !t.defined()) return 0;
+        return t.numel() * Math.max(1, t.element_size());
     }
 
     /**
@@ -144,9 +149,9 @@ public final class ActivationCheckpoint {
     public <T extends Tensor> T checkpointWithInput(String layerName, Tensor input, Supplier<T> compute) {
         boolean shouldCheckpoint = shouldCheckpoint(layerName);
 
-        if (trackStats) {
-            long inputSize = input.elementSize() * input.numel();
-            memoryUsage.put(layerName + "_input", inputSize);
+        if (trackStats && input != null) {
+            long inputSizeBytes = estimateTensorSizeBytes(input);
+            memoryUsage.put(layerName + "_input", inputSizeBytes);
         }
 
         if (!shouldCheckpoint) {

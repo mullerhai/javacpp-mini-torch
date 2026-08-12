@@ -37,9 +37,9 @@ public class KTOConfig extends TrainerConfig {
     private double klDelta = 0.1;        // Delta for KL target tracking
     private boolean usePerVersionLoss = false;  // Use loss_v1 or loss_v2
 
-    public KTOConfig() {
-        super();
-    }
+//    public KTOConfig() {
+//        super();
+//    }
 
     public KTOConfig(Builder b) {
         super(b);
@@ -89,7 +89,7 @@ public class KTOConfig extends TrainerConfig {
         public Builder() {}
 
         public Builder(KTOConfig config) {
-            super(config);
+//            super(config);
             this.beta = config.beta;
             this.gammaC = config.gammaC;
             this.gammaD = config.gammaD;

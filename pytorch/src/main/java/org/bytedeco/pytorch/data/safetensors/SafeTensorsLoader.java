@@ -458,7 +458,7 @@ public class SafeTensorsLoader implements AutoCloseable {
         return bufferToTensor(buf, meta.shape, dtype);
     }
 
-    private Tensor bufferToTensor(ByteBuffer buf, long[] shape, SafeDType dtype) {
+    private Tensor bufferToTensor(ByteBuffer buf, long[] shape, SafeDType dtype) throws IOException {
         long numElements = 1;
         for (long s : shape) numElements *= s;
 
@@ -658,7 +658,7 @@ public class SafeTensorsLoader implements AutoCloseable {
         private boolean asyncLoad = false;
         private int numThreads = 4;
         private Device device;
-        private ScalarType dtype;
+        private torch.ScalarType dtype;
         private boolean strict = false;
         private boolean verifyChecksum = false;
         private long maxCacheSize = 1024 * 1024 * 1024;  // 1GB
@@ -688,7 +688,7 @@ public class SafeTensorsLoader implements AutoCloseable {
             return this;
         }
 
-        public Builder dtype(ScalarType dtype) {
+        public Builder dtype(torch.ScalarType dtype) {
             this.dtype = dtype;
             return this;
         }

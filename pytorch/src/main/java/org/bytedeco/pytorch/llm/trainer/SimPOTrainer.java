@@ -19,6 +19,7 @@
  */
 package org.bytedeco.pytorch.llm.trainer;
 
+import org.bytedeco.pytorch.Scalar;
 import org.bytedeco.pytorch.Tensor;
 import org.bytedeco.pytorch.global.torch;
 import org.bytedeco.pytorch.nn.Module;
@@ -96,9 +97,9 @@ public class SimPOTrainer implements AutoCloseable {
 
             // 3. Compute Bradley-Terry style loss with margin
             // L = -log(sigmoid(beta * (log_ratio - gamma)))
-            Tensor margin = torch.ones_like(logRatio).mul(gamma);
+            Tensor margin = torch.ones_like(logRatio).mul(torch.tensor(gamma));
             Tensor logProbDiff = logRatio.sub(margin);
-            Tensor sigmoid = torch.sigmoid(logProbDiff.mul(beta));
+            Tensor sigmoid = torch.sigmoid(logProbDiff.mul(torch.tensor(beta)));
             Tensor loss = torch.neg(torch.log(sigmoid));
             double lossValue = loss.mean().item_double();
 

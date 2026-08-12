@@ -33,6 +33,8 @@ import org.bytedeco.pytorch.distributed.NativeFSDPTrainer;
 import org.bytedeco.pytorch.distributed.ProcessGroupWrapper;
 import org.bytedeco.pytorch.nn.Module;
 import org.bytedeco.pytorch.optim.Optimizer;
+import org.bytedeco.pytorch.amp.AmpManager;
+import org.bytedeco.pytorch.amp.AmpPrecision;
 import org.bytedeco.pytorch.amp.AutocastContext;
 import org.bytedeco.pytorch.llm.accelerate.plugins.DeepSpeedPlugin;
 import org.bytedeco.pytorch.llm.accelerate.plugins.FullyShardedDataParallelPlugin;
@@ -401,14 +403,13 @@ public final class Accelerator implements AutoCloseable {
     }
 
     private AutocastContext openAutocast() {
-        DeviceType dt = device.type();
         if ("bf16".equalsIgnoreCase(mixedPrecision)) {
-            return new AutocastContext(dt, org.bytedeco.pytorch.global.torch.ScalarType.BFloat16, true, true);
+            return AutocastContext.create(device, AmpPrecision.BF16);
         }
         if ("fp16".equalsIgnoreCase(mixedPrecision)) {
-            return new AutocastContext(dt, org.bytedeco.pytorch.global.torch.ScalarType.Half, true, true);
+            return AutocastContext.create(device, AmpPrecision.FP16);
         }
-        return new AutocastContext(dt, false);
+        return AutocastContext.DISABLED;
     }
 
     @Override

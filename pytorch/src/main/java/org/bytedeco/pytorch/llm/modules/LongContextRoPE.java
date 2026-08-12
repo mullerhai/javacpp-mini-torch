@@ -19,7 +19,9 @@
  */
 package org.bytedeco.pytorch.llm.modules;
 
+import org.bytedeco.pytorch.LongOptional;
 import org.bytedeco.pytorch.Tensor;
+import org.bytedeco.pytorch.TensorVector;
 import org.bytedeco.pytorch.global.torch;
 
 import java.util.concurrent.atomic.AtomicReference;
@@ -151,8 +153,9 @@ public class LongContextRoPE {
      */
     private Tensor[] applyStandard(Tensor queries, Tensor keys, Tensor positionIds) {
         // Standard RoPE without any extension
-        Tensor cos = computeCos(queries.dim() - 2, positionIds);
-        Tensor sin = computeSin(queries.dim() - 2, positionIds);
+        int dims = (int) (queries.dim() - 2);
+        Tensor cos = computeCos(dims, positionIds);
+        Tensor sin = computeSin(dims, positionIds);
 
         Tensor qRot = rotateHalf(queries);
         Tensor kRot = rotateHalf(keys);
@@ -175,19 +178,20 @@ public class LongContextRoPE {
         // 2. Scale positions
         float[] scaledPositions = new float[seqLen];
         for (int i = 0; i < seqLen; i++) {
-            float pos = positionIds.get(i);
+            float pos = (float) positionIds.get(i).item().toDouble();
             float scaled = pos * scaleFactor;
             // Apply affine transformation
-            float t = Math.min(1.0f, pos / betaFast) * Math.max(0.0f, Math.min(1.0f, (pos - originalContextLength) / (extendedContextLength - originalContextLength)));
-            scaledPositions[i] = scaled * (1 + t * (betaSlow / betaFast - 1));
+            float t = Math.min(1.0f, pos / (float) betaFast) * Math.max(0.0f, Math.min(1.0f, (pos - originalContextLength) / (float) (extendedContextLength - originalContextLength)));
+            scaledPositions[i] = scaled * (1 + t * ((float) betaSlow / (float) betaFast - 1));
         }
 
         // 3. Create scaled position tensor
         Tensor scaledPos = torch.tensor(scaledPositions);
 
         // 4. Apply RoPE with scaled positions
-        Tensor cos = computeCos(queries.dim() - 2, scaledPos);
-        Tensor sin = computeSin(queries.dim() - 2, scaledPos);
+        int dims = (int) (queries.dim() - 2);
+        Tensor cos = computeCos(dims, scaledPos);
+        Tensor sin = computeSin(dims, scaledPos);
 
         Tensor qRot = rotateHalf(queries);
         Tensor kRot = rotateHalf(keys);
@@ -208,11 +212,12 @@ public class LongContextRoPE {
         float scale = (float) Math.pow(originalContextLength / (float) Math.max(seqLen, originalContextLength), 4.0 / dimensions);
 
         // 2. Scale base frequency
-        float scaledBase = base * scale;
+        float scaledBase = (float) base * scale;
 
         // 3. Compute frequencies with scaled base
-        Tensor cos = computeCosNtk(queries.dim() - 2, positionIds, scaledBase);
-        Tensor sin = computeSinNtk(queries.dim() - 2, positionIds, scaledBase);
+        int dims = (int) (queries.dim() - 2);
+        Tensor cos = computeCosNtk(dims, positionIds, scaledBase);
+        Tensor sin = computeSinNtk(dims, positionIds, scaledBase);
 
         Tensor qRot = rotateHalf(queries);
         Tensor kRot = rotateHalf(keys);
@@ -235,14 +240,15 @@ public class LongContextRoPE {
             scale = 1.0f;
         } else {
             // Exponential decay
-            float alpha = (float) Math.log(seqLen / originalContextLength) / Math.log(extendedContextLength / originalContextLength);
+            var alpha = (float) Math.log(seqLen / originalContextLength) / Math.log(extendedContextLength / originalContextLength);
             scale = (float) Math.pow(extendedContextLength / originalContextLength, -alpha);
         }
 
         // Apply with dynamic scaling
-        float scaledBase = base * scale;
-        Tensor cos = computeCosNtk(queries.dim() - 2, positionIds, scaledBase);
-        Tensor sin = computeSinNtk(queries.dim() - 2, positionIds, scaledBase);
+        float scaledBase = (float) base * scale;
+        int dims = (int) (queries.dim() - 2);
+        Tensor cos = computeCosNtk(dims, positionIds, scaledBase);
+        Tensor sin = computeSinNtk(dims, positionIds, scaledBase);
 
         Tensor qRot = rotateHalf(queries);
         Tensor kRot = rotateHalf(keys);
@@ -266,7 +272,7 @@ public class LongContextRoPE {
 
         float[] interpolatedPositions = new float[seqLen];
         for (int i = 0; i < seqLen; i++) {
-            float pos = positionIds.get(i);
+            float pos = (float) positionIds.get(i).item().toDouble();
             if (pos < originalContextLength) {
                 // Linear interpolation
                 interpolatedPositions[i] = pos * ratio;
@@ -290,7 +296,7 @@ public class LongContextRoPE {
 
         float[] scaledPositions = new float[(int) positionIds.size(0)];
         for (int i = 0; i < scaledPositions.length; i++) {
-            scaledPositions[i] = positionIds.get(i) * ratio;
+            scaledPositions[i] = (float) positionIds.get(i).item().toDouble() * ratio;
         }
 
         Tensor scaledPos = torch.tensor(scaledPositions);
@@ -319,7 +325,7 @@ public class LongContextRoPE {
 
         for (int pos = 0; pos < seqLen; pos++) {
             for (int i = 0; i < dimensions; i += 2) {
-                float angle = positions.get(pos) * freqs[pos * dimensions + i];
+                float angle = positions.get(pos).item_float() * freqs[pos * dimensions + i];
                 cosValues[pos * dimensions + i] = (float) Math.cos(angle);
                 if (i + 1 < dimensions) {
                     cosValues[pos * dimensions + i + 1] = (float) Math.cos(angle);
@@ -340,7 +346,7 @@ public class LongContextRoPE {
 
         for (int pos = 0; pos < seqLen; pos++) {
             for (int i = 0; i < dimensions; i += 2) {
-                float angle = positions.get(pos) * freqs[pos * dimensions + i];
+                float angle = positions.get(pos).item_float() * freqs[pos * dimensions + i];
                 sinValues[pos * dimensions + i] = (float) Math.sin(angle);
                 if (i + 1 < dimensions) {
                     sinValues[pos * dimensions + i + 1] = (float) Math.sin(angle);
@@ -362,7 +368,7 @@ public class LongContextRoPE {
         for (int pos = 0; pos < seqLen; pos++) {
             for (int i = 0; i < dimensions; i += 2) {
                 float freq = (float) Math.pow(customBase, -2.0 * i / dimensions);
-                float angle = positions.get(pos) * freq;
+                float angle = positions.get(pos).item_float() * freq;
                 cosValues[pos * dimensions + i] = (float) Math.cos(angle);
                 if (i + 1 < dimensions) {
                     cosValues[pos * dimensions + i + 1] = (float) Math.cos(angle);
@@ -384,7 +390,7 @@ public class LongContextRoPE {
         for (int pos = 0; pos < seqLen; pos++) {
             for (int i = 0; i < dimensions; i += 2) {
                 float freq = (float) Math.pow(customBase, -2.0 * i / dimensions);
-                float angle = positions.get(pos) * freq;
+                float angle = positions.get(pos).item_float() * freq;
                 sinValues[pos * dimensions + i] = (float) Math.sin(angle);
                 if (i + 1 < dimensions) {
                     sinValues[pos * dimensions + i + 1] = (float) Math.sin(angle);
@@ -403,12 +409,12 @@ public class LongContextRoPE {
         // x[..., : dim/2] -> -x[..., dim/2:]
         // x[..., dim/2:] -> x[..., :dim/2]
         int headDim = dimensions;
-        Tensor x1 = x.slice(x.dim() - 1, 0, headDim / 2);
-        Tensor x2 = x.slice(x.dim() - 1, headDim / 2, headDim);
-        return torch.cat(new Tensor[]{
-                x2.neg(),
-                x1
-        }, x.dim() - 1);
+        Tensor x1 = x.slice(x.dim() - 1l, new LongOptional(0) , new LongOptional(headDim / 2),1);
+        Tensor x2 = x.slice(x.dim() - 1l, new LongOptional(headDim / 2),new LongOptional(headDim),1 );
+        TensorVector tv = new TensorVector();
+        tv.push_back(x2.neg());
+        tv.push_back(x1);
+        return torch.cat(tv, x.dim() - 1);
     }
 
     /**

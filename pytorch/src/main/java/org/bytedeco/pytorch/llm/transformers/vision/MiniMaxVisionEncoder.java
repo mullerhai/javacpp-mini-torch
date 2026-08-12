@@ -23,6 +23,11 @@ import org.bytedeco.pytorch.Tensor;
 import org.bytedeco.pytorch.global.torch;
 import org.bytedeco.pytorch.nn.Module;
 import org.bytedeco.pytorch.geometric.nn.norm.LayerNorm;
+import org.bytedeco.javacpp.LongPointer;
+import org.bytedeco.pytorch.nn.modules.Conv2dImpl;
+import org.bytedeco.pytorch.nn.options.Conv2dOptions;
+import org.bytedeco.pytorch.nn.modules.EmbeddingImpl;
+import org.bytedeco.pytorch.nn.modules.LinearImpl;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -96,15 +101,14 @@ public class MiniMaxVisionEncoder implements AutoCloseable {
         this.visionEmbedDim = builder.visionEmbedDim;
 
         // Initialize modules
-        this.patchEmbed = torch.nn.conv2d(
-                3, hiddenSize,
-                new long[]{patchSize, patchSize},
-                new long[]{patchSize, patchSize}
-        );
+        Conv2dOptions patchOpt = new Conv2dOptions(3, hiddenSize,
+                new LongPointer(new long[]{patchSize, patchSize}));
+        patchOpt.stride(new LongPointer(new long[]{patchSize, patchSize}));
+        this.patchEmbed = new Conv2dImpl(patchOpt);
 
         this.spatialMerge = createSpatialMergeModule();
 
-        this.projLayer = torch.nn.linear(hiddenSize, visionEmbedDim);
+        this.projLayer = new LinearImpl(hiddenSize, visionEmbedDim);
 
         // Initialize transformer blocks
         this.blocks = new ArrayList<>();
@@ -141,8 +145,12 @@ public class MiniMaxVisionEncoder implements AutoCloseable {
             // 4. Spatial merge (reduce sequence length)
             x = spatialMerge.forward(x);
 
-            // 5. Add position embedding
-            x = x.add(positionEmbedding);
+            // 5. Add position embedding (broadcast lookup across the batch)
+            int seqLen = (int) x.size(1);
+            Tensor posIdx = torch.arange(new org.bytedeco.pytorch.Scalar(0),
+                    new org.bytedeco.pytorch.Scalar(seqLen));
+            Tensor posEmbed = ((EmbeddingImpl) positionEmbedding).forward(posIdx);
+            x = x.add(posEmbed);
 
             // 6. Transformer blocks
             for (Module block : blocks) {
@@ -199,7 +207,11 @@ public class MiniMaxVisionEncoder implements AutoCloseable {
             x = x.reshape(batchSize, frames * seqPerFrame, hiddenSize);
 
             // Add position embedding
-            x = x.add(positionEmbedding);
+            int seqLen2 = (int) x.size(1);
+            Tensor posIdx2 = torch.arange(new org.bytedeco.pytorch.Scalar(0),
+                    new org.bytedeco.pytorch.Scalar(seqLen2));
+            Tensor posEmbed2 = ((EmbeddingImpl) positionEmbedding).forward(posIdx2);
+            x = x.add(posEmbed2);
 
             // Transformer blocks
             for (Module block : blocks) {
@@ -247,7 +259,7 @@ public class MiniMaxVisionEncoder implements AutoCloseable {
     private Module createSpatialMergeModule() {
         // Simple linear layer for spatial merging
         // In practice, this might be a more complex MLP
-        return torch.nn.linear(hiddenSize, hiddenSize);
+        return new LinearImpl(hiddenSize, hiddenSize);
     }
 
     private Module createTransformerBlock() {
@@ -257,13 +269,13 @@ public class MiniMaxVisionEncoder implements AutoCloseable {
         // - MLP
         // - Layer norm
         // - Residual connections
-        return torch.nn.linear(hiddenSize, hiddenSize);
+        return new LinearImpl(hiddenSize, hiddenSize);
     }
 
     private Module createPositionEmbedding() {
         // Learnable position embedding
         // [1, max_seq_len, hidden_size]
-        return torch.nn.embedding(1024, hiddenSize);
+        return new EmbeddingImpl(1024, hiddenSize);
     }
 
     /**

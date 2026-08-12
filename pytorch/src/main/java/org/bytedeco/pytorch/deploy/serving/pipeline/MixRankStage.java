@@ -71,7 +71,7 @@ public final class MixRankStage implements RankStage {
 
     /**
      * Default execute treats input as the organic queue only.
-     * For multi-queue, use {@link #mix(RequestContext, List, List)}.
+     * For multi-queue, use { #mix(RequestContext, List, List)}.
      */
     @Override
     public StageResult execute(RequestContext ctx, List<Candidate> input) {

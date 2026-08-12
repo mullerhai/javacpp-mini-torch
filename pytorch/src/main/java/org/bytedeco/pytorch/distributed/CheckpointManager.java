@@ -24,6 +24,7 @@ package org.bytedeco.pytorch.distributed;
 import org.bytedeco.pytorch.data.*;
 import org.bytedeco.pytorch.jit.*;
 import org.bytedeco.pytorch.optim.*;
+import org.bytedeco.pytorch.StringTensorDict;
 
 import org.bytedeco.pytorch.Tensor;
 import org.bytedeco.pytorch.nn.Module;
@@ -160,7 +161,7 @@ public final class CheckpointManager implements AutoCloseable {
      * @param step current training step
      * @return path to saved checkpoint
      */
-    public String save(Module model, Object optimizer, int step) {
+    public String save(Module model, Object optimizer, int step) throws IOException {
         return save(model, optimizer, step, null);
     }
 
@@ -173,7 +174,7 @@ public final class CheckpointManager implements AutoCloseable {
      * @param extraState extra state to save (e.g., learning rate scheduler)
      * @return path to saved checkpoint
      */
-    public String save(Module model, Object optimizer, int step, Map<String, Object> extraState) {
+    public String save(Module model, Object optimizer, int step, Map<String, Object> extraState) throws IOException {
         long start = System.nanoTime();
 
         CheckpointInfo info = new CheckpointInfo(step, start, checkpointDir, rank);
@@ -358,9 +359,16 @@ public final class CheckpointManager implements AutoCloseable {
     private void saveModelState(Module model, String path) throws IOException {
         // Get state dict from model
         Map<String, Tensor> stateDict = new HashMap<>();
-        for (String name : model.named_parameters()) {
-            Tensor param = model.get_parameter(name);
-            stateDict.put(name, param.clone());
+        StringTensorDict dict = model.named_parameters();
+        if (dict != null && !dict.isNull()) {
+            long n = dict.size();
+            for (long i = 0; i < n; i++) {
+                String name = dict.keys().get(i).getString();
+                Tensor param = dict.get(name);
+                if (param != null && param.defined()) {
+                    stateDict.put(name, param.clone());
+                }
+            }
         }
 
         // Save to file (simplified - real implementation would use PyTorch serialization)
@@ -537,7 +545,7 @@ public final class CheckpointManager implements AutoCloseable {
     /**
      * Cleanup old checkpoints keeping only maxCheckpoints.
      */
-    private void cleanupOldCheckpoints() {
+    private void cleanupOldCheckpoints() throws IOException {
         if (rank != 0 || maxCheckpoints <= 0) return;
 
         File dir = new File(checkpointDir);
@@ -565,7 +573,7 @@ public final class CheckpointManager implements AutoCloseable {
         return num.isEmpty() ? 0 : Integer.parseInt(num);
     }
 
-    private void deleteCheckpoint(String baseName) {
+    private void deleteCheckpoint(String baseName) throws IOException {
         String basePath = Paths.get(checkpointDir, baseName).toString();
         for (String suffix : new String[]{".model.pt", ".optim.pt", ".meta", ".zip"}) {
             Files.deleteIfExists(Paths.get(basePath + suffix));

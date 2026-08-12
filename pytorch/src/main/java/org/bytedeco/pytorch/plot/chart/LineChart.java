@@ -20,6 +20,42 @@ public final class LineChart extends BaseChart {
     private DrawStyle drawStyle = DrawStyle.DEFAULT;
     private final List<double[]> errorBars = new ArrayList<>(); // optional symmetric err per series
 
+    /** Figure-level super-title (matplotlib {@code plt.suptitle}). */
+    private String suptitle;
+
+    /** A horizontal or vertical reference line drawn over the axes (axhline / axvline). */
+    public static final class RefLine {
+        public enum Kind { HLINE, VLINE }
+        public final Kind kind;
+        public final double value;
+        public final Color color;
+        public final String linestyle;
+        public RefLine(Kind kind, double value, Color color, String linestyle) {
+            this.kind = kind; this.value = value; this.color = color;
+            this.linestyle = linestyle;
+        }
+    }
+
+    /** A text annotation placed on the axes (matplotlib {@code text} / {@code annotate}). */
+    public static final class Annotation {
+        public final double x;
+        public final double y;
+        public final String text;
+        /** For {@code annotate}: optional arrow-end coordinates (xytext). */
+        public final Double xytextX;
+        public final Double xytextY;
+        public Annotation(double x, double y, String text) {
+            this(x, y, text, null, null);
+        }
+        public Annotation(double x, double y, String text, Double xytextX, Double xytextY) {
+            this.x = x; this.y = y; this.text = text;
+            this.xytextX = xytextX; this.xytextY = xytextY;
+        }
+    }
+
+    private final List<RefLine> referenceLines = new ArrayList<>();
+    private final List<Annotation> annotations = new ArrayList<>();
+
     public LineChart(String title, double[] x, double[] y, String label) {
         super(title);
         this.x = x;
@@ -92,6 +128,42 @@ public final class LineChart extends BaseChart {
     @Override public LineChart setShowGrid(boolean v) { super.setShowGrid(v); return this; }
     @Override public LineChart setShowLegend(boolean v) { super.setShowLegend(v); return this; }
 
+    /** matplotlib {@code plt.suptitle(...)} — figure-level title above the axes. */
+    public LineChart setSuptitle(String s) { this.suptitle = s; return this; }
+    /** Getter for {@link #setSuptitle}. */
+    public String suptitle() { return suptitle; }
+
+    /** Reference lines added via {@code Matplotlib.axhline}/{@code axvline}. */
+    public List<RefLine> referenceLines() { return Collections.unmodifiableList(referenceLines); }
+    /** Set of reference-line kinds present on this chart ({@code "h"}, {@code "v"}). */
+    public java.util.Set<String> referenceLineKinds() {
+        java.util.Set<String> out = new java.util.HashSet<>();
+        for (RefLine r : referenceLines) {
+            out.add(r.kind == RefLine.Kind.HLINE ? "h" : "v");
+        }
+        return out;
+    }
+    /** Annotations added via {@code Matplotlib.text}/{@code Matplotlib.annotate}. */
+    public List<Annotation> annotations() { return Collections.unmodifiableList(annotations); }
+
+    /** Add a horizontal reference line (matplotlib {@code axhline}). */
+    public LineChart addRefHLine(double value, Color color, String linestyle) {
+        referenceLines.add(new RefLine(RefLine.Kind.HLINE, value, color, linestyle));
+        return this;
+    }
+
+    /** Add a vertical reference line (matplotlib {@code axvline}). */
+    public LineChart addRefVLine(double value, Color color, String linestyle) {
+        referenceLines.add(new RefLine(RefLine.Kind.VLINE, value, color, linestyle));
+        return this;
+    }
+
+    /** Add an annotation. */
+    public LineChart addAnnotation(Annotation a) {
+        annotations.add(a);
+        return this;
+    }
+
     @Override
     public BufferedImage render() {
         BufferedImage img = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
@@ -163,8 +235,53 @@ public final class LineChart extends BaseChart {
                 g.drawString(labels.get(s), lx + 16, ly + s * 16 + 11);
             }
         }
+
+        // Reference lines (axhline / axvline) — drawn on top of series
+        for (RefLine r : referenceLines) {
+            Color c = r.color != null ? r.color : Color.RED;
+            float[] dash = parseDash(r.linestyle);
+            g.setStroke(dash == null ? new BasicStroke(1.5f) : new BasicStroke(1.5f,
+                BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER, 10f, dash, 0f));
+            g.setColor(c);
+            if (r.kind == RefLine.Kind.HLINE) {
+                int py = mapYScaled(r.value, yr[0], yr[1], top, plotH);
+                g.drawLine(left, py, left + plotW, py);
+            } else {
+                int px = mapXScaled(r.value, xr[0], xr[1], left, plotW);
+                g.drawLine(px, top, px, top + plotH);
+            }
+        }
+
+        // Annotations (text / annotate)
+        g.setStroke(new BasicStroke(1f));
+        g.setColor(Color.BLACK);
+        g.setFont(new Font("SansSerif", Font.PLAIN, 11));
+        for (Annotation a : annotations) {
+            int px = mapXScaled(a.x, xr[0], xr[1], left, plotW);
+            int py = mapYScaled(a.y, yr[0], yr[1], top, plotH);
+            if (a.xytextX != null && a.xytextY != null) {
+                int tx = mapXScaled(a.xytextX, xr[0], xr[1], left, plotW);
+                int ty = mapYScaled(a.xytextY, yr[0], yr[1], top, plotH);
+                g.drawLine(px, py, tx, ty);
+                g.drawString(a.text, tx + 2, ty - 2);
+            } else {
+                g.drawString(a.text, px + 2, py - 2);
+            }
+        }
+
         g.dispose();
         return img;
+    }
+
+    /** Parse a matplotlib-style linestyle string into a dash array, or null for solid. */
+    private static float[] parseDash(String style) {
+        if (style == null) return null;
+        switch (style) {
+            case "--": return new float[]{6f, 3f};
+            case ":":  return new float[]{2f, 2f};
+            case "-.": return new float[]{6f, 3f, 2f, 3f};
+            default: return null;
+        }
     }
 
     private void drawSeriesLine(Graphics2D g, double[] xx, double[] y, int n,

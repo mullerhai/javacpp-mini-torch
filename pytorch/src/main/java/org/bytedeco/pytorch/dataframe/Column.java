@@ -10,6 +10,7 @@ import java.util.*;
 public final class Column implements AutoCloseable {
     /** Column data type. */
     public enum DType {
+//        INT8, INT16,
         INT32, INT64, FLOAT32, FLOAT64, BOOLEAN, STRING, TENSOR,
         DATE, DATETIME, TIME, DURATION,
         /** Dense float vector (cell value is float[]). Used for ANN/HNSW. */

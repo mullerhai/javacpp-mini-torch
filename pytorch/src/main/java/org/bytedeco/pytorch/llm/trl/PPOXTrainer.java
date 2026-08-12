@@ -19,10 +19,7 @@
  */
 package org.bytedeco.pytorch.llm.trl;
 
-import org.bytedeco.pytorch.NoGradGuard;
-import org.bytedeco.pytorch.Scalar;
-import org.bytedeco.pytorch.Tensor;
-import org.bytedeco.pytorch.TensorVector;
+import org.bytedeco.pytorch.*;
 import org.bytedeco.pytorch.llm.trl.config.PPOXConfig;
 import org.bytedeco.pytorch.nn.Module;
 import org.bytedeco.pytorch.optim.Optimizer;
@@ -158,10 +155,13 @@ public final class PPOXTrainer extends BaseTrainer {
         // Compute entropy bonus for exploration
         Tensor entropyLoss = computeEntropyLoss(logProbs);
 
-        // Combined loss
-        Tensor totalLoss = policyLoss
-                .add(new Scalar(config.valueLossCoeff()).mul(valueLoss))
-                .sub(new Scalar(config.entropyCoefficient()).mul(entropyLoss));
+        // Combined loss: policy + value_coef * value - entropy_coef * entropy
+        Tensor policyTerm = policyLoss;
+        Tensor valueTerm = policyLoss
+                .add(new Scalar(config.valueLossCoeff())).mul(valueLoss);
+        Tensor entropyTerm = policyLoss
+                .sub(new Scalar(config.entropyCoefficient())).mul(entropyLoss);
+        Tensor totalLoss = policyTerm.add(valueTerm).sub(entropyTerm);
 
         // Update adaptive clipping
         if (config.adaptiveClipping()) {
@@ -197,11 +197,13 @@ public final class PPOXTrainer extends BaseTrainer {
         Tensor advantages = org.bytedeco.pytorch.global.torch.zeros_like(rewards);
         Tensor returns = rewards.clone();
 
-        // Simplified GAE computation
+        // Simplified GAE computation (recurrent, in-place write through index_copy_)
         for (int i = batchSize - 2; i >= 0; i--) {
+            Tensor returnsNext = returns.select(0, i + 1);
             Tensor delta = returns.select(0, i)
-                    .add(gamma * returns.select(0, i + 1).mul(lambda));
-            advantages.set(advantages.select(0, i), delta);
+                    .add(returnsNext.mul(new Scalar(gamma * lambda)));
+            Tensor idx = org.bytedeco.pytorch.global.torch.tensor(new long[]{i});
+            advantages.index_copy_(0, idx, delta.unsqueeze(0));
         }
 
         return advantages;
@@ -212,11 +214,11 @@ public final class PPOXTrainer extends BaseTrainer {
 
         // Clipped surrogate objective
         Tensor surr1 = ratios.mul(advantages);
-        Tensor ratiosClipped = clamp(ratios, 1 - clipEps, 1 + clipEps);
+        Tensor ratiosClipped = clamp(ratios, new ScalarOptional(new Scalar(1 - clipEps)), new ScalarOptional(new Scalar(1 + clipEps)));
         Tensor surr2 = ratiosClipped.mul(advantages);
 
-        // Take minimum to get clipped loss
-        Tensor clippedLoss = surr1.lt(surr2).select(surr1, surr2);
+        // Take minimum to get clipped loss (elementwise min via torch.where)
+        Tensor clippedLoss = org.bytedeco.pytorch.global.torch.where(surr1.lt(surr2), surr1, surr2);
 
         return clippedLoss.neg().mean();
     }
@@ -231,16 +233,17 @@ public final class PPOXTrainer extends BaseTrainer {
 
         // Value clipping for stability
         double clipEps = config.valueClipRatio();
+        Scalar epsScalar = new Scalar(clipEps);
         Tensor valuesClipped = clamp(
                 values,
-                oldValues.sub(clipEps),
-                oldValues.add(clipEps)
+                new ScalarOptional(new Scalar(oldValues.sub(epsScalar))),
+                new ScalarOptional(new Scalar(oldValues.add(epsScalar)))
         );
 
-        Tensor loss1 = values.sub(advantages).pow(2);
-        Tensor loss2 = valuesClipped.sub(advantages).pow(2);
+        Tensor loss1 = values.sub(advantages).pow(new Scalar(2));
+        Tensor loss2 = valuesClipped.sub(advantages).pow(new Scalar(2));
 
-        return loss1.gt(loss2).select(loss1, loss2).mean();
+        return org.bytedeco.pytorch.global.torch.where(loss1.gt(loss2), loss1, loss2).mean();
     }
 
     private Tensor computeEntropyLoss(Tensor logProbs) {

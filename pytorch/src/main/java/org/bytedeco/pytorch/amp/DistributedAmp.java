@@ -21,7 +21,7 @@ package org.bytedeco.pytorch.amp;
 
 import org.bytedeco.pytorch.Device;
 import org.bytedeco.pytorch.Scalar;
-import org.bytedeco.pytorch.ScalarType;
+import org.bytedeco.pytorch.global.torch.ScalarType;
 import org.bytedeco.pytorch.Tensor;
 import org.bytedeco.pytorch.TensorVector;
 import org.bytedeco.pytorch.global.torch;
@@ -102,7 +102,7 @@ public class DistributedAmp implements AutoCloseable {
     private DistributedAmp(Builder builder) {
         this.worldSize = builder.worldSize;
         this.rank = builder.rank;
-        this.device = builder.device != null ? builder.device : new Device("cuda", (byte) 0);
+        this.device = builder.device != null ? builder.device : new Device(torch.DeviceType.CUDA, (byte) 0);
         this.reduceScatter = builder.reduceScatter;
         this.syncBatchNorm = builder.syncBatchNorm;
         this.averageGradients = builder.averageGradients;

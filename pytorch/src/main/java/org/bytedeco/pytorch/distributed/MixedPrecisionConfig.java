@@ -60,15 +60,15 @@ public final class MixedPrecisionConfig {
                 "param=" + param + ",reduce=" + reduce + ",buffer=" + buffer);
     }
 
-    public byte paramDtype() { return paramDtype; }
-    public byte reduceDtype() { return reduceDtype; }
+    public ScalarType paramDtype() { return ScalarType.values()[(int) paramDtype]; }
+    public ScalarType reduceDtype() { return ScalarType.values()[(int) reduceDtype]; }
     public byte bufferDtype() { return bufferDtype; }
     public String label() { return label; }
 
     public boolean isFullPrecision() {
-        return paramDtype == ScalarType.Float.value
-                && reduceDtype == ScalarType.Float.value
-                && bufferDtype == ScalarType.Float.value;
+        return paramDtype == (byte) ScalarType.Float.value
+                && reduceDtype == (byte) ScalarType.Float.value
+                && bufferDtype == (byte) ScalarType.Float.value;
     }
 
     @Override

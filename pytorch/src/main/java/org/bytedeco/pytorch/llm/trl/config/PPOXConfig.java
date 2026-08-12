@@ -50,6 +50,7 @@ public final class PPOXConfig extends TrainerConfig {
     private final boolean adaptiveClipping;
     private final double advantageLambda;
     private final double valueLossCoeff;
+    private final double entropyCoefficient;
     private final boolean useGAE;
     private final double gaeGamma;
     private final double gaeTau;
@@ -62,6 +63,7 @@ public final class PPOXConfig extends TrainerConfig {
         this.adaptiveClipping = b.adaptiveClipping;
         this.advantageLambda = b.advantageLambda;
         this.valueLossCoeff = b.valueLossCoeff;
+        this.entropyCoefficient = b.entropyCoefficient;
         this.useGAE = b.useGAE;
         this.gaeGamma = b.gaeGamma;
         this.gaeTau = b.gaeTau;
@@ -73,6 +75,7 @@ public final class PPOXConfig extends TrainerConfig {
     public boolean adaptiveClipping() { return adaptiveClipping; }
     public double advantageLambda() { return advantageLambda; }
     public double valueLossCoeff() { return valueLossCoeff; }
+    public double entropyCoefficient() { return entropyCoefficient; }
     public boolean useGAE() { return useGAE; }
     public double gaeGamma() { return gaeGamma; }
     public double gaeTau() { return gaeTau; }
@@ -86,6 +89,7 @@ public final class PPOXConfig extends TrainerConfig {
         private boolean adaptiveClipping = true;
         private double advantageLambda = 0.95;
         private double valueLossCoeff = 0.5;
+        private double entropyCoefficient = 0.01;
         private boolean useGAE = true;
         private double gaeGamma = 0.99;
         private double gaeTau = 0.95;
@@ -117,6 +121,11 @@ public final class PPOXConfig extends TrainerConfig {
 
         public Builder valueLossCoeff(double valueLossCoeff) {
             this.valueLossCoeff = Math.max(0, valueLossCoeff);
+            return this;
+        }
+
+        public Builder entropyCoefficient(double entropyCoefficient) {
+            this.entropyCoefficient = Math.max(0, entropyCoefficient);
             return this;
         }
 

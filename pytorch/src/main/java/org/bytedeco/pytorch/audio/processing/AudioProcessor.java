@@ -317,10 +317,13 @@ public class AudioProcessor implements AutoCloseable {
 
         for (int n = 0; n < nMfcc; n++) {
             for (int m = 0; m < nMels; m++) {
-                // melSpec was 2D tensor [nMels, numFrames] - flatten to [nMels] then take index m
-                float[] melFlat = melSpec.flatten().to(org.bytedeco.pytorch.global.torch.ScalarType.Float)
-                        .data_ptr().getFloatArray(nMels);
-                dct[n][m] = (float) (melFlat[m] * Math.cos(Math.PI * n * (m + 0.5) / nMels));
+                // melSpec was 2D tensor [nMels, numFrames] - use index access
+                Tensor melRow = melSpec.select(0, m);
+                float[] melFlat = new float[nFrames];
+                for (int f = 0; f < nFrames; f++) {
+                    melFlat[f] = melRow.select(0, f).item().toFloat();
+                }
+                dct[n][m] = (float) (melFlat[0] * Math.cos(Math.PI * n * (m + 0.5) / nMels));
             }
         }
 

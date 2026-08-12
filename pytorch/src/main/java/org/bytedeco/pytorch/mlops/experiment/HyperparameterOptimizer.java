@@ -18,9 +18,9 @@
  * limitations under the License.
  */
 package org.bytedeco.pytorch.mlops.experiment;
-import org.bytedeco.pytorch.jit.*;
 import org.bytedeco.pytorch.c10.*;
-
+import org.bytedeco.pytorch.jit.*;
+import java.util.concurrent.Future;
 import org.bytedeco.pytorch.mlops.tracking.ModelTracker;
 
 import java.io.Closeable;
@@ -139,7 +139,8 @@ public class HyperparameterOptimizer implements AutoCloseable {
                 .orElse(null);
 
         if (best != null) {
-            bestParams.putAll(best.trial().getParams());
+            Map<String, Double> bestTrialParams = toDoubleMap(best.trial().getParams());
+            bestParams.putAll(bestTrialParams);
             bestValue = best.value();
         }
 
@@ -170,7 +171,7 @@ public class HyperparameterOptimizer implements AutoCloseable {
                 if (value < bestValue) {
                     bestValue = value;
                     bestParams.clear();
-                    bestParams.putAll(trial.getParams());
+                    bestParams.putAll(toDoubleMap(trial.getParams()));
                 }
             }
 
@@ -396,6 +397,27 @@ public class HyperparameterOptimizer implements AutoCloseable {
         public double value() { return value; }
         public Exception error() { return error; }
         public boolean isSuccess() { return error == null; }
+    }
+
+    /**
+     * Convert Map&lt;String, Object&gt; to Map&lt;String, Double&gt; narrowing values.
+     */
+    private static Map<String, Double> toDoubleMap(Map<String, Object> in) {
+        Map<String, Double> out = new HashMap<>();
+        if (in == null) return out;
+        for (Map.Entry<String, Object> e : in.entrySet()) {
+            Object v = e.getValue();
+            if (v instanceof Number) {
+                out.put(e.getKey(), ((Number) v).doubleValue());
+            } else if (v != null) {
+                try {
+                    out.put(e.getKey(), Double.parseDouble(v.toString()));
+                } catch (NumberFormatException ignored) {
+                    // skip non-numeric values
+                }
+            }
+        }
+        return out;
     }
 
     /**
