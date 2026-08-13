@@ -410,9 +410,6 @@ public final class PyTorchModelLoader {
                 java.nio.MappedByteBuffer buf = channel.map(FileChannel.MapMode.READ_ONLY, pos, dataSize);
                 org.bytedeco.javacpp.BytePointer ptr = new org.bytedeco.javacpp.BytePointer(buf);
                 TensorOptions topts = new TensorOptions().dtype(new ScalarTypeOptional(scalarType));
-                if (opts.mapLocation() != null) {
-                    topts = topts.device(new DeviceOptional(opts.mapLocation()));
-                }
                 Tensor tensor = torch.from_blob(ptr, dims, topts);
                 channel.position(pos + dataSize);
 

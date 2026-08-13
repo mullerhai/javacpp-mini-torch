@@ -72,7 +72,7 @@ public class DataFrameShow {
     /**
      * Get schema string.
      */
-    public static String schemaString(DataFrame df) {
+    public static String getSchemaString(DataFrame df) {
         return new DataFrameShow().schemaString(df);
     }
 

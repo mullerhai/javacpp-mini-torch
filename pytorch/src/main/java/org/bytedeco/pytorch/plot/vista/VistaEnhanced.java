@@ -9,7 +9,7 @@ import org.bytedeco.pytorch.Tensor;
 import org.bytedeco.pytorch.data.safetensors.SafeTensors;
 import org.bytedeco.pytorch.data.serialize.*;
 import org.bytedeco.pytorch.inductor.AOTIModelPackageLoader;
-import org.bytedeco.pytorch.Module;
+import org.bytedeco.pytorch.nn.Module;
 
 /**
  * Enhanced Vista for model visualization with comprehensive format support
