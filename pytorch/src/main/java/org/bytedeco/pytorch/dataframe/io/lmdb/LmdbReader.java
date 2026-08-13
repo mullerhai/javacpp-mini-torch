@@ -516,7 +516,7 @@ public class LmdbReader {
         long rootPage;
     }
     
-    private class MdbIterator implements Iterator<LmdbEntry> {
+    private static class MdbIterator implements Iterator<LmdbEntry> {
         private final FileChannel channel;
         private final long pageSize;
         private final Queue<PageInfo> pageQueue;
@@ -669,10 +669,10 @@ public class LmdbReader {
         public static class FieldInfo {
             public String name;
             public String dtype;
-            public int count;
+            public long count;
             public String sample;
 
-            public FieldInfo(String name, String dtype, int count) {
+            public FieldInfo(String name, String dtype, long count) {
                 this.name = name;
                 this.dtype = dtype;
                 this.count = count;

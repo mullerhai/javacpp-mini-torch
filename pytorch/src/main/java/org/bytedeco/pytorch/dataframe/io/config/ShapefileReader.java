@@ -1,4 +1,4 @@
-package org.bytedeco.pytorch.dataframe.io.geo;
+package org.bytedeco.pytorch.dataframe.io.config;
 
 import org.bytedeco.pytorch.dataframe.Column;
 import org.bytedeco.pytorch.dataframe.DataFrame;
@@ -71,7 +71,7 @@ public class ShapefileReader {
         DataFrame df = DataFrame.create();
         df.addColumn("shape_id", Column.DType.INT32);
         df.addColumn("shape_type", Column.DType.STRING);
-        
+
         if (opts.includeGeometry()) {
             df.addColumn("geometry_wkt", Column.DType.STRING);
             df.addColumn("geometry_json", Column.DType.STRING);
@@ -81,11 +81,12 @@ public class ShapefileReader {
             df.addColumn("bbox_max_x", Column.DType.FLOAT64);
             df.addColumn("bbox_max_y", Column.DType.FLOAT64);
         }
-        
+
+        Map<String, List<Object>> attributes = new HashMap<>();
         if (opts.includeAttributes()) {
             // Read DBF for attributes
             String dbfPath = basePath + ".dbf";
-            Map<String, List<Object>> attributes = readDbf(dbfPath);
+            attributes = readDbf(dbfPath);
             for (String col : attributes.keySet()) {
                 df.addColumn(col, Column.DType.STRING);
             }
@@ -126,9 +127,9 @@ public class ShapefileReader {
                 int thisShapeType = shapeHeader.getInt();
                 
                 int shapeDataLen = (contentLength * 2) - 4; // subtract shape type
-                
+                int ri;
                 if (thisShapeType == NULL_SHAPE) {
-                    int ri = df.addEmptyRow();
+                    ri = df.addEmptyRow();
                     df.set(ri, "shape_id", recordNum);
                     df.set(ri, "shape_type", "NULL");
                 } else {
@@ -136,17 +137,17 @@ public class ShapefileReader {
                     ch.read(shapeData);
                     shapeData.flip();
                     shapeData.order(ByteOrder.LITTLE_ENDIAN);
-                    
-                    int ri = df.addEmptyRow();
+
+                    ri = df.addEmptyRow();
                     df.set(ri, "shape_id", recordNum);
                     df.set(ri, "shape_type", getShapeTypeName(thisShapeType));
-                    
+
                     if (opts.includeGeometry()) {
                         String wkt = readGeometryWkt(shapeData, thisShapeType);
                         df.set(ri, "geometry_wkt", wkt);
                         df.set(ri, "geometry_json", wktToJson(wkt));
                         df.set(ri, "num_points", countPoints(shapeData, thisShapeType));
-                        
+
                         double[] bbox = readBbox(shapeData, thisShapeType);
                         if (bbox != null) {
                             df.set(ri, "bbox_min_x", bbox[0]);
@@ -156,7 +157,7 @@ public class ShapefileReader {
                         }
                     }
                 }
-                
+
                 if (opts.includeAttributes() && !attributes.isEmpty()) {
                     for (String col : attributes.keySet()) {
                         List<Object> values = attributes.get(col);

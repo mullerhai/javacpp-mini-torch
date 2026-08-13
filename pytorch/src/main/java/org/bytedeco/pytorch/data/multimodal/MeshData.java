@@ -229,7 +229,7 @@ public class MeshData implements Serializable {
         List<float[]> verts = new ArrayList<>();
         List<int[]> faces = new ArrayList<>();
         
-        List<String> lines = Files.readAllLines(path);
+        List<String> lines = Files.readAllLines(Path.of(path));
         boolean isBinary = false;
         
         // Check if binary STL
@@ -309,7 +309,7 @@ public class MeshData implements Serializable {
      * Read mesh from OFF file.
      */
     public static MeshData fromOff(String path) throws IOException {
-        List<String> lines = Files.readAllLines(path);
+        List<String> lines = Files.readAllLines(Path.of(path));
         int lineIdx = 0;
         
         // Skip OFF header

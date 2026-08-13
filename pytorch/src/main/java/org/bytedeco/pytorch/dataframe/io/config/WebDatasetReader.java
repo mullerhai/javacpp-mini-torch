@@ -1,4 +1,4 @@
-package org.bytedeco.pytorch.dataframe.io.webdataset;
+package org.bytedeco.pytorch.dataframe.io.config;
 
 import org.bytedeco.pytorch.dataframe.Column;
 import org.bytedeco.pytorch.dataframe.DataFrame;
@@ -7,7 +7,6 @@ import java.io.*;
 import java.nio.file.*;
 import java.util.*;
 import java.util.zip.GZIPInputStream;
-import java.util.jar.*;
 
 /**
  * Enterprise-grade reader for WebDataset format.

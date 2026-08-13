@@ -9,6 +9,7 @@ import org.bytedeco.pytorch.Tensor;
 import org.bytedeco.pytorch.data.safetensors.SafeTensors;
 import org.bytedeco.pytorch.data.serialize.*;
 import org.bytedeco.pytorch.inductor.AOTIModelPackageLoader;
+import org.bytedeco.pytorch.Module;
 
 /**
  * Enhanced Vista for model visualization with comprehensive format support
@@ -322,6 +323,9 @@ public final class VistaEnhanced {
         Map<String, Tensor> weights = new LinkedHashMap<>();
         StructureSpec spec = null;
         Module module = null;
+        List<LayerInfo> layers = new ArrayList<>();
+        Map<String, Object> extra = new LinkedHashMap<>();
+        long paramCount = 0;
 
         // Load based on format
         switch (format) {
@@ -333,8 +337,8 @@ public final class VistaEnhanced {
                 try {
                     WeightBagModule bag = WeightBagModule.fromPythonPth(file, false);
                     module = bag;
-                    for (String key : bag.state_dict().keySet()) {
-                        weights.put(key, bag.state_dict().get(key));
+                    for (String key : bag.stateDict().keySet()) {
+                        weights.put(key, bag.stateDict().get(key));
                     }
                     try {
                         spec = StructureSpec.fromModule(bag);
@@ -394,14 +398,12 @@ public final class VistaEnhanced {
                 } catch (Exception ignored) {}
         }
 
-        // Calculate stats
-        long paramCount = 0;
+        // Calculate stats (paramCount, layers, extra already initialized above for ONNX branch)
         for (Tensor t : weights.values()) {
             paramCount += t.numel();
         }
 
         // Build layer info
-        List<LayerInfo> layers = new ArrayList<>();
         for (Map.Entry<String, Tensor> entry : weights.entrySet()) {
             String layerName = entry.getKey();
             Tensor tensor = entry.getValue();
@@ -417,7 +419,6 @@ public final class VistaEnhanced {
         }
 
         // Extra metadata
-        Map<String, Object> extra = new LinkedHashMap<>();
         extra.put("detectedFormat", format.displayName);
         extra.put("isZip", isPythonPklZip(file));
         extra.put("hasStructure", spec != null);
@@ -512,7 +513,7 @@ public final class VistaEnhanced {
         VistaOptions opts = VistaOptions.builder()
                 .showMetadata(true)
                 .build();
-        return trace(path, inputs, opts);
+        return trace(new File(path), inputs, opts);
     }
 
     public static TraceGraph traceWithMeta(String path) throws IOException {

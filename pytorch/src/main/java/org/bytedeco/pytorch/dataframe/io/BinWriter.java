@@ -236,37 +236,26 @@ public class BinWriter {
         buf.order(ByteOrder.LITTLE_ENDIAN);
         
         switch (dtype) {
-            case Column.DType.BOOLEAN:
+            case BOOLEAN:
                 out.write(((Boolean) val) ? 1 : 0);
                 break;
-//            case Column.DType.INT8:
-//            case Column.DType.UINT8:
-//                out.write(((Number) val).byteValue());
-//                break;
-//            case Column.DType.INT16:
-//            case Column.DType.UINT16:
-//                buf.putShort(((Number) val).shortValue());
-//                out.write(buf.array(), 0, 2);
-//                break;
-            case Column.DType.INT32:
-//            case Column.DType.UINT32:
-            case Column.DType.FLOAT32:
+            case INT32:
+            case FLOAT32:
                 buf.putInt(((Number) val).intValue());
                 out.write(buf.array(), 0, 4);
                 break;
-            case Column.DType.INT64:
-//            case Column.DType.UINT64:
-            case Column.DType.FLOAT64:
+            case INT64:
+            case FLOAT64:
                 buf.putLong(((Number) val).longValue());
                 out.write(buf.array(), 0, 8);
                 break;
-            case Column.DType.STRING:
+            case STRING:
                 byte[] strBytes = val.toString().getBytes(StandardCharsets.UTF_8);
                 buf.putInt(strBytes.length);
                 out.write(buf.array(), 0, 4);
                 out.write(strBytes);
                 break;
-            case Column.DType.BINARY:
+            case BINARY:
                 byte[] binBytes = (byte[]) val;
                 buf.putInt(binBytes.length);
                 out.write(buf.array(), 0, 4);

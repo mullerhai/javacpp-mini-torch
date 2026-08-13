@@ -1,4 +1,4 @@
-package org.bytedeco.pytorch.dataframe.io.folder;
+package org.bytedeco.pytorch.dataframe.io.config;
 
 public  class ImageFolderOptions {
     private boolean recursive = true;

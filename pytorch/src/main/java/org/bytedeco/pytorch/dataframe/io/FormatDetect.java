@@ -227,22 +227,22 @@ public final class FormatDetect {
             case LMDB:
                 return org.bytedeco.pytorch.dataframe.io.lmdb.LmdbReader.read(path);
             case IMAGEFOLDER:
-                return org.bytedeco.pytorch.dataframe.io.folder.ImageFolderReader.read(path);
+                return org.bytedeco.pytorch.dataframe.io.config.ImageFolderReader.read(path);
             case SOUNDFOLDER:
-                return org.bytedeco.pytorch.dataframe.io.folder.SoundFolderReader.read(path);
+                return org.bytedeco.pytorch.dataframe.io.config.SoundFolderReader.read(path);
             case WEBDATASET:
-                return org.bytedeco.pytorch.dataframe.io.webdataset.WebDatasetReader.read(path);
+                return org.bytedeco.pytorch.dataframe.io.config.WebDatasetReader.read(path);
             case TEXT:
-                return DataFrame.readText(path);
+                return org.bytedeco.pytorch.dataframe.io.text.TextCorpusReader.read(path);
             case PDF:
-                return org.bytedeco.pytorch.dataframe.io.document.PdfReader.read(path);
+                return org.bytedeco.pytorch.dataframe.io.config.PdfReader.read(path);
             case DOCUMENT:
-                return org.bytedeco.pytorch.dataframe.io.document.DocumentReader.read(path);
+                return org.bytedeco.pytorch.dataframe.io.config.DocumentReader.read(path);
             case SHAPEFILE:
-                return org.bytedeco.pytorch.dataframe.io.geo.ShapefileReader.read(path);
+                return org.bytedeco.pytorch.dataframe.io.config.ShapefileReader.read(path);
             case RASTER:
             case GEOTIFF:
-                return org.bytedeco.pytorch.dataframe.io.geo.RasterReader.read(path);
+                return org.bytedeco.pytorch.dataframe.io.config.RasterReader.read(path);
             case VOXEL:
                 return org.bytedeco.pytorch.data.multimodal.VoxelData.fromFile(path).toDataFrame();
             case MESH:

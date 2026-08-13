@@ -151,7 +151,9 @@ public class TextWriter {
         if (opt.includeHeader()) {
             writer.write("<thead><tr>");
             for (int c = 0; c < df.columnCount(); c++) {
-                writer.write("<th>").write(escapeHtml(df.column(c).name())).write("</th>");
+                writer.write("<th>");
+                writer.write(escapeHtml(df.column(c).name()));
+                writer.write("</th>");
             }
             writer.write("</tr></thead>\n");
         }
@@ -178,7 +180,9 @@ public class TextWriter {
         if (opt.includeHeader()) {
             for (int c = 0; c < df.columnCount(); c++) {
                 if (c > 0) writer.write(delim);
-                writer.write("**").write(df.column(c).name()).write("**");
+                writer.write("**");
+                writer.write(df.column(c).name());
+                writer.write("**");
             }
             writer.newLine();
             

@@ -59,6 +59,22 @@ public class VoxelData implements Serializable {
     /**
      * Read voxel data from a BinVox file.
      */
+    public static VoxelData fromFile(String path) throws IOException {
+        String lower = path.toLowerCase();
+        if (lower.endsWith(".binvox")) {
+            return fromBinVox(path);
+        } else if (lower.endsWith(".npy") || lower.endsWith(".npz")) {
+            return fromNumpy(path);
+        } else if (lower.endsWith(".json")) {
+            return fromJson(path);
+        } else {
+            throw new IOException("Unsupported voxel format: " + path);
+        }
+    }
+
+    /**
+     * Read voxel data from a BinVox file.
+     */
     public static VoxelData fromBinVox(String path) throws IOException {
         try (BufferedReader reader = Files.newBufferedReader(Path.of(path))) {
             String header = reader.readLine();

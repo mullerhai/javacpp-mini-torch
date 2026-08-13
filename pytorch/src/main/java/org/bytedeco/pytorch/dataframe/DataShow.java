@@ -256,7 +256,7 @@ public class DataShow {
             return ImdbShow.show(path, new ImdbShow.ShowOptions()
                 .maxRows(opts.maxRows())
                 .maxCols(opts.maxCols()));
-        } catch (Exception e) {
+        } catch (Exception ex) {
             // Fallback to basic pickle display
             Object obj = org.bytedeco.pytorch.data.pickle.Pickle.load(new File(path));
             

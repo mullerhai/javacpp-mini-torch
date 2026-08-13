@@ -262,6 +262,8 @@ public final class DataFrame implements AutoCloseable, Serializable {
     /** Daft {@code limit(n)} alias for {@link #head(int)}. */
     public DataFrame limit(int n) { return head(n); }
     public DataFrame tail(int n) { return iloc(Math.max(0, rowCount - n), rowCount); }
+    /** Alias of {@link #iloc(int, int)} for row ranges. */
+    public DataFrame slice(int startRow, int endRow) { return iloc(startRow, endRow); }
     /** Daft {@code where(condition)} alias for {@link #filter(Expression)}. */
     public DataFrame where(Expression condition) { return filter(condition); }
 

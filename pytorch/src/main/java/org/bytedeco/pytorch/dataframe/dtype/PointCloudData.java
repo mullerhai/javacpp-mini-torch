@@ -505,6 +505,48 @@ public class PointCloudData extends AbstractDataValue implements Serializable {
         return String.format("PointCloudData[format=%s, points=%d, hasColors=%b, hasNormals=%b]", format, getNumPoints(), colors != null, normals != null);
     }
 
+    /**
+     * Convert this point cloud to a DataFrame with columns x, y, z (and r, g, b, nx, ny, nz if available).
+     */
+    public org.bytedeco.pytorch.dataframe.DataFrame toDataFrame() {
+        org.bytedeco.pytorch.dataframe.DataFrame df = org.bytedeco.pytorch.dataframe.DataFrame.create();
+        df.addColumn("x", org.bytedeco.pytorch.dataframe.Column.DType.FLOAT32);
+        df.addColumn("y", org.bytedeco.pytorch.dataframe.Column.DType.FLOAT32);
+        df.addColumn("z", org.bytedeco.pytorch.dataframe.Column.DType.FLOAT32);
+        boolean hasColors = colors != null && colors.length >= points.size() * 3;
+        boolean hasNormals = normals != null && normals.length >= points.size() * 3;
+        if (hasColors) {
+            df.addColumn("r", org.bytedeco.pytorch.dataframe.Column.DType.FLOAT32);
+            df.addColumn("g", org.bytedeco.pytorch.dataframe.Column.DType.FLOAT32);
+            df.addColumn("b", org.bytedeco.pytorch.dataframe.Column.DType.FLOAT32);
+        }
+        if (hasNormals) {
+            df.addColumn("nx", org.bytedeco.pytorch.dataframe.Column.DType.FLOAT32);
+            df.addColumn("ny", org.bytedeco.pytorch.dataframe.Column.DType.FLOAT32);
+            df.addColumn("nz", org.bytedeco.pytorch.dataframe.Column.DType.FLOAT32);
+        }
+        for (int i = 0; i < points.size(); i++) {
+            float[] p = points.get(i);
+            int ri = df.addEmptyRow();
+            df.set(ri, "x", p[0]);
+            df.set(ri, "y", p[1]);
+            df.set(ri, "z", p[2]);
+            if (hasColors) {
+                int base = i * 3;
+                df.set(ri, "r", colors[base]);
+                df.set(ri, "g", colors[base + 1]);
+                df.set(ri, "b", colors[base + 2]);
+            }
+            if (hasNormals) {
+                int base = i * 3;
+                df.set(ri, "nx", normals[base]);
+                df.set(ri, "ny", normals[base + 1]);
+                df.set(ri, "nz", normals[base + 2]);
+            }
+        }
+        return df;
+    }
+
     private void syncPointCount() {
         this.numPoints = points.size();
     }

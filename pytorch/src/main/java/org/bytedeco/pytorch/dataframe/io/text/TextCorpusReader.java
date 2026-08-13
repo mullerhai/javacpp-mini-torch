@@ -106,7 +106,7 @@ public class TextCorpusReader {
     private static void readDirectory(DataFrame df, Path dir, TextOptions opts) throws IOException {
         List<Path> files = new ArrayList<>();
         
-        collectTextFiles(dir, files, opts.recursive());
+        collectTextFiles(dir, files, opts);
         files.sort(Comparator.comparing(Path::toString));
         
         int docId = 0;
@@ -116,12 +116,12 @@ public class TextCorpusReader {
         }
     }
 
-    private static void collectTextFiles(Path dir, List<Path> files, boolean recursive) throws IOException {
+    private static void collectTextFiles(Path dir, List<Path> files, TextOptions opts) throws IOException {
         try (DirectoryStream<Path> stream = Files.newDirectoryStream(dir)) {
             for (Path entry : stream) {
                 if (Files.isDirectory(entry)) {
-                    if (recursive) {
-                        collectTextFiles(entry, files, true);
+                    if (opts.recursive()) {
+                        collectTextFiles(entry, files, opts);
                     }
                 } else if (Files.isRegularFile(entry)) {
                     String ext = getExtension(entry.getFileName().toString()).toLowerCase();
@@ -202,7 +202,7 @@ public class TextCorpusReader {
             }
         } else {
             // Chunk the document
-            List<String> chunks = chunkText(content, opts.chunkSize(), opts.chunkOverlap(), opts.chunkBy());
+            List<String> chunks = chunkText(content, opts.chunkSize(), opts.chunkOverlap(), opts.chunkBy().toString());
             int totalChunks = chunks.size();
             
             for (int i = 0; i < chunks.size(); i++) {
@@ -242,9 +242,9 @@ public class TextCorpusReader {
         
         if (Files.isDirectory(p)) {
             List<Path> files = new ArrayList<>();
-            collectTextFiles(p, files, opts.recursive());
+            collectTextFiles(p, files, opts);
             files.sort(Comparator.comparing(Path::toString));
-            
+
             for (Path file : files) {
                 streamFile(file, opts, consumer);
             }
@@ -296,7 +296,7 @@ public class TextCorpusReader {
         
         List<Path> files = new ArrayList<>();
         if (Files.isDirectory(Path.of(path))) {
-            collectTextFiles(Path.of(path), files, opts.recursive());
+            collectTextFiles(Path.of(path), files, opts);
         } else {
             files.add(Path.of(path));
         }
@@ -320,15 +320,33 @@ public class TextCorpusReader {
             meta.numLines = content.split("\\r?\\n").length;
             
             if (opts.chunkSize() <= 0) {
-                consumer.accept(content, meta);
+                TextChunkMetadata single = new TextChunkMetadata();
+                single.documentId = meta.documentId;
+                single.filePath = meta.filePath;
+                single.fileName = meta.fileName;
+                single.encoding = meta.encoding;
+                single.numChars = meta.numChars;
+                single.numWords = meta.numWords;
+                single.numLines = meta.numLines;
+                single.chunkId = 0;
+                single.totalChunks = 1;
+                single.text = content;
+                consumer.accept(single, meta);
             } else {
-                List<String> chunks = chunkText(content, opts.chunkSize(), opts.chunkOverlap(), opts.chunkBy());
+                List<String> chunks = chunkText(content, opts.chunkSize(), opts.chunkOverlap(), opts.chunkBy().toString());
                 for (int i = 0; i < chunks.size(); i++) {
-                    TextChunkMetadata chunkMeta = new TextChunkMetadata(meta);
+                    TextChunkMetadata chunkMeta = new TextChunkMetadata();
+                    chunkMeta.documentId = meta.documentId;
+                    chunkMeta.filePath = meta.filePath;
+                    chunkMeta.fileName = meta.fileName;
+                    chunkMeta.encoding = meta.encoding;
+                    chunkMeta.numChars = meta.numChars;
+                    chunkMeta.numWords = meta.numWords;
+                    chunkMeta.numLines = meta.numLines;
                     chunkMeta.chunkId = i;
                     chunkMeta.totalChunks = chunks.size();
                     chunkMeta.text = chunks.get(i);
-                    consumer.accept(chunkMeta);
+                    consumer.accept(chunkMeta, meta);
                 }
             }
             

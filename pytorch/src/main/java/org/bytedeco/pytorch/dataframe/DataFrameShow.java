@@ -73,7 +73,7 @@ public class DataFrameShow {
      * Get schema string.
      */
     public static String schemaString(DataFrame df) {
-        return new DataFrameShow().schema(df);
+        return new DataFrameShow().schemaString(df);
     }
 
     /**
@@ -97,7 +97,7 @@ public class DataFrameShow {
     }
 
     public void printSchema(DataFrame df) {
-        System.out.print(schema(df));
+        System.out.print(schemaString(df));
     }
 
     public String format(DataFrame df) {
@@ -113,7 +113,7 @@ public class DataFrameShow {
         return formatStandard(df);
     }
 
-    public String schema(DataFrame df) {
+    public String schemaString(DataFrame df) {
         StringBuilder sb = new StringBuilder();
         sb.append("DataFrame Schema\n");
         sb.append("=".repeat(60)).append("\n");
@@ -263,14 +263,14 @@ public class DataFrameShow {
 
     private String formatNumpyVector(NDArray arr, String title) {
         StringBuilder sb = new StringBuilder();
-        sb.append("┌").append("─".repeat(Math.min(arr.shape[0], matrixDisplayCols * 2) + 15)).append("┐\n");
+        sb.append("┌").append("─".repeat(Math.min((int) arr.shape[0], matrixDisplayCols * 2) + 15)).append("┐\n");
         sb.append(String.format("│ %s\n", title));
         sb.append("├─────────────────────────────────────────────────────────┤\n");
         
         sb.append("│ index │ value                                         │\n");
         sb.append("├───────┼───────────────────────────────────────────────┤\n");
         
-        int display = Math.min(arr.shape[0], maxRows * 2);
+        int display = Math.min((int) arr.shape[0], maxRows * 2);
         for (int i = 0; i < display; i++) {
             double val = arr.getDouble(i);
             sb.append(String.format("│ %5d │ %20.6f                       │\n", i, val));
@@ -297,7 +297,7 @@ public class DataFrameShow {
         for (long i = 0; i < arr.size && count < 20; i++) {
             if (count > 0) sb.append(", ");
             if (count % 5 == 0 && count > 0) sb.append("\n│    ");
-            sb.append(String.format("%8.3f", arr.getDouble(i)));
+            sb.append(String.format("%8.3f", arr.getDouble((int) i)));
             count++;
         }
         

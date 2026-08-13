@@ -493,18 +493,18 @@ public final class PyTorchModelLoader {
     private static long elementSize(ScalarType dtype) {
         if (dtype == null) return 4;
         switch (dtype) {
-            case ScalarType.Float:   return 4;
-            case ScalarType.Double:  return 8;
-            case ScalarType.Int:     return 4;
-            case ScalarType.UInt8:   return 4;
-            case ScalarType.Short:   return 2;
-            case ScalarType.Long:    return 8;
-            case ScalarType.Byte:    return 1;
-            case ScalarType.Char:    return 1;
-            case ScalarType.Bool:    return 1;
-            case ScalarType.Half:   return 2;
-            case ScalarType.BFloat16: return 2;
-            default:                return 4;
+            case Float:   return 4;
+            case Double:  return 8;
+            case Int:     return 4;
+            // In c10::ScalarType, uint8_t is named Byte, not UInt8.
+            case Byte:    return 1;
+            case Short:   return 2;
+            case Long:    return 8;
+            case Char:    return 1;
+            case Bool:    return 1;
+            case Half:    return 2;
+            case BFloat16: return 2;
+            default:      return 4;
         }
     }
 

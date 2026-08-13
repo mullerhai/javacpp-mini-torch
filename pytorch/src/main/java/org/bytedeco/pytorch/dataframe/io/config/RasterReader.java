@@ -1,11 +1,10 @@
-package org.bytedeco.pytorch.dataframe.io.geo;
+package org.bytedeco.pytorch.dataframe.io.config;
 
 import org.bytedeco.pytorch.dataframe.Column;
 import org.bytedeco.pytorch.dataframe.DataFrame;
 
 import java.io.*;
 import java.nio.*;
-import java.nio.channels.*;
 import java.nio.file.*;
 import java.util.*;
 

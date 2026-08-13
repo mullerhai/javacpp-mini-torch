@@ -1,4 +1,4 @@
-package org.bytedeco.pytorch.dataframe.io.document;
+package org.bytedeco.pytorch.dataframe.io.config;
 
 import org.bytedeco.pytorch.dataframe.Column;
 import org.bytedeco.pytorch.dataframe.DataFrame;
