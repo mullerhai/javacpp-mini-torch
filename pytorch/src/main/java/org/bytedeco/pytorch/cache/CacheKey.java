@@ -9,6 +9,7 @@
  * without exposing raw entity keys across clusters.
  */
 package org.bytedeco.pytorch.cache;
+import org.bytedeco.pytorch.distributed.*;
 
 import java.util.Objects;
 

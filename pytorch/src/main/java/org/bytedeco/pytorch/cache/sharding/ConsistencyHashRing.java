@@ -15,6 +15,7 @@
  * prefer a homed shard.
  */
 package org.bytedeco.pytorch.cache.sharding;
+import org.bytedeco.pytorch.jit.*;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;

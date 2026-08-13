@@ -385,18 +385,7 @@ final class NPArrayUtil {
 
     static NDArray asArray(Object x) {
         if (x == null) throw new IllegalArgumentException("null array-like");
-        if (x instanceof NDArray) return (NDArray) x;
-        if (x instanceof double[]) return new NDArray((double[]) x);
-        if (x instanceof float[]) return new NDArray((float[]) x);
-        if (x instanceof long[]) return new NDArray((long[]) x, DType.INT64);
-        if (x instanceof int[]) {
-            int[] src = (int[]) x;
-            long[] longs = new long[src.length];
-            for (int i = 0; i < src.length; i++) longs[i] = src[i];
-            return new NDArray(longs, DType.INT32);
-        }
-        if (x instanceof Number) return new NDArray(new double[]{((Number) x).doubleValue()});
-        throw new IllegalArgumentException("unsupported array-like: " + x.getClass());
+        return NP.array(x);
     }
 
     /** Apply permutation of axes (like NumPy transpose with axes). */

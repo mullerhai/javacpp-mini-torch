@@ -323,6 +323,7 @@ public final class TorchPthReader {
         private static final int SHORT_BINBYTES = 'C';
         private static final int BINBYTES8 = 0x8e;
         private static final int EMPTY_SET = 0x8f;
+        private static final int ADDITEMS = 0x90;
         private static final int FROZENSET = 0x91;
         private static final int NEWOBJ_EX = 0x92;
         private static final int STACK_GLOBAL = 0x93;
@@ -561,6 +562,14 @@ public final class TorchPthReader {
                         for (int i = start; i + 1 < stack.size(); i += 2) {
                             dict.put(stack.get(i), stack.get(i + 1));
                         }
+                        stack.subList(start, stack.size()).clear();
+                        break;
+                    }
+                    case ADDITEMS: {
+                        int start = popMark();
+                        @SuppressWarnings("unchecked")
+                        java.util.Set<Object> set = (java.util.Set<Object>) stack.get(start - 1);
+                        set.addAll(stack.subList(start, stack.size()));
                         stack.subList(start, stack.size()).clear();
                         break;
                     }

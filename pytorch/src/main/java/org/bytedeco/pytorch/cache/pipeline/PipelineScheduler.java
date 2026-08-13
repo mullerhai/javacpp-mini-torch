@@ -9,6 +9,7 @@
  * </ul>
  */
 package org.bytedeco.pytorch.cache.pipeline;
+import org.bytedeco.pytorch.c10.*;
 
 import java.util.List;
 import java.util.concurrent.ExecutorService;

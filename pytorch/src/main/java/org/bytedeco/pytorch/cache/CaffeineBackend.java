@@ -10,6 +10,7 @@
  * sketch composition. Eviction is O(1) amortised.
  */
 package org.bytedeco.pytorch.cache;
+import org.bytedeco.pytorch.autograd.*;
 
 import java.util.ArrayDeque;
 import java.util.Collection;

@@ -7,6 +7,7 @@ import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import java.time.*;
 
+import org.bytedeco.pytorch.StringTensorDict;
 import org.bytedeco.pytorch.Tensor;
 import org.bytedeco.pytorch.TensorOptions;
 import org.bytedeco.pytorch.dataframe.ai.BatchEmbedder;
@@ -546,6 +547,10 @@ public final class DataFrame implements AutoCloseable, Serializable {
         }
         
         org.bytedeco.pytorch.data.pt.PT.save(tensors, new File(path));
+    }
+
+    public List<String> columnNames() {
+        return columns.stream().map(Column::name).collect(Collectors.toList());
     }
 
     /**

@@ -10,6 +10,7 @@
  * concern (the hot-path touch is the policy's hash, not the linked list).
  */
 package org.bytedeco.pytorch.cache.eviction;
+import org.bytedeco.pytorch.autograd.*;
 
 import java.util.Iterator;
 import java.util.NoSuchElementException;

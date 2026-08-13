@@ -21,6 +21,7 @@
  * bypass the cache for offline-only paths via the {@link #forceRefresh} flag.
  */
 package org.bytedeco.pytorch.cache.offline;
+import org.bytedeco.pytorch.distributed.*;
 
 import org.bytedeco.pytorch.cache.CacheKey;
 import org.bytedeco.pytorch.cache.CacheValue;

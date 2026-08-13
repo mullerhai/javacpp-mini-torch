@@ -353,4 +353,160 @@ public final class NDArray {
         sb.append(")");
         return sb.toString();
     }
+
+    /** Print Spark/Polars-style schema tree (one-line per field). */
+    public void printSchema() {
+        NumpySchema.forArray(this).printSchema();
+    }
+
+    /** Return the schema descriptor for this array. */
+    public NumpySchema schema() {
+        return NumpySchema.forArray(this);
+    }
+
+    /** Print first {@code n} elements (default 20) using NumPy-style formatting.
+     *  2-D arrays display as a proper row-per-line matrix with head/tail row truncation.
+     *  1-D and higher-rank arrays display as a nested block. */
+    public void show() { show(20); }
+
+    /** Show at most {@code maxRows} rows of a 2-D array (or {@code maxRows} elements
+     *  for 1-D, or {@code maxRows} sub-arrays for N-D). NumPy-style. */
+    public void show(int maxRows) {
+        int ndim = shape.length;
+        if (ndim == 1) {
+            System.out.println(new NumpyShow().format(this));
+        } else if (ndim == 2) {
+            // Show first maxRows rows with NumPy-style head/tail.
+            long rows = shape[0];
+            long cols = shape[1];
+            if (rows <= maxRows) {
+                // Show all rows
+                System.out.println(new NumpyShow().format(this));
+            } else {
+                // Build a slice with first maxRows/2 and last maxRows/2 rows
+                int half = maxRows / 2;
+                NDArray top = slice(0, half, 0, cols);
+                NDArray bot = slice(rows - half, rows, 0, cols);
+                NumpyShow ns = new NumpyShow(NumpyShow.DEFAULT_THRESHOLD, NumpyShow.DEFAULT_EDGEITEMS, NumpyShow.DEFAULT_LINEWIDTH);
+                System.out.println(ns.format(top));
+                System.out.println("...");
+                System.out.println(ns.format(bot));
+            }
+        } else {
+            // N-D: show full nested form (truncated at outer dimension)
+            long firstDim = shape[0];
+            if (firstDim <= maxRows) {
+                System.out.println(new NumpyShow().format(this));
+            } else {
+                // Show only the first chunk and last chunk
+                int half = maxRows / 2;
+                long[] topShape = shape.clone();
+                topShape[0] = half;
+                long[] botShape = shape.clone();
+                botShape[0] = half;
+                long[] botStart = shape.clone();
+                botStart[0] = firstDim - half;
+                NDArray top = slice(topShape);
+                NDArray bot = slice(botStart, botShape);
+                NumpyShow ns = new NumpyShow();
+                System.out.println(ns.format(top));
+                System.out.println("...");
+                System.out.println(ns.format(bot));
+            }
+        }
+        System.out.printf("[%d elements, dtype=%s, shape=%s]%n", size, dtype, java.util.Arrays.toString(shape));
+    }
+
+    /**
+     * Format the first {@code n} scalar elements as a NumPy-style block.
+     * Note: for 2-D arrays, prefer {@link #show(int)} which preserves matrix layout.
+     */
+    public String format(int n) {
+        int ndim = shape.length;
+        if (ndim == 2 && shape[1] > 0) {
+            // Preserve 2-D matrix layout: show at most n rows.
+            long rows = shape[0];
+            long cols = shape[1];
+            int showRows = (int) Math.min(n, rows);
+            NDArray visible = slice(0, showRows, 0, cols);
+            return new NumpyShow().format(visible);
+        }
+        return new NumpyShow().format(head(n));
+    }
+
+    /** Format all elements (with NumPy's head/tail truncation rules). */
+    public String formatAll() {
+        return new NumpyShow().format(this);
+    }
+
+    /** Slice the first {@code n} elements as a new flat array (1-D). */
+    public NDArray head(int n) {
+        long take = Math.min(n, (int) size);
+        NDArray out = new NDArray(dtype, new long[]{take});
+        if (isFloatOrComplex(dtype)) {
+            for (int i = 0; i < take; i++) out.setDouble(i, getDouble(i));
+        } else {
+            for (int i = 0; i < take; i++) out.setLong(i, getLong(i));
+        }
+        return out;
+    }
+
+    /** 2-D slice: rows [r0, r1) and columns [c0, c1). Returns a new NDArray. */
+    public NDArray slice(long r0, long r1, long c0, long c1) {
+        long[] newShape = new long[]{Math.max(0, r1 - r0), Math.max(0, c1 - c0)};
+        NDArray out = new NDArray(dtype, newShape);
+        for (long r = r0; r < r1; r++) {
+            for (long c = c0; c < c1; c++) {
+                long dstIdx = (r - r0) * newShape[1] + (c - c0);
+                long srcIdx = r * shape[1] + c;
+                if (isFloatOrComplex(dtype)) {
+                    out.setDouble((int) dstIdx, getDouble((int) srcIdx));
+                } else {
+                    out.setLong((int) dstIdx, getLong((int) srcIdx));
+                }
+            }
+        }
+        return out;
+    }
+
+    /** N-D slice starting at {@code start} with output {@code outShape}. */
+    public NDArray slice(long[] start, long[] outShape) {
+        if (start.length != shape.length || outShape.length != shape.length) {
+            throw new IllegalArgumentException("start and outShape must match array rank " + shape.length);
+        }
+        long total = 1;
+        for (long d : outShape) total *= d;
+        long[] idx = new long[shape.length];
+        long[] flatIdx = new long[shape.length];
+        NDArray out = new NDArray(dtype, outShape);
+        for (long flat = 0; flat < total; flat++) {
+            // Unravel flat into output coordinates
+            long tmp = flat;
+            for (int d = outShape.length - 1; d >= 0; d--) {
+                flatIdx[d] = tmp % outShape[d];
+                tmp /= outShape[d];
+            }
+            // Map to source coordinates
+            long srcFlat = 0, stride = 1;
+            for (int d = shape.length - 1; d >= 0; d--) {
+                srcFlat += (start[d] + flatIdx[d]) * stride;
+                stride *= shape[d];
+            }
+            if (isFloatOrComplex(dtype)) {
+                out.setDouble((int) flat, getDouble((int) srcFlat));
+            } else {
+                out.setLong((int) flat, getLong((int) srcFlat));
+            }
+        }
+        return out;
+    }
+
+    /** Slice from origin with given output shape. */
+    public NDArray slice(long[] outShape) { return slice(new long[shape.length], outShape); }
+
+    /** Slice the first {@code n} rows of a 2-D array (all columns). */
+    public NDArray headRows(int n) {
+        long rows = shape[0];
+        return slice(0, Math.min(n, rows), 0, shape[1]);
+    }
 }

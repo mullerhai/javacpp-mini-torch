@@ -449,6 +449,27 @@ public class PT {
     // ---- Show / display methods ----
 
     /**
+     * Print tensors to stdout in PyTorch-style format.
+     */
+    public static void printSchema(File file) throws IOException {
+        System.out.println(schema(file));
+    }
+
+    /**
+     * Get DataFrame-style schema string showing all tensor metadata.
+     */
+    public static String schema(File file) throws IOException {
+        return schema(load(file));
+    }
+
+    /**
+     * Get DataFrame-style schema string.
+     */
+    public static String schema(Map<String, TensorData> tensors) {
+        return new PTShow().schema(tensors);
+    }
+
+    /**
      * Get a string representation of the tensors (like Python print).
      */
     public static String show(File file) throws IOException {
@@ -456,32 +477,7 @@ public class PT {
     }
 
     public static String show(Map<String, TensorData> tensors) {
-        StringBuilder sb = new StringBuilder();
-        sb.append("{\n");
-        
-        int idx = 0;
-        int total = tensors.size();
-        for (Map.Entry<String, TensorData> e : tensors.entrySet()) {
-            String name = e.getKey();
-            TensorData td = e.getValue();
-            
-            sb.append("    '").append(name).append("': tensor(");
-            sb.append(formatShape(td.shape));
-            sb.append(", dtype=").append(td.dtype);
-            
-            // Show first few values
-            sb.append(",\n        [");
-            String preview = td.preview();
-            sb.append(preview);
-            sb.append("]");
-            
-            sb.append(")");
-            if (++idx < total) sb.append(",");
-            sb.append("\n");
-        }
-        
-        sb.append("}\n");
-        return sb.toString();
+        return new PTShow().showString(tensors);
     }
 
     private static String formatShape(long[] shape) {
@@ -632,11 +628,11 @@ public class PT {
         private static final int OP_LIST        = 'l'; // 0x6c
         private static final int OP_DICT        = 'd'; // 0x75
         private static final int OP_SETITEM     = 's'; // 0x73
-        private static final int OP_SETITEMS    = 'u'; // 0x78
-        private static final int OP_APPEND      = 'a'; // 0x61
-        private static final int OP_APPENDS     = 'e'; // 0x65
-        private static final int OP_ADDITEMS    = 0x9c;
-        private static final int OP_FROZENSET   = 0x9d;
+        private static final int OP_SETITEMS    = 0x75; // 'u'
+        private static final int OP_APPEND      = 0x61; // 'a'
+        private static final int OP_APPENDS     = 0x65; // 'e'
+        private static final int OP_ADDITEMS    = 0x90;
+        private static final int OP_FROZENSET   = 0x91;
         private static final int OP_GLOBAL      = 'c'; // 0x63
         private static final int OP_STACK_GLOBAL= 0x93;
         private static final int OP_INST        = 'i'; // 0x69

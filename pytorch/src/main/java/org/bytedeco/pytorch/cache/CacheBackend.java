@@ -10,6 +10,7 @@
  * </ul>
  */
 package org.bytedeco.pytorch.cache;
+import org.bytedeco.pytorch.jit.*;
 
 import java.util.Collection;
 import java.util.LinkedHashMap;

@@ -90,4 +90,22 @@ public final class NpyHeader {
         for (long s : shape) n *= s;
         return n;
     }
+
+    /** Print Spark/Polars-style schema tree. */
+    public void printSchema() {
+        NumpySchema.forHeader(this).printSchema();
+    }
+
+    /** Return the schema descriptor for this header. */
+    public NumpySchema schema() {
+        return NumpySchema.forHeader(this);
+    }
+
+    @Override
+    public String toString() {
+        return "NpyHeader{dtype=" + dtype.getDescriptor()
+                + ", fortran_order=" + fortranOrder
+                + ", shape=" + java.util.Arrays.toString(shape)
+                + ", numel=" + numel() + "}";
+    }
 }

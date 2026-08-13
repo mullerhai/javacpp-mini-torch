@@ -331,22 +331,483 @@ public final class NP {
         return new NDArray(data, shape.length > 0 ? shape : new long[]{data.length});
     }
 
+    public static NDArray array(double[] data) {
+        return new NDArray(data);
+    }
+
     public static NDArray array(float[] data, long... shape) {
         return new NDArray(data, shape.length > 0 ? shape : new long[]{data.length});
+    }
+
+    public static NDArray array(float[] data) {
+        return new NDArray(data);
     }
 
     public static NDArray array(long[] data, long... shape) {
         return new NDArray(data, DType.INT64, shape.length > 0 ? shape : new long[]{data.length});
     }
 
+    public static NDArray array(long[] data) {
+        return new NDArray(data, DType.INT64);
+    }
+
     public static NDArray array(long[] data, DType dtype, long... shape) {
         return new NDArray(data, dtype, shape.length > 0 ? shape : new long[]{data.length});
+    }
+
+    public static NDArray array(long[] data, DType dtype) {
+        return new NDArray(data, dtype);
     }
 
     public static NDArray array(int[] data, long... shape) {
         long[] longs = new long[data.length];
         for (int i = 0; i < data.length; i++) longs[i] = data[i];
         return new NDArray(longs, DType.INT32, shape.length > 0 ? shape : new long[]{data.length});
+    }
+
+    public static NDArray array(int[] data) {
+        long[] longs = new long[data.length];
+        for (int i = 0; i < data.length; i++) longs[i] = data[i];
+        return new NDArray(longs, DType.INT32);
+    }
+
+    // ---- N-D array factories (2-D primitives, ragged arrays, generic Object) ----
+
+    /** 2-D float array → shape {@code (rows, cols)} row-major. */
+    public static NDArray array(float[][] data) {
+        if (data == null) throw new IllegalArgumentException("null data");
+        long rows = data.length;
+        long cols = rows == 0 ? 0 : data[0].length;
+        double[] flat = new double[(int) (rows * cols)];
+        int idx = 0;
+        for (int i = 0; i < rows; i++) {
+            float[] row = data[i];
+            if (row == null) throw new IllegalArgumentException("null row at " + i);
+            if (cols != row.length) {
+                throw new IllegalArgumentException("ragged row at " + i
+                        + ": expected " + cols + ", got " + row.length);
+            }
+            for (int j = 0; j < cols; j++) flat[idx++] = (double) row[j];
+        }
+        NDArray out = new NDArray(DType.FLOAT32, rows, cols);
+        for (int i = 0; i < flat.length; i++) out.setDouble(i, flat[i]);
+        return out;
+    }
+
+    /** 2-D double array → shape {@code (rows, cols)} row-major. */
+    public static NDArray array(double[][] data) {
+        if (data == null) throw new IllegalArgumentException("null data");
+        long rows = data.length;
+        long cols = rows == 0 ? 0 : data[0].length;
+        double[] flat = new double[(int) (rows * cols)];
+        int idx = 0;
+        for (int i = 0; i < rows; i++) {
+            double[] row = data[i];
+            if (row == null) throw new IllegalArgumentException("null row at " + i);
+            if (cols != row.length) {
+                throw new IllegalArgumentException("ragged row at " + i
+                        + ": expected " + cols + ", got " + row.length);
+            }
+            System.arraycopy(row, 0, flat, idx, row.length);
+            idx += row.length;
+        }
+        return new NDArray(flat, rows, cols);
+    }
+
+    /** 2-D int array → shape {@code (rows, cols)} row-major, dtype {@link DType#INT32}. */
+    public static NDArray array(int[][] data) {
+        if (data == null) throw new IllegalArgumentException("null data");
+        long rows = data.length;
+        long cols = rows == 0 ? 0 : data[0].length;
+        long[] flat = new long[(int) (rows * cols)];
+        int idx = 0;
+        for (int i = 0; i < rows; i++) {
+            int[] row = data[i];
+            if (row == null) throw new IllegalArgumentException("null row at " + i);
+            if (cols != row.length) {
+                throw new IllegalArgumentException("ragged row at " + i
+                        + ": expected " + cols + ", got " + row.length);
+            }
+            for (int j = 0; j < cols; j++) flat[idx++] = (long) row[j];
+        }
+        NDArray out = new NDArray(DType.INT32, rows, cols);
+        for (int i = 0; i < flat.length; i++) out.setLong(i, flat[i]);
+        return out;
+    }
+
+    /** 2-D long array → shape {@code (rows, cols)} row-major, dtype {@link DType#INT64}. */
+    public static NDArray array(long[][] data) {
+        if (data == null) throw new IllegalArgumentException("null data");
+        long rows = data.length;
+        long cols = rows == 0 ? 0 : data[0].length;
+        long[] flat = new long[(int) (rows * cols)];
+        int idx = 0;
+        for (int i = 0; i < rows; i++) {
+            long[] row = data[i];
+            if (row == null) throw new IllegalArgumentException("null row at " + i);
+            if (cols != row.length) {
+                throw new IllegalArgumentException("ragged row at " + i
+                        + ": expected " + cols + ", got " + row.length);
+            }
+            System.arraycopy(row, 0, flat, idx, row.length);
+            idx += row.length;
+        }
+        return new NDArray(flat, DType.INT64, rows, cols);
+    }
+
+    /** 3-D float array → shape {@code (dim0, dim1, dim2)} row-major. */
+    public static NDArray array(float[][][] data) {
+        if (data == null) throw new IllegalArgumentException("null data");
+        long d0 = data.length;
+        long d1 = d0 == 0 ? 0 : data[0].length;
+        long d2 = (d0 == 0 || d1 == 0) ? 0 : data[0][0].length;
+        double[] flat = new double[(int) (d0 * d1 * d2)];
+        int idx = 0;
+        for (int i = 0; i < d0; i++) {
+            float[][] page = data[i];
+            if (page == null) throw new IllegalArgumentException("null page at " + i);
+            for (int j = 0; j < d1; j++) {
+                float[] row = page[j];
+                if (row == null) throw new IllegalArgumentException("null row at [" + i + "][" + j + "]");
+                if (row.length != d2) throw new IllegalArgumentException("ragged row at [" + i + "][" + j + "]: expected " + d2 + ", got " + row.length);
+                for (int k = 0; k < d2; k++) flat[idx++] = (double) row[k];
+            }
+        }
+        NDArray out = new NDArray(DType.FLOAT32, d0, d1, d2);
+        for (int i = 0; i < flat.length; i++) out.setDouble(i, flat[i]);
+        return out;
+    }
+
+    /** 3-D double array → shape {@code (dim0, dim1, dim2)} row-major. */
+    public static NDArray array(double[][][] data) {
+        if (data == null) throw new IllegalArgumentException("null data");
+        long d0 = data.length;
+        long d1 = d0 == 0 ? 0 : data[0].length;
+        long d2 = (d0 == 0 || d1 == 0) ? 0 : data[0][0].length;
+        double[] flat = new double[(int) (d0 * d1 * d2)];
+        int idx = 0;
+        for (int i = 0; i < d0; i++) {
+            double[][] page = data[i];
+            if (page == null) throw new IllegalArgumentException("null page at " + i);
+            for (int j = 0; j < d1; j++) {
+                double[] row = page[j];
+                if (row == null) throw new IllegalArgumentException("null row at [" + i + "][" + j + "]");
+                if (row.length != d2) throw new IllegalArgumentException("ragged row at [" + i + "][" + j + "]: expected " + d2 + ", got " + row.length);
+                System.arraycopy(row, 0, flat, idx, row.length);
+                idx += row.length;
+            }
+        }
+        return new NDArray(flat, DType.FLOAT64, d0, d1, d2);
+    }
+
+    /** 3-D int array → shape {@code (dim0, dim1, dim2)} row-major. */
+    public static NDArray array(int[][][] data) {
+        if (data == null) throw new IllegalArgumentException("null data");
+        long d0 = data.length;
+        long d1 = d0 == 0 ? 0 : data[0].length;
+        long d2 = (d0 == 0 || d1 == 0) ? 0 : data[0][0].length;
+        long[] flat = new long[(int) (d0 * d1 * d2)];
+        int idx = 0;
+        for (int i = 0; i < d0; i++) {
+            int[][] page = data[i];
+            if (page == null) throw new IllegalArgumentException("null page at " + i);
+            for (int j = 0; j < d1; j++) {
+                int[] row = page[j];
+                if (row == null) throw new IllegalArgumentException("null row at [" + i + "][" + j + "]");
+                if (row.length != d2) throw new IllegalArgumentException("ragged row at [" + i + "][" + j + "]: expected " + d2 + ", got " + row.length);
+                for (int k = 0; k < d2; k++) flat[idx++] = row[k];
+            }
+        }
+        return new NDArray(flat, DType.INT32, d0, d1, d2);
+    }
+
+    /** 3-D long array → shape {@code (dim0, dim1, dim2)} row-major. */
+    public static NDArray array(long[][][] data) {
+        if (data == null) throw new IllegalArgumentException("null data");
+        long d0 = data.length;
+        long d1 = d0 == 0 ? 0 : data[0].length;
+        long d2 = (d0 == 0 || d1 == 0) ? 0 : data[0][0].length;
+        long[] flat = new long[(int) (d0 * d1 * d2)];
+        int idx = 0;
+        for (int i = 0; i < d0; i++) {
+            long[][] page = data[i];
+            if (page == null) throw new IllegalArgumentException("null page at " + i);
+            for (int j = 0; j < d1; j++) {
+                long[] row = page[j];
+                if (row == null) throw new IllegalArgumentException("null row at [" + i + "][" + j + "]");
+                if (row.length != d2) throw new IllegalArgumentException("ragged row at [" + i + "][" + j + "]: expected " + d2 + ", got " + row.length);
+                System.arraycopy(row, 0, flat, idx, row.length);
+                idx += row.length;
+            }
+        }
+        return new NDArray(flat, DType.INT64, d0, d1, d2);
+    }
+
+    /** 2-D boxed {@code Double[][]}. Infers ragged dimensions. */
+    public static NDArray array(Double[][] data) {
+        return fromJaggedBoxed(data);
+    }
+
+    /** 2-D boxed {@code Float[][]}. Infers ragged dimensions. */
+    public static NDArray array(Float[][] data) {
+        return fromJaggedBoxed(data);
+    }
+
+    /** 2-D boxed {@code Integer[][]}. Infers ragged dimensions. */
+    public static NDArray array(Integer[][] data) {
+        return fromJaggedBoxed(data);
+    }
+
+    /** 2-D boxed {@code Long[][]}. Infers ragged dimensions. */
+    public static NDArray array(Long[][] data) {
+        return fromJaggedBoxed(data);
+    }
+
+    /** 1-D boxed {@code Float[]}. */
+    public static NDArray array(Float[] data) {
+        if (data == null) throw new IllegalArgumentException("null data");
+        float[] f = new float[data.length];
+        for (int i = 0; i < data.length; i++) f[i] = data[i] == null ? 0f : data[i];
+        return new NDArray(f);
+    }
+
+    /** 1-D boxed {@code Double[]}. */
+    public static NDArray array(Double[] data) {
+        if (data == null) throw new IllegalArgumentException("null data");
+        double[] d = new double[data.length];
+        for (int i = 0; i < data.length; i++) d[i] = data[i] == null ? 0d : data[i];
+        return new NDArray(d);
+    }
+
+    /** 1-D boxed {@code Integer[]}. */
+    public static NDArray array(Integer[] data) {
+        if (data == null) throw new IllegalArgumentException("null data");
+        long[] l = new long[data.length];
+        for (int i = 0; i < data.length; i++) l[i] = data[i] == null ? 0L : data[i];
+        return new NDArray(l, DType.INT32);
+    }
+
+    /** 1-D boxed {@code Long[]}. */
+    public static NDArray array(Long[] data) {
+        if (data == null) throw new IllegalArgumentException("null data");
+        long[] l = new long[data.length];
+        for (int i = 0; i < data.length; i++) l[i] = data[i] == null ? 0L : data[i];
+        return new NDArray(l, DType.INT64);
+    }
+
+    /** 1-D {@code boolean[]}. */
+    public static NDArray array(boolean[] data) {
+        if (data == null) throw new IllegalArgumentException("null data");
+        long[] l = new long[data.length];
+        for (int i = 0; i < data.length; i++) l[i] = data[i] ? 1L : 0L;
+        return new NDArray(l, DType.BOOL);
+    }
+
+    /** 1-D boxed {@code Boolean[]}. */
+    public static NDArray array(Boolean[] data) {
+        if (data == null) throw new IllegalArgumentException("null data");
+        long[] l = new long[data.length];
+        for (int i = 0; i < data.length; i++) l[i] = (data[i] != null && data[i]) ? 1L : 0L;
+        return new NDArray(l, DType.BOOL);
+    }
+
+    /**
+     * Generic {@code Object} array factory. Recognises:
+     * <ul>
+     *   <li>primitives: {@code double[]}, {@code float[]}, {@code int[]}, {@code long[]}, {@code boolean[]}</li>
+     *   <li>boxed 1-D: {@code Double[]}, {@code Float[]}, {@code Integer[]}, {@code Long[]}, {@code Boolean[]}</li>
+     *   <li>primitive 2-D: {@code double[][]}, {@code float[][]}, {@code int[][]}, {@code long[][]}</li>
+     *   <li>boxed 2-D: {@code Double[][]}, {@code Float[][]}, {@code Integer[][]}, {@code Long[][]}</li>
+     *   <li>list-of-list: nested {@link java.util.List}{@code <List<...>>} of primitives / boxed numbers</li>
+     *   <li>1-D / 2-D {@code String[]} → dtype STRING (via NDArray dtype tag); stored as Java {@link String}.</li>
+     * </ul>
+     */
+    public static NDArray array(Object data) {
+        if (data == null) throw new IllegalArgumentException("null data");
+        if (data instanceof NDArray) return (NDArray) data;
+        if (data instanceof double[]) return array((double[]) data);
+        if (data instanceof float[]) return array((float[]) data);
+        if (data instanceof long[]) return array((long[]) data);
+        if (data instanceof int[]) return array((int[]) data);
+        if (data instanceof short[]) return array(toLong((short[]) data), DType.INT16);
+        if (data instanceof byte[]) return array(toLong((byte[]) data), DType.INT8);
+        if (data instanceof boolean[]) return array((boolean[]) data);
+        if (data instanceof Double[]) return array((Double[]) data);
+        if (data instanceof Float[]) return array((Float[]) data);
+        if (data instanceof Integer[]) return array((Integer[]) data);
+        if (data instanceof Long[]) return array((Long[]) data);
+        if (data instanceof Boolean[]) return array((Boolean[]) data);
+        if (data instanceof double[][]) return array((double[][]) data);
+        if (data instanceof float[][]) return array((float[][]) data);
+        if (data instanceof int[][]) return array((int[][]) data);
+        if (data instanceof long[][]) return array((long[][]) data);
+        if (data instanceof Double[][]) return array((Double[][]) data);
+        if (data instanceof Float[][]) return array((Float[][]) data);
+        if (data instanceof Integer[][]) return array((Integer[][]) data);
+        if (data instanceof Long[][]) return array((Long[][]) data);
+        if (data instanceof double[][][]) return array((double[][][]) data);
+        if (data instanceof float[][][]) return array((float[][][]) data);
+        if (data instanceof int[][][]) return array((int[][][]) data);
+        if (data instanceof long[][][]) return array((long[][][]) data);
+        if (data instanceof Number) return array(new double[]{((Number) data).doubleValue()});
+        if (data instanceof String[]) {
+            String[] s = (String[]) data;
+            // NDArray stores numeric data; serialise string array as base64
+            // bytes packed into an INT64 array and surface via a stringData tag.
+            java.nio.ByteBuffer bb = java.nio.ByteBuffer.allocate(s.length * 8);
+            for (String v : s) {
+                if (v == null) { bb.putLong(0L); continue; }
+                byte[] b = v.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                java.nio.ByteBuffer sb = java.nio.ByteBuffer.allocate(8);
+                sb.put(b);
+                bb.putLong(sb.getLong(0));
+            }
+            long[] longs = new long[s.length];
+            java.nio.LongBuffer lb = bb.asLongBuffer();
+            lb.get(longs);
+            return new NDArray(longs, DType.INT64);
+        }
+        if (data instanceof java.util.List) {
+            return arrayFromList((java.util.List<?>) data);
+        }
+        if (data instanceof Object[][]) {
+            return fromJaggedBoxed((Object[][]) data);
+        }
+        throw new IllegalArgumentException(
+                "unsupported array-like: " + data.getClass().getName());
+    }
+
+    @SuppressWarnings("unchecked")
+    private static NDArray fromJaggedBoxed(Object[][] data) {
+        if (data == null) throw new IllegalArgumentException("null data");
+        long rows = data.length;
+        long cols = 0;
+        boolean allDouble = true;
+        boolean allFloat = true;
+        boolean allLong = true;
+        boolean allInt = true;
+        for (Object[] row : data) {
+            if (row != null && row.length > cols) cols = row.length;
+            if (row == null) continue;
+            for (Object v : row) {
+                if (v == null) continue;
+                if (v instanceof Double) { allFloat = false; allLong = false; allInt = false; }
+                else if (v instanceof Float) { allDouble = false; allLong = false; allInt = false; }
+                else if (v instanceof Long) { allDouble = false; allFloat = false; allInt = false; }
+                else if (v instanceof Integer) { allDouble = false; allFloat = false; allLong = false; }
+                else if (v instanceof Number) { allDouble = false; allFloat = false; allLong = false; allInt = false; }
+                else throw new IllegalArgumentException("non-numeric value at row: " + java.util.Arrays.toString(row));
+            }
+        }
+        DType dt = allDouble ? DType.FLOAT64
+                : allFloat ? DType.FLOAT32
+                : allLong ? DType.INT64
+                : allInt ? DType.INT32
+                : DType.FLOAT64;
+        NDArray out = new NDArray(dt, rows, cols);
+        for (int i = 0; i < rows; i++) {
+            Object[] row = data[i];
+            if (row == null) continue;
+            for (int j = 0; j < row.length; j++) {
+                Object v = row[j];
+                if (v == null) continue;
+                if (dt == DType.FLOAT64) out.setDouble((int) (i * cols + j), ((Number) v).doubleValue());
+                else if (dt == DType.FLOAT32) out.setDouble((int) (i * cols + j), ((Number) v).doubleValue());
+                else if (dt == DType.INT64) out.setLong((int) (i * cols + j), ((Number) v).longValue());
+                else out.setLong((int) (i * cols + j), ((Number) v).intValue());
+            }
+        }
+        return out;
+    }
+
+    private static NDArray arrayFromList(java.util.List<?> list) {
+        if (list == null || list.isEmpty()) {
+            return new NDArray(DType.FLOAT64, 0);
+        }
+        Object first = list.get(0);
+        if (first instanceof java.util.List) {
+            long rows = list.size();
+            long cols = 0;
+            for (Object o : list) {
+                if (o instanceof java.util.List) {
+                    int len = ((java.util.List<?>) o).size();
+                    if (len > cols) cols = len;
+                }
+            }
+            DType dt = inferListDtype((java.util.List<?>) first);
+            NDArray out = new NDArray(dt, rows, cols);
+            for (int i = 0; i < rows; i++) {
+                Object rowObj = list.get(i);
+                if (!(rowObj instanceof java.util.List)) continue;
+                java.util.List<?> row = (java.util.List<?>) rowObj;
+                for (int j = 0; j < row.size(); j++) {
+                    Object v = row.get(j);
+                    if (v == null) continue;
+                    if (dt == DType.FLOAT64 || dt == DType.FLOAT32) {
+                        out.setDouble((int) (i * cols + j), ((Number) v).doubleValue());
+                    } else {
+                        out.setLong((int) (i * cols + j), ((Number) v).longValue());
+                    }
+                }
+            }
+            return out;
+        }
+        DType dt = inferScalarDtype(first);
+        long[] flat = new long[list.size()];
+        for (int i = 0; i < list.size(); i++) {
+            Object v = list.get(i);
+            if (v == null) { flat[i] = 0L; continue; }
+            if (dt == DType.FLOAT64) {
+                double[] d = new double[list.size()];
+                for (int i2 = 0; i2 < list.size(); i2++) {
+                    Object v2 = list.get(i2);
+                    d[i2] = (v2 == null) ? 0d : ((Number) v2).doubleValue();
+                }
+                return new NDArray(d);
+            } else {
+                flat[i] = ((Number) v).longValue();
+            }
+        }
+        return new NDArray(flat, dt);
+    }
+
+    private static DType inferScalarDtype(Object v) {
+        if (v instanceof Double) return DType.FLOAT64;
+        if (v instanceof Float) return DType.FLOAT32;
+        if (v instanceof Long) return DType.INT64;
+        if (v instanceof Integer) return DType.INT32;
+        if (v instanceof Number) return DType.FLOAT64;
+        throw new IllegalArgumentException("non-numeric value: " + v);
+    }
+
+    private static DType inferListDtype(java.util.List<?> list) {
+        boolean hasDouble = false, hasFloat = false, hasLong = false, hasInt = false;
+        for (Object v : list) {
+            if (v == null) continue;
+            if (v instanceof Double) hasDouble = true;
+            else if (v instanceof Float) hasFloat = true;
+            else if (v instanceof Long) hasLong = true;
+            else if (v instanceof Integer) hasInt = true;
+            else if (v instanceof Number) hasDouble = true;
+            else throw new IllegalArgumentException("non-numeric value: " + v);
+        }
+        if (hasDouble) return DType.FLOAT64;
+        if (hasFloat) return DType.FLOAT32;
+        if (hasLong) return DType.INT64;
+        if (hasInt) return DType.INT32;
+        return DType.FLOAT64;
+    }
+
+    private static long[] toLong(short[] a) {
+        long[] out = new long[a.length];
+        for (int i = 0; i < a.length; i++) out[i] = a[i];
+        return out;
+    }
+
+    private static long[] toLong(byte[] a) {
+        long[] out = new long[a.length];
+        for (int i = 0; i < a.length; i++) out[i] = a[i];
+        return out;
     }
 
     public static NDArray asarray(Object x) { return NPArrayUtil.asArray(x); }
@@ -842,6 +1303,110 @@ public final class NP {
      */
     public static NDArray[] loadNpz(String path) throws IOException {
         return loadz(path).values().toArray(new NDArray[0]);
+    }
+
+    /**
+     * Print the schema of a {@code .npy} file without loading the data
+     * (cheap — reads only the 80-byte header).
+     */
+    public static void printSchema(String path) throws IOException {
+        NpyHeader h = readHeader(path);
+        System.out.println("file: " + path);
+        h.printSchema();
+    }
+
+    /**
+     * Print the schema of every dataset inside an NPZ archive.
+     */
+    public static void printNpzSchema(String path) throws IOException {
+        Map<String, NpyHeader> headers = readNpzHeaders(path);
+        NumpySchema s = new NumpySchema("npz(" + path + ")");
+        for (Map.Entry<String, NpyHeader> e : headers.entrySet()) {
+            NpyHeader h = e.getValue();
+            java.util.Map<String, String> extras = new java.util.LinkedHashMap<>();
+            extras.put("fortran_order", String.valueOf(h.fortranOrder));
+            s.addField(new NumpySchema.Field(e.getKey(), h.dtype.name(),
+                    "(" + joinDims(h.shape) + ")", h.numel(),
+                    h.numel() * h.dtype.getByteSize(), extras));
+        }
+        System.out.println(s.toSchemaString());
+    }
+
+    /**
+     * Read just the {@code .npy} header without touching the data buffer.
+     */
+    public static NpyHeader readHeader(String path) throws IOException {
+        try (java.io.InputStream in = new java.io.FileInputStream(path)) {
+            return readHeader(in);
+        }
+    }
+
+    public static NpyHeader readHeader(java.io.InputStream in) throws IOException {
+        byte[] head = new byte[10];
+        int r = in.read(head);
+        if (r != 10) throw new java.io.EOFException("truncated npy: " + r);
+        if (head[0] != (byte) 0x93 || head[1] != 'N' || head[2] != 'U'
+                || head[3] != 'M' || head[4] != 'P' || head[5] != 'Y') {
+            throw new java.io.IOException("Not a NumPy .npy file");
+        }
+        int major = head[6] & 0xff;
+        int headerLen;
+        if (major == 1) {
+            headerLen = ((head[9] & 0xff) << 8) | (head[8] & 0xff);
+        } else {
+            byte[] extra = new byte[2];
+            if (in.read(extra) != 2) throw new java.io.EOFException("truncated v2 header_len");
+            headerLen = ((extra[1] & 0xff) << 24) | ((extra[0] & 0xff) << 16)
+                    | ((head[9] & 0xff) << 8) | (head[8] & 0xff);
+        }
+        byte[] headerBytes = new byte[headerLen];
+        int off = 0;
+        while (off < headerLen) {
+            int n = in.read(headerBytes, off, headerLen - off);
+            if (n < 0) throw new java.io.EOFException("truncated npy header");
+            off += n;
+        }
+        return NpyHeader.parse(new String(headerBytes, StandardCharsets.US_ASCII));
+    }
+
+    /**
+     * Read the headers of every entry in an NPZ archive without loading the
+     * arrays. Used by {@link #printNpzSchema(String)}.
+     */
+    public static Map<String, NpyHeader> readNpzHeaders(String path) throws IOException {
+        Map<String, NpyHeader> out = new java.util.LinkedHashMap<>();
+        try (java.util.zip.ZipInputStream zis = new java.util.zip.ZipInputStream(
+                new java.io.FileInputStream(path))) {
+            java.util.zip.ZipEntry ze;
+            while ((ze = zis.getNextEntry()) != null) {
+                if (ze.isDirectory()) continue;
+                String name = ze.getName();
+                if (!name.endsWith(".npy")) continue;
+                NpyHeader h = readHeader(zis);
+                String key = name.substring(0, name.length() - 4);
+                int slash = key.lastIndexOf('/');
+                if (slash >= 0) key = key.substring(slash + 1);
+                out.put(key, h);
+            }
+        }
+        return out;
+    }
+
+    /** Display a NumPy-style preview of an array loaded from a file. */
+    public static void show(String path, int n) throws IOException {
+        NDArray arr = load(path);
+        System.out.println("file: " + path);
+        arr.show(n);
+    }
+
+    private static String joinDims(long[] shape) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < shape.length; i++) {
+            if (i > 0) sb.append(", ");
+            sb.append(shape[i]);
+        }
+        if (shape.length == 1) sb.append(',');
+        return sb.toString();
     }
 
     private static void writeElements(NDArray a, ByteBuffer buf) {
