@@ -1,5 +1,6 @@
 package org.bytedeco.pytorch.dataframe;
 
+import org.bytedeco.pytorch.dataframe.io.DataFrameReader;
 import org.bytedeco.pytorch.dataframe.io.ImdbShow;
 
 import java.io.*;
@@ -451,7 +452,7 @@ public class DataShow {
         
         Column col = df.column(0);
         int totalCols = (int) col.size();
-        int displayCols = Math.min(totalCols, opts.maxCols(6));
+        int displayCols = Math.min(totalCols, opts.maxCols());
         int rows = df.rowCount();
         
         // Show column indices
@@ -636,6 +637,13 @@ public class DataShow {
     private static String showOrc(String path, ShowOptions opts) throws Exception {
         org.bytedeco.pytorch.dataframe.DataFrame df = DataFrame.readOrc(path);
         return formatGenericShow("ORC", path, df, opts);
+    }
+
+    // ---- LMDB ----
+
+    private static String showLmdb(String path, ShowOptions opts) throws Exception {
+        org.bytedeco.pytorch.dataframe.DataFrame df = DataFrame.readLmdb(path);
+        return formatGenericShow("LMDB", path, df, opts);
     }
 
     // ---- GGUF ----

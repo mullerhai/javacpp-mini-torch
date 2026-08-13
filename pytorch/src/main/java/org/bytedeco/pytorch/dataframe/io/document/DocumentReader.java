@@ -228,11 +228,21 @@ public class DocumentReader {
         html = html.replaceAll("&gt;", ">");
         html = html.replaceAll("&amp;", "&");
         html = html.replaceAll("&quot;", "\"");
-        html = html.replaceAll("&#(\\d+);", match -> String.valueOf((char)Integer.parseInt(match.group(1))));
-        
+        // Java 8-compatible entity decoder (use Pattern + Matcher instead of replaceAll lambda
+        // to avoid overload ambiguity on older toolchains).
+        java.util.regex.Pattern ampP = java.util.regex.Pattern.compile("&#(\\d+);");
+        java.util.regex.Matcher ampM = ampP.matcher(html);
+        StringBuilder out = new StringBuilder();
+        while (ampM.find()) {
+            ampM.appendReplacement(out, java.util.regex.Matcher.quoteReplacement(
+                String.valueOf((char) Integer.parseInt(ampM.group(1)))));
+        }
+        ampM.appendTail(out);
+        html = out.toString();
+
         // Clean up whitespace
         html = html.replaceAll("\\s+", " ").trim();
-        
+
         return html;
     }
 
@@ -318,11 +328,11 @@ public class DocumentReader {
         
         for (String line : lines) {
             if (line.contains("{\\rtf")) continue;
-            
+
             // Extract text from RTF
             StringBuilder word = new StringBuilder();
-            boolean skipGroup = 0;
-            
+            int skipGroup = 0;
+
             for (int i = 0; i < line.length(); i++) {
                 char c = line.charAt(i);
                 

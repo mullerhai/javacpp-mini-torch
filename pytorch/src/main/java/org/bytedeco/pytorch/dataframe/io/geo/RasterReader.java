@@ -220,7 +220,7 @@ public class RasterReader {
                     break;
                 case 339: // SampleFormat
                     break;
-                case 42113: // GDAL_NODATA
+                case (short) 42113: // GDAL_NODATA
                     if (value instanceof Number) {
                         info.noDataValue = ((Number)value).doubleValue();
                     }

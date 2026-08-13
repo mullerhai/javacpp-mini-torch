@@ -156,11 +156,11 @@ public final class LLMModuleBuilder {
      * Python {@code torch.load(..., weights_only=True)} for HF LLM dirs / files.
      */
     public static Map<String, Tensor> loadWeightsOnly(Path path) throws IOException {
-        return loadWeightsOnly(path, LoadOptions.weightsOnly());
+        return loadWeightsOnly(path, LoadOptions.weightsOnlyLoad());
     }
 
     public static Map<String, Tensor> loadWeightsOnly(Path path, LoadOptions opts) throws IOException {
-        if (opts == null) opts = LoadOptions.weightsOnly();
+        if (opts == null) opts = LoadOptions.weightsOnlyLoad();
         else if (!opts.weightsOnly) {
             opts = opts.toBuilder().weightsOnly(true).build();
         }

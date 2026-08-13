@@ -95,9 +95,9 @@ public class BinWriter {
     private static OutputStream createOutputStream(String path, BinOptions opt) throws IOException {
         OutputStream out = Files.newOutputStream(Path.of(path));
         
-        if (opt.compression().equals(BinOptions.Compression.DEFLATE)) {
+        if (opt.compression().equals(Compression.DEFLATE)) {
             out = new java.util.zip.DeflaterOutputStream(out);
-        } else if (opt.compression().equals(BinOptions.Compression.GZIP)) {
+        } else if (opt.compression().equals(Compression.GZIP)) {
             out = new java.util.zip.GZIPOutputStream(out);
         }
         
@@ -116,7 +116,7 @@ public class BinWriter {
         buf.putShort((short) VERSION);
         
         short flags = 0;
-        if (!opt.compression().equals(BinOptions.Compression.NONE)) flags |= FLAG_COMPRESSED;
+        if (!opt.compression().equals(Compression.NONE)) flags |= FLAG_COMPRESSED;
         if (opt.utf8Strings()) flags |= FLAG_UTF8_STRINGS;
         if (opt.columnar()) flags |= FLAG_COLUMNAR;
         buf.putShort(flags);
@@ -136,7 +136,7 @@ public class BinWriter {
         buf.putShort((short) VERSION);
         
         short flags = 0;
-        if (!opt.compression().equals(BinOptions.Compression.NONE)) flags |= FLAG_COMPRESSED;
+        if (!opt.compression().equals(Compression.NONE)) flags |= FLAG_COMPRESSED;
         if (opt.utf8Strings()) flags |= FLAG_UTF8_STRINGS;
         if (opt.columnar()) flags |= FLAG_COLUMNAR;
         buf.putShort(flags);
@@ -236,37 +236,37 @@ public class BinWriter {
         buf.order(ByteOrder.LITTLE_ENDIAN);
         
         switch (dtype) {
-            case BOOLEAN:
+            case Column.DType.BOOLEAN:
                 out.write(((Boolean) val) ? 1 : 0);
                 break;
-            case INT8:
-            case UINT8:
-                out.write(((Number) val).byteValue());
-                break;
-            case INT16:
-            case UINT16:
-                buf.putShort(((Number) val).shortValue());
-                out.write(buf.array(), 0, 2);
-                break;
-            case INT32:
-            case UINT32:
-            case FLOAT32:
+//            case Column.DType.INT8:
+//            case Column.DType.UINT8:
+//                out.write(((Number) val).byteValue());
+//                break;
+//            case Column.DType.INT16:
+//            case Column.DType.UINT16:
+//                buf.putShort(((Number) val).shortValue());
+//                out.write(buf.array(), 0, 2);
+//                break;
+            case Column.DType.INT32:
+//            case Column.DType.UINT32:
+            case Column.DType.FLOAT32:
                 buf.putInt(((Number) val).intValue());
                 out.write(buf.array(), 0, 4);
                 break;
-            case INT64:
-            case UINT64:
-            case FLOAT64:
+            case Column.DType.INT64:
+//            case Column.DType.UINT64:
+            case Column.DType.FLOAT64:
                 buf.putLong(((Number) val).longValue());
                 out.write(buf.array(), 0, 8);
                 break;
-            case STRING:
+            case Column.DType.STRING:
                 byte[] strBytes = val.toString().getBytes(StandardCharsets.UTF_8);
                 buf.putInt(strBytes.length);
                 out.write(buf.array(), 0, 4);
                 out.write(strBytes);
                 break;
-            case BINARY:
+            case Column.DType.BINARY:
                 byte[] binBytes = (byte[]) val;
                 buf.putInt(binBytes.length);
                 out.write(buf.array(), 0, 4);

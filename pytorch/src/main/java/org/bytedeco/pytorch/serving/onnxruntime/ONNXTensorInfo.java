@@ -1,7 +1,7 @@
 package org.bytedeco.pytorch.serving.onnxruntime;
 
 import ai.onnxruntime.OnnxJavaType;
-import java.util.List;
+import ai.onnxruntime.TensorInfo;
 import java.util.Objects;
 
 /**
@@ -19,6 +19,16 @@ public final class ONNXTensorInfo {
         this.type = type;
         this.shape = shape != null ? shape : new long[0];
         this.elementType = elementType;
+    }
+
+    /**
+     * Construct from ONNX Runtime {@link TensorInfo} (onnxruntime 1.28 API).
+     */
+    public ONNXTensorInfo(String name, TensorInfo info, long[] shape) {
+        this.name = Objects.requireNonNull(name, "name");
+        this.type = info != null ? info.toString() : "";
+        this.shape = shape != null ? shape : new long[0];
+        this.elementType = info != null ? info.type : OnnxJavaType.FLOAT;
     }
 
     /**

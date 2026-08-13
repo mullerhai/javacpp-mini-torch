@@ -49,9 +49,9 @@ public class NumpyWriter {
         // Select column
         int colIdx = 0;
         if (opt.column() != null) {
-            colIdx = df.getColumnIndex(opt.column());
+            colIdx = df.columnIndex(opt.column());
         }
-        
+
         if (colIdx < 0 || colIdx >= df.columnCount()) {
             throw new IOException("Column not found: " + opt.column());
         }
@@ -152,17 +152,17 @@ public class NumpyWriter {
                 Files.newOutputStream(Path.of(path)))) {
             
             for (String colName : columns) {
-                int idx = df.getColumnIndex(colName);
+                int idx = df.columnIndex(colName);
                 if (idx < 0) continue;
                 
                 zout.putNextEntry(new java.util.zip.ZipEntry(sanitizeName(colName) + ".npy"));
-                
+
                 Column col = df.column(idx);
                 Object[] data = extractColumn(df, idx);
                 String dtype = inferNumpyDtype(col);
-                
+
                 byte[] header = buildNpyHeader(dtype, new long[]{data.length}, opt);
-                
+
                 zout.write(MAGIC);
                 zout.write(VERSION_MAJOR);
                 zout.write(VERSION_MINOR);
@@ -187,17 +187,13 @@ public class NumpyWriter {
     private static String inferNumpyDtype(Column col) {
         switch (col.dtype()) {
             case BOOLEAN: return "b1";
-            case INT8: return "i1";
-            case INT16: return "i2";
             case INT32: return "i4";
             case INT64: return "i8";
-            case UINT8: return "u1";
-            case UINT16: return "u2";
-            case UINT32: return "u4";
-            case UINT64: return "u8";
             case FLOAT32: return "f4";
             case FLOAT64: return "f8";
-            default: return "O";  // Object
+            default: return "O";  // Object (covers STRING, TENSOR, DATE, DATETIME, TIME, DURATION,
+                                  // VECTOR, IMAGE, AUDIO, VIDEO, EMBEDDING, BINARY, JSON, LIST,
+                                  // MAP, STRUCT, GRAPH, POINT_CLOUD, NULL)
         }
     }
 

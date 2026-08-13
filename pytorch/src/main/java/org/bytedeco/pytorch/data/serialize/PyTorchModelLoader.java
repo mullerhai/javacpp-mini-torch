@@ -1,27 +1,26 @@
 package org.bytedeco.pytorch.data.serialize;
+import org.bytedeco.pytorch.*;
+import org.bytedeco.pytorch.data.numpy.NP;
+import org.bytedeco.pytorch.data.safetensors.SafeTensors;
 import org.bytedeco.pytorch.jit.*;
 import org.bytedeco.pytorch.optim.*;
 import org.bytedeco.pytorch.optim.options.*;
 
-import org.bytedeco.pytorch.Device;
-import org.bytedeco.pytorch.DeviceOptional;
-import org.bytedeco.pytorch.IValue;
-import org.bytedeco.pytorch.IValueVector;
-import org.bytedeco.pytorch.LongArrayRef;
-import org.bytedeco.pytorch.Tensor;
 import org.bytedeco.pytorch.global.torch.ScalarType;
 import org.bytedeco.pytorch.jit.JitModule;
-import org.bytedeco.pytorch.jit.ExtraFilesMap;
 import org.bytedeco.pytorch.nn.Module;
 import org.bytedeco.pytorch.data.safetensors.LoadOptions;
 import org.bytedeco.pytorch.global.torch;
+import org.bytedeco.pytorch.global.torch.DeviceType;
 
 import java.io.*;
 import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
+import java.util.zip.ZipFile;
 
 /**
  * Universal PyTorch model loader supporting all formats.
@@ -151,7 +150,7 @@ public final class PyTorchModelLoader {
             return ModelType.PICKLE;
         }
         if (name.endsWith(".bin")) {
-            return ModelType.BIN; // .bin files default to BIN format
+            return ModelType.BIN_GENERIC; // .bin files default to BIN format
         }
 
         return ModelType.UNKNOWN;
@@ -229,14 +228,14 @@ public final class PyTorchModelLoader {
      * @return Loaded JitModule ready for inference
      */
     public static JitModule loadJitScript(File file) {
-        return loadJitScript(file, Device.CPU);
+        return torch.load(file.getAbsolutePath());
     }
 
     /**
      * Load a TorchScript model to specific device.
      */
     public static JitModule loadJitScript(File file, Device device) {
-        return torch.jit_load(file.getAbsolutePath(), new DeviceOptional(device));
+        return torch.load(file.getAbsolutePath(), new DeviceOptional(device), new ExtraFilesMap());
     }
 
     /**
@@ -257,14 +256,14 @@ public final class PyTorchModelLoader {
      * Load TorchScript model with custom extras.
      */
     public static JitModule loadJitScript(File file, Device device, ExtraFilesMap extras) {
-        return torch.jit_load(file.getAbsolutePath(), new DeviceOptional(device), extras);
+        return torch.load(file.getAbsolutePath(), new DeviceOptional(device), extras);
     }
 
     /**
      * Load TorchScript model from InputStream.
      */
     public static JitModule loadJitScript(InputStream in) {
-        return loadJitScript(in, Device.CPU);
+        return loadJitScript(in, new Device(DeviceType.CPU));
     }
 
     /**
@@ -272,18 +271,11 @@ public final class PyTorchModelLoader {
      */
     public static JitModule loadJitScript(InputStream in, Device device) {
         try {
-            // Read all bytes and parse
-            ByteArrayOutputStream baos = new ByteArrayOutputStream();
-            byte[] buffer = new byte[8192];
-            int read;
-            while ((read = in.read(buffer)) != -1) {
-                baos.write(buffer, 0, read);
-            }
-            byte[] data = baos.toByteArray();
-
-            // Use parse_and_initialize_jit_module for byte array
-            return torch.parse_and_initialize_jit_module(
-                data, data.length, new ExtraFilesMap(), new DeviceOptional(device));
+            Path tmp = Files.createTempFile("jit_model", ".pt");
+            Files.copy(in, tmp, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            JitModule result = torch.load(tmp.toString(), new DeviceOptional(device), new ExtraFilesMap());
+            Files.deleteIfExists(tmp);
+            return result;
         } catch (IOException e) {
             throw new RuntimeException("Failed to load TorchScript from stream", e);
         }
@@ -412,16 +404,17 @@ public final class PyTorchModelLoader {
                 long numel = 1;
                 for (long d : dims) numel *= d;
 
-                Tensor tensor = torch.zeros(dims, TensorOptions.dtype(scalarType));
-                if (opts.mapLocation() != null) {
-                    tensor = tensor.to(opts.mapLocation());
-                }
-
-                // Read data
-                java.nio.channels.FileChannel channel = raf.getChannel();
+                FileChannel channel = raf.getChannel();
                 long pos = channel.position();
-                tensor.setData(channel.map(java.nio.channels.FileChannel.MapMode.READ_ONLY, pos, numel * tensor.element_size()));
-                channel.position(pos + numel * tensor.element_size());
+                long dataSize = numel * elementSize(scalarType);
+                java.nio.MappedByteBuffer buf = channel.map(FileChannel.MapMode.READ_ONLY, pos, dataSize);
+                org.bytedeco.javacpp.BytePointer ptr = new org.bytedeco.javacpp.BytePointer(buf);
+                TensorOptions topts = new TensorOptions().dtype(new ScalarTypeOptional(scalarType));
+                if (opts.mapLocation() != null) {
+                    topts = topts.device(new DeviceOptional(opts.mapLocation()));
+                }
+                Tensor tensor = torch.from_blob(ptr, dims, topts);
+                channel.position(pos + dataSize);
 
                 result.put(name, tensor);
             }
@@ -449,7 +442,7 @@ public final class PyTorchModelLoader {
      * Load NumPy .npy format.
      */
     private static Map<String, Tensor> loadNumpyBin(File file) throws IOException {
-        Tensor tensor = NP.load(file);
+        Tensor tensor = NP.load(file.getPath()).toTensor();
         Map<String, Tensor> result = new LinkedHashMap<>();
         result.put(file.getName().replace(".npy", ""), tensor);
         return result;
@@ -482,10 +475,12 @@ public final class PyTorchModelLoader {
                 for (long d : dims) numel *= d;
                 long dataSize = numel * elementSize(scalarType);
 
-                Tensor tensor = torch.zeros(dims, TensorOptions.dtype(scalarType));
-                java.nio.channels.FileChannel channel = raf.getChannel();
+                FileChannel channel = raf.getChannel();
                 long dataPos = channel.position();
-                tensor.setData(channel.map(java.nio.channels.FileChannel.MapMode.READ_ONLY, dataPos, dataSize));
+                java.nio.MappedByteBuffer buf = channel.map(FileChannel.MapMode.READ_ONLY, dataPos, dataSize);
+                org.bytedeco.javacpp.BytePointer ptr = new org.bytedeco.javacpp.BytePointer(buf);
+                TensorOptions topts = new TensorOptions().dtype(new ScalarTypeOptional(scalarType));
+                Tensor tensor = torch.from_blob(ptr, dims, topts);
 
                 result.put("tensor_" + result.size(), tensor);
 
@@ -496,17 +491,20 @@ public final class PyTorchModelLoader {
     }
 
     private static long elementSize(ScalarType dtype) {
+        if (dtype == null) return 4;
         switch (dtype) {
-            case Float: return 4;
-            case Double: return 8;
-            case Int: case UInt8: return 4;
-            case Short: return 2;
-            case Long: return 8;
-            case Byte: case Char: return 1;
-            case Bool: return 1;
-            case Half: return 2;
-            case BFloat16: return 2;
-            default: return 4;
+            case ScalarType.Float:   return 4;
+            case ScalarType.Double:  return 8;
+            case ScalarType.Int:     return 4;
+            case ScalarType.UInt8:   return 4;
+            case ScalarType.Short:   return 2;
+            case ScalarType.Long:    return 8;
+            case ScalarType.Byte:    return 1;
+            case ScalarType.Char:    return 1;
+            case ScalarType.Bool:    return 1;
+            case ScalarType.Half:   return 2;
+            case ScalarType.BFloat16: return 2;
+            default:                return 4;
         }
     }
 
@@ -530,8 +528,9 @@ public final class PyTorchModelLoader {
                     case TORCH_SCRIPT:
                         return loadJitScript(file);
                     case STATE_DICT:
-                    case HUGGINGFACE:
                         return loadAsModule(file);
+                    case HUGGINGFACE:
+                        return loadHuggingFaceModel(file);
                     case PICKLE:
                     case BIN_MICROLENS:
                     case HDF5:
@@ -560,7 +559,7 @@ public final class PyTorchModelLoader {
             return ModelWeights.load(file, opts);
         }
         if (mode == LoadMode.Module) {
-            return ModelWeights.toModule(file, opts.weightsOnly(), opts);
+            return ModelWeights.toModule(file, opts.weightsOnly, opts);
         }
         return load(file, mode);
     }
@@ -571,7 +570,7 @@ public final class PyTorchModelLoader {
      * Load a HuggingFace model directory.
      * Requires config.json and weight files in the directory.
      */
-    public static LLMModuleBuilder.HuggingFaceModel loadHuggingFaceModel(File dir) throws IOException {
+    public static WeightBagModule loadHuggingFaceModel(File dir) throws IOException {
         if (!dir.isDirectory()) {
             throw new IOException("Not a directory: " + dir);
         }
@@ -579,14 +578,14 @@ public final class PyTorchModelLoader {
         if (!configFile.exists()) {
             throw new IOException("Missing config.json in: " + dir);
         }
-        return LLMModuleBuilder.fromHuggingFaceDirectory(dir);
+        return LLMModuleBuilder.fromHuggingFace(dir.toPath());
     }
 
-    public static LLMModuleBuilder.HuggingFaceModel loadHuggingFaceModel(Path dir) throws IOException {
+    public static WeightBagModule loadHuggingFaceModel(Path dir) throws IOException {
         return loadHuggingFaceModel(dir.toFile());
     }
 
-    public static LLMModuleBuilder.HuggingFaceModel loadHuggingFaceModel(String dir) throws IOException {
+    public static WeightBagModule loadHuggingFaceModel(String dir) throws IOException {
         return loadHuggingFaceModel(new File(dir));
     }
 
@@ -598,13 +597,13 @@ public final class PyTorchModelLoader {
     public static Tensor infer(JitModule model, Tensor... inputs) {
         IValueVector inputIValues = new IValueVector();
         for (Tensor t : inputs) {
-            inputIValues.add(IValue.from(t));
+            inputIValues.push_back(new IValue(t));
         }
         IValue output = model.forward(inputIValues);
         if (output.isTensor()) {
             return output.toTensor();
         }
-        throw new RuntimeException("Model output is not a tensor: " + output.tag());
+        throw new RuntimeException("Model output is not a tensor: " + output.tagKind());
     }
 
     /**
@@ -613,13 +612,13 @@ public final class PyTorchModelLoader {
     public static Tensor infer(JitModule model, List<Tensor> inputs) {
         IValueVector inputIValues = new IValueVector();
         for (Tensor t : inputs) {
-            inputIValues.add(IValue.from(t));
+            inputIValues.push_back(new IValue(t));
         }
         IValue output = model.forward(inputIValues);
         if (output.isTensor()) {
             return output.toTensor();
         }
-        throw new RuntimeException("Model output is not a tensor: " + output.tag());
+        throw new RuntimeException("Model output is not a tensor: " + output.tagKind());
     }
 
     /**
@@ -628,7 +627,7 @@ public final class PyTorchModelLoader {
     public static IValue inferRaw(JitModule model, Tensor... inputs) {
         IValueVector inputIValues = new IValueVector();
         for (Tensor t : inputs) {
-            inputIValues.add(IValue.from(t));
+            inputIValues.push_back(new IValue(t));
         }
         return model.forward(inputIValues);
     }
@@ -637,11 +636,18 @@ public final class PyTorchModelLoader {
      * Run inference on a Module (WeightBagModule or custom).
      */
     public static Tensor infer(Module model, Tensor... inputs) {
-        if (model instanceof WeightBagModule) {
-            return model.forward(inputs);
+        if (inputs == null || inputs.length == 0) {
+            throw new IllegalArgumentException("At least one input tensor required");
         }
-        // For custom modules, call forward directly
-        return model.forward(inputs);
+        if (inputs.length == 1) {
+            return model.forward(inputs[0]);
+        }
+        // Multi-input: pass as varargs — nn.Module.forward(Tensor, long...) or single Tensor
+        if (model instanceof WeightBagModule) {
+            return model.forward(inputs[0]);
+        }
+        // For multi-input modules, try first tensor
+        return model.forward(inputs[0]);
     }
 
     /**
@@ -664,7 +670,7 @@ public final class PyTorchModelLoader {
      * Prepare a loaded model for training.
      */
     public static void prepareTraining(Module module) {
-        module.train();
+        module.train(true);
     }
 
     /**
@@ -678,8 +684,9 @@ public final class PyTorchModelLoader {
      * Freeze model parameters (set requiresGrad=false).
      */
     public static void freeze(Module module) {
-        for (Tensor param : module.parameters()) {
-            param.setRequires_grad(false);
+        TensorVector params = module.parameters();
+        for (TensorVector.Iterator it = params.begin(), end = params.end(); !it.equals(end); it.increment()) {
+            it.get().set_requires_grad(false);
         }
     }
 
@@ -692,9 +699,10 @@ public final class PyTorchModelLoader {
         } else {
             // Manual freeze for custom modules
             StringTensorDict params = module.named_parameters();
-            for (StringTensorDictItem item : params) {
-                if (item.key().startsWith(prefix)) {
-                    item.value().setRequires_grad(false);
+            for (StringTensorDictItemVector.Iterator it = params.begin(), end = params.end(); !it.equals(end); it.increment()) {
+                StringTensorDictItem item = it.get();
+                if (item.key().getString().startsWith(prefix)) {
+                    item.value().set_requires_grad(false);
                 }
             }
         }
@@ -768,9 +776,8 @@ public final class PyTorchModelLoader {
      * Save a Module to TorchScript format.
      */
     public static void saveAsTorchScript(Module module, File file) {
-        // Convert Module to JitModule first
         JitModule jit = module_to_jit(module);
-        torch.jit_save(jit, file.getAbsolutePath());
+        jit.save(file.getAbsolutePath());
     }
 
     /**
@@ -778,7 +785,7 @@ public final class PyTorchModelLoader {
      */
     public static void saveAsTorchScript(Module module, File file, ExtraFilesMap extras) {
         JitModule jit = module_to_jit(module);
-        torch.jit_save_with_extra(jit, file.getAbsolutePath(), extras);
+        jit.save(file.getAbsolutePath(), extras);
     }
 
     private static native JitModule module_to_jit(Module module);

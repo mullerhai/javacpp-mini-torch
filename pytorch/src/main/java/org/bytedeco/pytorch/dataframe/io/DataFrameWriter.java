@@ -210,11 +210,6 @@ public final class DataFrameWriter {
     public void avro(String path)   throws Exception { format("avro").save(path); }
     public void orc(String path)    throws Exception { format("orc").save(path); }
     public void lance(String path)  throws Exception { format("lance").save(path); }
-    public void pickle(String path) throws Exception { format("pickle").save(path); }
-    public void pkl(String path)    throws Exception { format("pickle").save(path); }
-    public void npz(String path)    throws Exception { format("npz").save(path); }
-    public void npy(String path)    throws Exception { format("npy").save(path); }
-    public void safetensors(String path) throws Exception { format("safetensors").save(path); }
     public void gguf(String path)   throws Exception { format("gguf").save(path); }
     public void bin(String path)    throws Exception { format("bin").save(path); }
     public void text(String path)   throws Exception { format("text").save(path); }
@@ -597,7 +592,6 @@ public final class DataFrameWriter {
             case "text":     return ".txt";
             case "yaml":     return ".yaml";
             case "lmdb":     return ".lmdb";
-            case "gguf":    return ".gguf";
             case "excel":
             case "xlsx":
             case "xls":     return ".xlsx";
@@ -607,8 +601,6 @@ public final class DataFrameWriter {
             case "orc":     return ".orc";
             case "lance":   return ".lance";
             case "toml":    return ".toml";
-            case "bin":
-            case "binary":  return ".bin";
             default:        return "";
         }
     }

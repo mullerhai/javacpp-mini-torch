@@ -58,8 +58,8 @@ public class YamlWriter {
             writer.write("# Columns: " + df.columnCount() + "\n");
         }
         
-        if (opt.style().equals(YamlOptions.Style.FLOW)) {
-            writeFlowStyle(df, writer);
+        if (opt.style().equals(Style.FLOW)) {
+            writeFlowStyle(df, writer, opt);
         } else {
             writeBlockStyle(df, writer, opt);
         }
@@ -68,7 +68,7 @@ public class YamlWriter {
     private static void writeBlockStyle(DataFrame df, BufferedWriter writer, YamlOptions opt) throws IOException {
         writer.write("data:\n");
         
-        if (opt.orient().equals(YamlOptions.Orient.ROWS)) {
+        if (opt.orient().equals(Orient.ROWS)) {
             for (int r = 0; r < df.rowCount(); r++) {
                 writer.write("  - ");
                 boolean first = true;
@@ -97,7 +97,7 @@ public class YamlWriter {
     private static void writeFlowStyle(DataFrame df, BufferedWriter writer, YamlOptions opt) throws IOException {
         writer.write("data: ");
         
-        if (opt.orient().equals(YamlOptions.Orient.ROWS)) {
+        if (opt.orient().equals(Orient.ROWS)) {
             writer.write("[");
             for (int r = 0; r < df.rowCount(); r++) {
                 if (r > 0) writer.write(", ");

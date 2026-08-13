@@ -151,8 +151,8 @@ public class LmdbParser {
         long totalValueSize = 0;
         
         for (LmdbEntry entry : samples) {
-            keyTypes.add(inferKeyType(entry.key()));
-            String vt = inferValueType(entry.value());
+            keyTypes.add(inferKeyType(entry.key));
+            String vt = inferValueType(entry.value);
             valueTypes.add(vt);
             totalValueSize += entry.value != null ? entry.value.length : 0;
         }
@@ -240,15 +240,15 @@ public class LmdbParser {
                 
                 if (pageNum * pageSize >= fileSize) continue;
                 
-                ByteBuffer page = readPage((int)pageNum);
+                ByteBuffer page = readPage((int)pageNum.intValue());
                 short pageType = (short)(page.getShort(0) & 0xFFFF);
                 
                 switch (pageType) {
                     case P_BRANCH:
-                        readBranchPage(page, (int)pageNum, pageQueue);
+                        readBranchPage(page, (int)pageNum.intValue(), pageQueue);
                         break;
                     case P_LEAF:
-                        readLeafPage(page, (int)pageNum, entries, pageQueue, maxEntries);
+                        readLeafPage(page, (int)pageNum.intValue(), entries, pageQueue, maxEntries);
                         break;
                     case P_OVERFLOW:
                         byte[] data = readOverflowPage(page);
@@ -276,15 +276,15 @@ public class LmdbParser {
                 
                 if (pageNum * pageSize >= fileSize) continue;
                 
-                ByteBuffer page = readPage((int)pageNum);
+                ByteBuffer page = readPage((int)pageNum.intValue());
                 short pageType = (short)(page.getShort(0) & 0xFFFF);
                 
                 switch (pageType) {
                     case P_BRANCH:
-                        readBranchPage(page, (int)pageNum, pageQueue);
+                        readBranchPage(page, (int)pageNum.intValue(), pageQueue);
                         break;
                     case P_LEAF:
-                        count = readLeafPageStream(page, (int)pageNum, consumer, pageQueue, maxEntries - count);
+                        count = readLeafPageStream(page, (int)pageNum.intValue(), consumer, pageQueue, maxEntries - count);
                         if (count < 0) return;
                         break;
                     case P_OVERFLOW:
@@ -411,7 +411,7 @@ public class LmdbParser {
             return count;
         }
 
-        private byte[] readOverflowPage(ByteBuffer page) {
+        private byte[] readOverflowPage(ByteBuffer page) throws IOException {
             int pageType = page.getShort(0) & 0xFFFF;
             if (pageType != P_OVERFLOW) {
                 return new byte[0];

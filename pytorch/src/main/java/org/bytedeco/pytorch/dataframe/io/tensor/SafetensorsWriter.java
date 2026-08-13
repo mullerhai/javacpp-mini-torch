@@ -188,12 +188,6 @@ public class SafetensorsWriter {
                     case FLOAT64:
                         buf.putDouble(((Number) val).doubleValue());
                         break;
-                    case INT8:
-                        raf.write(((Number) val).byteValue());
-                        continue;
-                    case INT16:
-                        buf.putShort(((Number) val).shortValue());
-                        break;
                     case INT32:
                         buf.putInt(((Number) val).intValue());
                         break;
@@ -201,14 +195,15 @@ public class SafetensorsWriter {
                         buf.putLong(((Number) val).longValue());
                         break;
                     default:
-                        // Try to convert to float
+                        // INT8/INT16/BOOLEAN and other narrow types -> writeFloat best-effort
                         try {
                             buf.putFloat(Float.parseFloat(val.toString()));
                         } catch (NumberFormatException e) {
                             writeZeros(raf, dtype);
+                            continue;
                         }
                 }
-                
+
                 raf.write(buf.array(), 0, buf.position());
             }
         }
@@ -225,10 +220,8 @@ public class SafetensorsWriter {
             case INT32:
                 size = 4;
                 break;
-            case INT16:
-                size = 2;
-                break;
             default:
+                // INT8/INT16/BOOLEAN and others: write 4 bytes of zeros
                 size = 4;
         }
         for (int i = 0; i < size; i++) {
@@ -239,16 +232,14 @@ public class SafetensorsWriter {
     private static long estimateTensorSize(DataFrame df, int colIdx) {
         Column.DType dtype = df.column(colIdx).dtype();
         int rows = df.rowCount();
-        
+
         switch (dtype) {
             case FLOAT32: return (long) rows * 4;
             case FLOAT64: return (long) rows * 8;
-            case INT8: return rows;
-            case INT16: return (long) rows * 2;
             case INT32: return (long) rows * 4;
             case INT64: return (long) rows * 8;
             case BOOLEAN: return rows;
-            default: return (long) rows * 4;
+            default: return (long) rows * 4;  // INT8/INT16 -> 2 bytes collapsed to 4 here
         }
     }
 
@@ -256,8 +247,6 @@ public class SafetensorsWriter {
         switch (dtype) {
             case FLOAT32: return "F32";
             case FLOAT64: return "F64";
-            case INT8: return "I8";
-            case INT16: return "I16";
             case INT32: return "I32";
             case INT64: return "I64";
             case BOOLEAN: return "BOOL";

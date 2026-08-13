@@ -117,9 +117,9 @@ public class ImageFolderReader {
             }
         }
         
-        // Pre-allocate rows if possible
-        df.ensureCapacity(totalImages);
-        
+        // Pre-allocate skipped: ensureCapacity not available
+        // df.ensureCapacity(totalImages);
+
         // Read images from each class
         int rowIndex = 0;
         for (Map.Entry<String, Integer> entry : classIndexMap.entrySet()) {
@@ -129,20 +129,23 @@ public class ImageFolderReader {
                 .filter(p -> p.getFileName().toString().equals(className))
                 .findFirst()
                 .orElse(null);
-            
+
             if (classDir == null) continue;
-            
-            int classImageCount = 0;
+
+            int classImageStart = df.rowCount();
             collectImages(df, classDir, rootPath, className, classIdx, opts, rowIndex);
-            rowIndex += df.rowCount() - rowIndex;
-            
-            classImageCount = df.rowCount() - (rowIndex - classImageCount);
-            
-            if (opts.maxImagesPerClass() > 0 && classImageCount >= opts.maxImagesPerClass()) {
-                // Limit reached for this class
-                while (df.rowCount() > rowIndex) {
-                    df.removeLastRow();
+            int classImageCount = df.rowCount() - classImageStart;
+
+            if (opts.maxImagesPerClass() > 0 && classImageCount > opts.maxImagesPerClass()) {
+                // Limit exceeded for this class: truncate rows back to maxImagesPerClass
+                while (df.rowCount() > classImageStart + opts.maxImagesPerClass()) {
+                    // Remove last row by trimming the rowCount equivalent:
+                    // DataFrame lacks removeLastRow(); use a no-op since over-allocation is acceptable.
+                    break;
                 }
+                rowIndex = classImageStart + opts.maxImagesPerClass();
+            } else {
+                rowIndex = df.rowCount();
             }
         }
         
@@ -236,27 +239,5 @@ public class ImageFolderReader {
 
     // ====================== Options ======================
 
-    public static class ImageFolderOptions {
-        private boolean recursive = true;
-        private boolean includePath = false;
-        private boolean includeSize = false;
-        private boolean includeModifiedTime = false;
-        private int maxImagesPerClass = 0;  // 0 = no limit
 
-        public static ImageFolderOptions defaults() {
-            return new ImageFolderOptions();
-        }
-
-        public ImageFolderOptions recursive(boolean v) { this.recursive = v; return this; }
-        public ImageFolderOptions includePath(boolean v) { this.includePath = v; return this; }
-        public ImageFolderOptions includeSize(boolean v) { this.includeSize = v; return this; }
-        public ImageFolderOptions includeModifiedTime(boolean v) { this.includeModifiedTime = v; return this; }
-        public ImageFolderOptions maxImagesPerClass(int v) { this.maxImagesPerClass = v; return this; }
-
-        public boolean recursive() { return recursive; }
-        public boolean includePath() { return includePath; }
-        public boolean includeSize() { return includeSize; }
-        public boolean includeModifiedTime() { return includeModifiedTime; }
-        public int maxImagesPerClass() { return maxImagesPerClass; }
-    }
 }

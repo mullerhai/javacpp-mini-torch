@@ -44,7 +44,6 @@ public class ONNXReader {
     /**
      * Load ONNX model from path.
      */
-    @Override
     public ONNXReader load(String path) throws IOException {
         this.sourcePath = path;
         try {
@@ -59,7 +58,6 @@ public class ONNXReader {
     /**
      * Load ONNX model from input stream.
      */
-    @Override
     public ONNXReader load(InputStream is) throws IOException {
         throw new UnsupportedOperationException(
             "ONNX models cannot be loaded from InputStream. Use load(Path) or load(byte[])."
@@ -80,7 +78,6 @@ public class ONNXReader {
         return this;
     }
 
-    @Override
     public StructType schema() {
         if (modelInfo == null) {
             throw new IllegalStateException("No model loaded");
@@ -138,7 +135,6 @@ public class ONNXReader {
         }
     }
 
-    @Override
     public List<Row> read(int maxRows) {
         if (modelInfo == null) {
             throw new IllegalStateException("No model loaded");
@@ -172,7 +168,6 @@ public class ONNXReader {
         return rows;
     }
 
-    @Override
     public void printSchema() {
         if (modelInfo == null) {
             System.out.println("No model loaded");
@@ -212,12 +207,10 @@ public class ONNXReader {
         }
     }
 
-    @Override
     public void show() {
         printSchema();
     }
 
-    @Override
     public void close() throws IOException {
         if (!closed && session != null) {
             closed = true;

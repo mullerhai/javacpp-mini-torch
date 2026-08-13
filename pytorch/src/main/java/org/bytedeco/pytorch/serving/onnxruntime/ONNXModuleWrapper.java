@@ -1,7 +1,7 @@
 package org.bytedeco.pytorch.serving.onnxruntime;
 
 import org.bytedeco.pytorch.Tensor;
-import org.bytedeco.pytorch.jit.IValue;
+import org.bytedeco.pytorch.IValue;
 
 import java.util.Map;
 

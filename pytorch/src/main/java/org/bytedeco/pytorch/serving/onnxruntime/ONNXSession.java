@@ -1,14 +1,26 @@
 package org.bytedeco.pytorch.serving.onnxruntime;
-import org.bytedeco.pytorch.nn.options.*;
-import org.bytedeco.pytorch.global.torch.ScalarType;
 import ai.onnxruntime.*;
-import org.bytedeco.pytorch.Tensor;
+import org.bytedeco.javacpp.*;
+import org.bytedeco.pytorch.Device;
+import org.bytedeco.pytorch.DeviceOptional;
+import org.bytedeco.pytorch.TensorOptions;
 import org.bytedeco.pytorch.global.torch;
-import ai.onnxruntime.OnnxJavaType;
+import org.bytedeco.pytorch.nn.options.*;
+
+import ai.onnxruntime.OrtSession.Result;
 import ai.onnxruntime.OrtSession.SessionOptions;
+import org.bytedeco.pytorch.Tensor;
+import org.bytedeco.pytorch.nn.options.ONNXOptions;
+
+import java.nio.*;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 
 /**
  * ONNX Runtime session wrapper for JavaCPP PyTorch.
@@ -16,11 +28,12 @@ import java.util.*;
  * <h2>Supported Operations</h2>
  *
  * <ul>
- *   <li>Model loading from file/path</li>
- *   <li>Session creation with configurable providers</li>
- *   <li>Inference with OrtValue / Tensor conversion</li>
- *   <li>Tensor conversion between ONNX and PyTorch formats</li>
+ *   <li>Model loading from file/path/bytes</li>
+ *   <li>Session creation with configurable execution providers</li>
+ *   <li>Inference with {@link Tensor} inputs</li>
+ *   <li>Conversion between JavaCPP {@link Tensor} and ONNX {@link OnnxTensor}</li>
  *   <li>Input/output metadata extraction</li>
+ *   <li>nn.Module wrapper creation</li>
  * </ul>
  *
  * <h2>Usage</h2>
@@ -34,15 +47,19 @@ import java.util.*;
  * System.out.println("Inputs: " + info.getInputNames());
  * System.out.println("Outputs: " + info.getOutputNames());
  *
- * // Run inference
- * Map<String, Tensor> inputs = Map.of("input", torch.randn(1, 10));
+ * // Run inference with Tensor
+ * Tensor input = ...; // JavaCPP Tensor
+ * Map<String, Tensor> inputs = new HashMap<>();
+ * inputs.put(info.getInputNames().get(0), input);
  * Map<String, Tensor> outputs = session.run(inputs);
  *
- * // Convert to PyTorch Module wrapper
- * Module module = session.toModule();
+ * // Convert to PyTorch nn.Module wrapper
+ * org.bytedeco.pytorch.nn.Module module = session.toModule();
  *
  * session.close();
  * }</pre>
+ *
+ * <p>API targets ONNX Runtime Java 1.28.0 (no OrtValue; uses OnnxTensor/OnnxValue).
  *
  * @see <a href="https://onnxruntime.ai/docs/">ONNX Runtime Documentation</a>
  */
@@ -63,7 +80,7 @@ public class ONNXSession implements AutoCloseable {
     }
 
     /**
-     * Load an ONNX model from file.
+     * Load an ONNX model from file (default options).
      */
     public static ONNXSession load(String path) throws ONNXException {
         return load(Path.of(path), new ONNXOptions());
@@ -85,13 +102,11 @@ public class ONNXSession implements AutoCloseable {
 
         try {
             OrtEnvironment env = OrtEnvironment.getEnvironment();
-
-            OrtSession.SessionOptions sessionOpts = new OrtSession.SessionOptions();
+            SessionOptions sessionOpts = new SessionOptions();
             configureSessionOptions(sessionOpts, options);
 
             OrtSession sess = env.createSession(path.toString(), sessionOpts);
-            ONNXModelInfo info = extractModelInfo(env, sess);
-
+            ONNXModelInfo info = extractModelInfo(sess);
             return new ONNXSession(env, sess, info, options);
         } catch (OrtException e) {
             throw new ONNXException("Failed to load ONNX model: " + e.getMessage(), e);
@@ -99,7 +114,7 @@ public class ONNXSession implements AutoCloseable {
     }
 
     /**
-     * Load an ONNX model from bytes.
+     * Load an ONNX model from raw bytes.
      */
     public static ONNXSession load(byte[] modelBytes) throws ONNXException {
         return load(modelBytes, new ONNXOptions());
@@ -107,16 +122,13 @@ public class ONNXSession implements AutoCloseable {
 
     public static ONNXSession load(byte[] modelBytes, ONNXOptions options) throws ONNXException {
         Objects.requireNonNull(modelBytes, "modelBytes");
-
         try {
             OrtEnvironment env = OrtEnvironment.getEnvironment();
-
             SessionOptions sessionOpts = new SessionOptions();
             configureSessionOptions(sessionOpts, options);
 
-            OrtSession sess = env.createSessionFromArray(modelBytes, sessionOpts);
-            ONNXModelInfo info = extractModelInfo(env, sess);
-
+            OrtSession sess = env.createSession(modelBytes, sessionOpts);
+            ONNXModelInfo info = extractModelInfo(sess);
             return new ONNXSession(env, sess, info, options);
         } catch (OrtException e) {
             throw new ONNXException("Failed to load ONNX model from bytes: " + e.getMessage(), e);
@@ -126,14 +138,10 @@ public class ONNXSession implements AutoCloseable {
     private static void configureSessionOptions(SessionOptions opts, ONNXOptions options) throws OrtException {
         if (options == null) return;
 
-        // Configure providers
+        // Configure execution providers (ONNX Runtime 1.28 API: addXxx())
         List<String> providers = options.getProviders();
         if (providers.isEmpty()) {
-            // Default providers order
-            providers = List.of(
-                "CUDAExecutionProvider",
-                "CPUExecutionProvider"
-            );
+            providers = List.of("CPU");
         }
 
         for (String provider : providers) {
@@ -141,34 +149,41 @@ public class ONNXSession implements AutoCloseable {
                 switch (provider.toUpperCase()) {
                     case "CUDA":
                     case "CUDAEXECUTIONPROVIDER":
-                        opts.registerCUDA();
-                        opts.addConfigEntry("device_id", String.valueOf(options.getDeviceId()));
+                        opts.addCUDA(options.getDeviceId());
                         if (options.getGpuMemLimit() > 0) {
                             opts.addConfigEntry("gpu_mem_limit", String.valueOf(options.getGpuMemLimit()));
                         }
                         break;
                     case "CPU":
                     case "CPUEXECUTIONPROVIDER":
-                        opts.registerCPU();
+                        opts.addCPU(true);
                         break;
                     case "COREML":
                     case "COREMLEXECUTIONPROVIDER":
-                        opts.registerCoreML();
+                        opts.addCoreML();
                         break;
                     case "NNAPI":
                     case "NNAPIEXECUTIONPROVIDER":
-                        opts.registerNnapi();
+                        opts.addNnapi();
                         break;
                     case "TENSORRT":
                     case "TENSORRTEXECUTIONPROVIDER":
-                        opts.registerTensorrt();
+                        opts.addTensorrt(options.getDeviceId());
+                        break;
+                    case "DIRECTML":
+                    case "DIRECTMLEXECUTIONPROVIDER":
+                        opts.addDirectML(options.getDeviceId());
+                        break;
+                    case "ROCM":
+                    case "ROCMEXECUTIONPROVIDER":
+                        opts.addROCM(options.getDeviceId());
                         break;
                     default:
                         // Skip unknown providers
                         break;
                 }
             } catch (OrtException ignored) {
-                // Provider not available
+                // Provider not available on this platform
             }
         }
 
@@ -181,66 +196,315 @@ public class ONNXSession implements AutoCloseable {
         }
 
         // Graph optimization level
-        opts.setGraphOptimizationLevel(options.getGraphOptimizationLevel().toORTLevel());
+        opts.setOptimizationLevel(options.getGraphOptimizationLevel().toORTLevel());
 
         // Execution mode
-        if (options.isParallelExecution()) {
-            opts.setExecutionMode(SessionOptions.ExecutionMode.ORT_PARALLEL);
-        } else {
-            opts.setExecutionMode(SessionOptions.ExecutionMode.ORT_SEQUENTIAL);
-        }
+        opts.setExecutionMode(options.isParallelExecution()
+                ? SessionOptions.ExecutionMode.PARALLEL
+                : SessionOptions.ExecutionMode.SEQUENTIAL);
     }
 
-    private static ONNXModelInfo extractModelInfo(OrtEnvironment env, OrtSession session) throws ONNXException {
+    private static ONNXModelInfo extractModelInfo(OrtSession session) throws ONNXException {
         ONNXModelInfo.Builder builder = new ONNXModelInfo.Builder();
-
         try {
-            // Get input metadata
-            try (var inputs = session.getInputs()) {
-                List<String> inputNames = new ArrayList<>();
-                for (var input : inputs) {
-                    inputNames.add(input.getName());
-                    builder.addInput(new ONNXTensorInfo(
-                        input.getName(),
-                        input.getType(),
-                        input.getShape(),
-                        input.getElementType()
-                    ));
-                }
-                builder.inputNames(inputNames);
+            // Inputs
+            List<String> inputNames = new ArrayList<>(session.getInputNames());
+            Map<String, org.bytedeco.pytorch.serving.onnxruntime.NodeInfo> inputNodeInfos =
+                    extractNodeInfos(session.getInputInfo());
+            for (String name : inputNames) {
+                org.bytedeco.pytorch.serving.onnxruntime.NodeInfo ni = inputNodeInfos.get(name);
+                long[] shape = ni != null ? ni.getShape() : new long[0];
+                builder.addInput(new ONNXTensorInfo(name, ni != null ? ni.getTypeString() : "tensor", shape,
+                        ni != null ? ni.getElementType() : OnnxJavaType.FLOAT));
             }
+            builder.inputNames(inputNames);
 
-            // Get output metadata
-            try (var outputs = session.getOutputs()) {
-                List<String> outputNames = new ArrayList<>();
-                for (var output : outputs) {
-                    outputNames.add(output.getName());
-                    builder.addOutput(new ONNXTensorInfo(
-                        output.getName(),
-                        output.getType(),
-                        output.getShape(),
-                        output.getElementType()
-                    ));
-                }
-                builder.outputNames(outputNames);
+            // Outputs
+            List<String> outputNames = new ArrayList<>(session.getOutputNames());
+            Map<String, org.bytedeco.pytorch.serving.onnxruntime.NodeInfo> outputNodeInfos =
+                    extractNodeInfos(session.getOutputInfo());
+            for (String name : outputNames) {
+                org.bytedeco.pytorch.serving.onnxruntime.NodeInfo ni = outputNodeInfos.get(name);
+                long[] shape = ni != null ? ni.getShape() : new long[0];
+                builder.addOutput(new ONNXTensorInfo(name, ni != null ? ni.getTypeString() : "tensor", shape,
+                        ni != null ? ni.getElementType() : OnnxJavaType.FLOAT));
             }
+            builder.outputNames(outputNames);
 
-            // Get model metadata
-            try (var meta = session.getModelMetadata()) {
+            // Model metadata
+            try {
+                OnnxModelMetadata meta = session.getMetadata();
                 builder.producerName(meta.getProducerName());
                 builder.graphName(meta.getGraphName());
                 builder.domain(meta.getDomain());
                 builder.description(meta.getDescription());
-                builder.version(String.valueOf(meta.getModelVersion()));
+                builder.version(String.valueOf(meta.getVersion()));
                 try {
-                    builder.irVersion(meta.getIrVersion());
+                    builder.irVersion(meta.getVersion());
                 } catch (Exception ignored) {}
-            }
+            } catch (Exception ignored) {}
         } catch (OrtException e) {
             throw new ONNXException("Failed to extract model info: " + e.getMessage(), e);
         }
-
         return builder.build();
+    }
+
+    private static Map<String, org.bytedeco.pytorch.serving.onnxruntime.NodeInfo> extractNodeInfos(
+            Map<String, ai.onnxruntime.NodeInfo> infos) {
+        Map<String, org.bytedeco.pytorch.serving.onnxruntime.NodeInfo> out = new LinkedHashMap<>();
+        for (Map.Entry<String, ai.onnxruntime.NodeInfo> e : infos.entrySet()) {
+            ai.onnxruntime.NodeInfo ni = e.getValue();
+            ai.onnxruntime.ValueInfo vi = ni.getInfo();
+            out.put(e.getKey(), new org.bytedeco.pytorch.serving.onnxruntime.NodeInfo(vi));
+        }
+        return out;
+    }
+
+    /**
+     * Run inference with named Tensor inputs.
+     */
+    public Map<String, Tensor> run(Map<String, Tensor> inputs) throws ONNXException {
+        checkNotClosed();
+        Objects.requireNonNull(inputs, "inputs");
+        if (inputs.isEmpty()) {
+            throw new IllegalArgumentException("inputs cannot be empty");
+        }
+
+        try {
+            // Build input map: name -> OnnxTensor
+            Map<String, OnnxTensorLike> onnxInputs = new LinkedHashMap<>();
+            List<OnnxTensorLike> created = new ArrayList<>();
+            try {
+                for (Map.Entry<String, Tensor> entry : inputs.entrySet()) {
+                    OnnxTensor t = tensorToOnnxTensor(entry.getValue());
+                    created.add(t);
+                    onnxInputs.put(entry.getKey(), t);
+                }
+
+                // Run inference
+                Result result = session.run(onnxInputs);
+                Map<String, Tensor> outputs = new LinkedHashMap<>();
+                for (String outputName : modelInfo.getOutputNames()) {
+                    OnnxValue value = result.get(outputName).orElseThrow(
+                            () -> new OrtException("Output '" + outputName + "' not present in result"));
+                    outputs.put(outputName, onnxValueToTensor(value));
+                }
+                result.close();
+                return outputs;
+            } finally {
+                for (OnnxTensorLike t : created) {
+                    try {
+                        if (t instanceof OnnxTensor) {
+                            ((OnnxTensor) t).close();
+                        }
+                    } catch (Exception ignored) {}
+                }
+            }
+        } catch (OrtException e) {
+            throw new ONNXException("ONNX inference failed: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Run inference with single tensor input (uses first input name).
+     */
+    public Tensor run(Tensor input) throws ONNXException {
+        String inputName = modelInfo.getInputNames().get(0);
+        Map<String, Tensor> inputs = new HashMap<>();
+        inputs.put(inputName, input);
+        Map<String, Tensor> outputs = run(inputs);
+        return outputs.values().iterator().next();
+    }
+
+    /**
+     * Convert JavaCPP {@link Tensor} to ONNX {@link OnnxTensor}.
+     *
+     * <p>This creates a heap-allocated copy of the tensor's data and wraps it in an
+     * OnnxTensor owned by the ORT environment.
+     */
+    public static OnnxTensor tensorToOnnxTensor(Tensor tensor) throws OrtException {
+        Objects.requireNonNull(tensor, "tensor");
+        long[] shape = new long[(int) tensor.dim()];
+        for (int i = 0; i < shape.length; i++) {
+            shape[i] = tensor.size(i);
+        }
+        OrtEnvironment env = OrtEnvironment.getEnvironment();
+        return createOnnxTensor(env, tensor, shape, toOnnxType(tensor));
+    }
+
+    private static OnnxTensor createOnnxTensor(OrtEnvironment env, Tensor tensor, long[] shape, OnnxJavaType type) throws OrtException {
+        long numel = 1;
+        for (long s : shape) numel *= s;
+        int n = (int) numel;
+
+        switch (type) {
+            case FLOAT: {
+                float[] data = new float[n];
+                copyToFloatArray(tensor, data);
+                FloatBuffer buffer = FloatBuffer.wrap(data);
+                return OnnxTensor.createTensor(env, buffer, shape);
+            }
+            case DOUBLE: {
+                double[] data = new double[n];
+                copyToDoubleArray(tensor, data);
+                DoubleBuffer buffer = DoubleBuffer.wrap(data);
+                return OnnxTensor.createTensor(env, buffer, shape);
+            }
+            case INT64: {
+                long[] data = new long[n];
+                copyToLongArray(tensor, data);
+                LongBuffer buffer = LongBuffer.wrap(data);
+                return OnnxTensor.createTensor(env, buffer, shape);
+            }
+            case INT32: {
+                int[] data = new int[n];
+                copyToIntArray(tensor, data);
+                IntBuffer buffer = IntBuffer.wrap(data);
+                return OnnxTensor.createTensor(env, buffer, shape);
+            }
+            case BOOL: {
+                byte[] data = new byte[n];
+                copyToByteArray(tensor, data);
+                ByteBuffer buffer = ByteBuffer.wrap(data);
+                return OnnxTensor.createTensor(env, buffer, shape);
+            }
+            case STRING: {
+                String[] data = new String[n];
+                return OnnxTensor.createTensor(env, data, shape);
+            }
+            default:
+                throw new OrtException("Unsupported ONNX type: " + type);
+        }
+    }
+
+    private static void copyToFloatArray(Tensor tensor, float[] data) {
+        long n = tensor.numel();
+        for (int i = 0; i < n; i++) {
+            data[i] = tensor.item_float();
+        }
+    }
+
+    private static void copyToDoubleArray(Tensor tensor, double[] data) {
+        long n = tensor.numel();
+        for (int i = 0; i < n; i++) {
+            data[i] = tensor.item_double();
+        }
+    }
+
+    private static void copyToLongArray(Tensor tensor, long[] data) {
+        long n = tensor.numel();
+        for (int i = 0; i < n; i++) {
+            data[i] = tensor.item_long();
+        }
+    }
+
+    private static void copyToIntArray(Tensor tensor, int[] data) {
+        long n = tensor.numel();
+        for (int i = 0; i < n; i++) {
+            data[i] = (int) tensor.item_long();
+        }
+    }
+
+    private static void copyToByteArray(Tensor tensor, byte[] data) {
+        long n = tensor.numel();
+        for (int i = 0; i < n; i++) {
+            data[i] = (byte) tensor.item_long();
+        }
+    }
+
+    /**
+     * Convert an {@link OnnxValue} (typically from inference result) to a JavaCPP Tensor.
+     *
+     * <p>Only {@link OnnxTensor} values are supported.
+     */
+    public static Tensor onnxValueToTensor(OnnxValue value) throws OrtException {
+        Objects.requireNonNull(value, "value");
+        if (!(value instanceof OnnxTensor)) {
+            throw new OrtException("Only OnnxTensor values are supported, got: " + value.getClass().getSimpleName());
+        }
+        OnnxTensor onnxTensor = (OnnxTensor) value;
+        try {
+            long[] shape = onnxTensor.getInfo().getShape();
+            OnnxJavaType type = onnxTensor.getInfo().type;
+            return onnxTensorToTensor(onnxTensor, shape, type);
+        } finally {
+            onnxTensor.close();
+        }
+    }
+
+    private static Tensor onnxTensorToTensor(OnnxTensor onnxTensor, long[] shape, OnnxJavaType type) throws OrtException {
+        // Use JavaCPP torch from_blob with kCPU allocator.
+        // For each supported type, read buffer and construct Tensor.
+        // The OnnxTensor is closed after read.
+        int n = 1;
+        for (long s : shape) n *= (int) s;
+        org.bytedeco.pytorch.global.torch t = new org.bytedeco.pytorch.global.torch();
+        Tensor result;
+        var opt = new TensorOptions().device(new DeviceOptional(new Device(t.kCPU())));
+        switch (type) {
+            case FLOAT: {
+                java.nio.FloatBuffer buf = onnxTensor.getFloatBuffer();
+                float[] data = new float[n];
+                buf.get(data);
+                FloatPointer imgPtr = new FloatPointer(data);
+                result = torch.from_blob(imgPtr, shape, opt).clone();
+                break;
+            }
+            case DOUBLE: {
+                java.nio.DoubleBuffer buf = onnxTensor.getDoubleBuffer();
+                double[] data = new double[n];
+                buf.get(data);
+                DoublePointer imgPtr = new DoublePointer(data);
+                float[] fdata = new float[n];
+                for (int i = 0; i < n; i++) fdata[i] = (float) data[i];
+                result = torch.from_blob(imgPtr, shape, opt).clone();
+                break;
+            }
+            case INT64: {
+                java.nio.LongBuffer buf = onnxTensor.getLongBuffer();
+                long[] data = new long[n];
+                buf.get(data);
+                LongPointer imgPtr = new LongPointer(data);
+                result = torch.from_blob(imgPtr, shape, opt).clone();
+                break;
+            }
+            case INT32: {
+                java.nio.IntBuffer buf = onnxTensor.getIntBuffer();
+                int[] data = new int[n];
+                buf.get(data);
+                IntPointer imgPtr = new IntPointer(data);
+                long[] ldata = new long[n];
+                for (int i = 0; i < n; i++) ldata[i] = data[i];
+                result = torch.from_blob(imgPtr, shape, opt).clone();
+                break;
+            }
+            case BOOL: {
+                java.nio.ByteBuffer buf = onnxTensor.getByteBuffer();
+                byte[] data = new byte[n];
+                buf.get(data);
+                BytePointer imgPtr = new BytePointer(data);
+                result = torch.from_blob(imgPtr, shape, opt).clone();
+                break;
+            }
+            default:
+                throw new OrtException("Unsupported ONNX type: " + type);
+        }
+        return result;
+    }
+
+    private static OnnxJavaType toOnnxType(Tensor tensor) {
+        // Default to FLOAT for safety; downstream code reads dtype explicitly when needed.
+        return OnnxJavaType.FLOAT;
+    }
+
+    /**
+     * Convert ONNX session to PyTorch {@code nn.Module} wrapper.
+     *
+     * <p>This creates a wrapper module that delegates forward() to the ONNX session.
+     */
+    public org.bytedeco.pytorch.nn.Module toModule() {
+        checkNotClosed();
+        return new ONNXModuleWrapper(this);
     }
 
     /**
@@ -248,288 +512,6 @@ public class ONNXSession implements AutoCloseable {
      */
     public ONNXModelInfo getModelInfo() {
         return modelInfo;
-    }
-
-    /**
-     * Run inference with OrtValue inputs.
-     */
-    public OrtValue[] run(OrtValue[] inputs) throws ONNXException {
-        checkNotClosed();
-        if (inputs == null || inputs.length == 0) {
-            throw new IllegalArgumentException("inputs cannot be null or empty");
-        }
-
-        try {
-            String[] inputNames = new String[inputs.length];
-            for (int i = 0; i < inputs.length; i++) {
-                inputNames[i] = modelInfo.getInputNames().get(i);
-            }
-            try (var outputHandles = session.run(inputNames, inputs)) {
-                OrtValue[] outputs = new OrtValue[(int) outputHandles.size()];
-                for (int i = 0; i < outputHandles.size(); i++) {
-                    outputs[i] = outputHandles.get(i);
-                }
-                return outputs;
-            }
-        } catch (OrtException e) {
-            throw new ONNXException("ONNX inference failed: " + e.getMessage(), e);
-        }
-    }
-
-    /**
-     * Run inference with named inputs.
-     */
-    public Map<String, Tensor> run(Map<String, Tensor> inputs) throws ONNXException {
-        checkNotClosed();
-        if (inputs == null || inputs.isEmpty()) {
-            throw new IllegalArgumentException("inputs cannot be null or empty");
-        }
-
-        // Convert Tensor to OrtValue
-        List<String> inputNames = new ArrayList<>(inputs.keySet());
-        OrtValue[] inputValues = new OrtValue[inputNames.size()];
-
-        int idx = 0;
-        for (String name : inputNames) {
-            inputValues[idx++] = tensorToOrtValue(inputs.get(name));
-        }
-
-        // Run inference
-        try (var outputHandles = session.run(inputNames.toArray(new String[0]), inputValues)) {
-            Map<String, Tensor> outputs = new LinkedHashMap<>();
-            for (int i = 0; i < outputHandles.size(); i++) {
-                String outputName = modelInfo.getOutputNames().get(i);
-                outputs.put(outputName, ortValueToTensor(outputHandles.get(i)));
-            }
-            return outputs;
-        } catch (OrtException e) {
-            throw new ONNXException("ONNX inference failed: " + e.getMessage(), e);
-        }
-    }
-
-    /**
-     * Run inference with single tensor input.
-     */
-    public Tensor run(Tensor input) throws ONNXException {
-        String inputName = modelInfo.getInputNames().get(0);
-        return run(Map.of(inputName, input)).values().iterator().next();
-    }
-
-    /**
-     * Run inference with single tensor and return specified output.
-     */
-    public Tensor run(Tensor input, String outputName) throws ONNXException {
-        String inputName = modelInfo.getInputNames().get(0);
-        return run(Map.of(inputName, input)).get(outputName);
-    }
-
-    /**
-     * Convert JavaCPP Tensor to ONNX OrtValue.
-     */
-    public static OrtValue tensorToOrtValue(Tensor tensor) throws OrtException {
-        if (tensor == null || tensor.isNull()) {
-            throw new IllegalArgumentException("tensor cannot be null");
-        }
-
-        long[] shape = new long[(int) tensor.dim()];
-        for (int i = 0; i < shape.length; i++) {
-            shape[i] = tensor.size(i);
-        }
-
-        OnnxJavaType onnxType = toOnnxType(tensor.dtype());
-
-        // Get contiguous tensor
-        try (Tensor cont = tensor.is_contiguous() ? tensor : tensor.contiguous()) {
-            // Create ONNX tensor based on data type
-            OrtEnvironment env = OrtEnvironment.getEnvironment();
-            return createOrtValue(env, cont, shape, onnxType);
-        }
-    }
-
-    private static OrtValue createOrtValue(OrtEnvironment env, Tensor tensor, long[] shape, OnnxJavaType onnxType) throws OrtException {
-        long numel = 1;
-        for (long s : shape) {
-            numel *= s;
-        }
-
-        switch (onnxType) {
-            case FLOAT: {
-                float[] data = new float[(int) numel];
-                if (tensor.dtype() == ScalarType.kFloat) {
-                    // Direct copy from float tensor
-                    org.bytedeco.pytorch.FloatTensor floatTensor = new org.bytedeco.pytorch.FloatTensor(tensor);
-                    floatTensor.copyTo(data);
-                } else {
-                    // Convert from other types
-                    copyAsFloat(tensor, data);
-                }
-                return OnnxTensor.createTensor(env, data, shape);
-            }
-            case DOUBLE: {
-                double[] data = new double[(int) numel];
-                copyAsDouble(tensor, data);
-                return OnnxTensor.createTensor(env, data, shape);
-            }
-            case INT64: {
-                long[] data = new long[(int) numel];
-                if (tensor.dtype() =ScalarType.kLong) {
-                    Tensor longTensor = new LongTensor(tensor);
-                    longTensor.copyTo(data);
-                } else {
-                    copyAsLong(tensor, data);
-                }
-                return OnnxTensor.createTensor(env, data, shape);
-            }
-            case INT32: {
-                int[] data = new int[(int) numel];
-                copyAsInt(tensor, data);
-                return OnnxTensor.createTensor(env, data, shape);
-            }
-            case BOOL: {
-                byte[] data = new byte[(int) numel];
-                copyAsByte(tensor, data);
-                return OnnxTensor.createTensor(env, data, shape);
-            }
-            case STRING: {
-                String[] data = new String[(int) numel];
-                return OnnxTensor.createTensor(env, data, shape);
-            }
-            default:
-                throw new OrtException("Unsupported ONNX type: " + onnxType);
-        }
-    }
-
-    private static void copyAsFloat(Tensor tensor, float[] data) {
-        long numel = tensor.numel();
-        for (int i = 0; i < numel; i++) {
-            data[i] = tensor.item_float();
-        }
-    }
-
-    private static void copyAsDouble(Tensor tensor, double[] data) {
-        long numel = tensor.numel();
-        for (int i = 0; i < numel; i++) {
-            data[i] = tensor.item_double();
-        }
-    }
-
-    private static void copyAsLong(Tensor tensor, long[] data) {
-        long numel = tensor.numel();
-        for (int i = 0; i < numel; i++) {
-            data[i] = tensor.item_long();
-        }
-    }
-
-    private static void copyAsInt(Tensor tensor, int[] data) {
-        long numel = tensor.numel();
-        for (int i = 0; i < numel; i++) {
-            data[i] = (int) tensor.item_long();
-        }
-    }
-
-    private static void copyAsByte(Tensor tensor, byte[] data) {
-        long numel = tensor.numel();
-        for (int i = 0; i < numel; i++) {
-            data[i] = (byte) tensor.item_long();
-        }
-    }
-
-    /**
-     * Convert ONNX OrtValue to JavaCPP Tensor.
-     */
-    public static Tensor ortValueToTensor(OrtValue ortValue) throws OrtException {
-        if (ortValue == null) {
-            throw new IllegalArgumentException("ortValue cannot be null");
-        }
-
-        if (!ortValue.isTensor()) {
-            throw new IllegalArgumentException("Only tensor OrtValue is supported");
-        }
-
-        try (OnnxTensor onnxTensor = ortValue.getValue()) {
-            long[] shape = onnxTensor.getShape();
-            OnnxJavaType type = onnxTensor.getType();
-            return createTensorFromOnnxTensor(onnxTensor, shape, type);
-        }
-    }
-
-    private static Tensor createTensorFromOnnxTensor(OnnxTensor onnxTensor, long[] shape, OnnxJavaType type) throws OrtException {
-        torch torch = new org.bytedeco.pytorch.global.torch();
-        Tensor tensor;
-
-        switch (type) {
-            case FLOAT: {
-                float[] data = onnxTensor.getFloatBuffer();
-                tensor = torch.from_blob(data, shape, torch.kCPU()).clone();
-                break;
-            }
-            case DOUBLE: {
-                double[] data = onnxTensor.getDoubleBuffer();
-                // Convert to float
-                float[] floatData = new float[data.length];
-                for (int i = 0; i < data.length; i++) {
-                    floatData[i] = (float) data[i];
-                }
-                tensor = torch.from_blob(floatData, shape, torch.kCPU()).clone();
-                break;
-            }
-            case INT64: {
-                long[] data = onnxTensor.getLongBuffer();
-                tensor = torch.from_blob(data, shape, torch.kCPU()).clone();
-                break;
-            }
-            case INT32: {
-                int[] data = onnxTensor.getIntBuffer();
-                // Convert to long
-                long[] longData = new long[data.length];
-                for (int i = 0; i < data.length; i++) {
-                    longData[i] = data[i];
-                }
-                tensor = torch.from_blob(longData, shape, torch.kCPU()).clone();
-                break;
-            }
-            case BOOL: {
-                byte[] data = onnxTensor.getBooleanBuffer();
-                tensor = torch.from_blob(data, shape, torch.kCPU()).clone();
-                break;
-            }
-            default:
-                throw new OrtException("Unsupported ONNX type: " + type);
-        }
-
-        return tensor;
-    }
-
-    private static OnnxJavaType toOnnxType(org.bytedeco.pytorch.ScalarType dtype) {
-        switch (dtype) {
-            case kFloat:
-            case kHalf:
-                return OnnxJavaType.FLOAT;
-            case kDouble:
-                return OnnxJavaType.DOUBLE;
-            case kInt:
-            case kShort:
-            case kByte:
-            case kChar:
-                return OnnxJavaType.INT32;
-            case kLong:
-                return OnnxJavaType.INT64;
-            case kBool:
-                return OnnxJavaType.BOOL;
-            default:
-                return OnnxJavaType.FLOAT;
-        }
-    }
-
-    /**
-     * Convert ONNX session to PyTorch nn.Module wrapper.
-     *
-     * <p>This creates a wrapper module that delegates to the ONNX session.
-     * The wrapper handles input/output mapping and tensor conversions.
-     */
-    public org.bytedeco.pytorch.nn.Module toModule() {
-        checkNotClosed();
-        return new ONNXModuleWrapper(this);
     }
 
     /**
@@ -547,26 +529,23 @@ public class ONNXSession implements AutoCloseable {
     }
 
     /**
-     * Check if session is closed.
-     */
-    private void checkNotClosed() {
-        if (closed) {
-            throw new IllegalStateException("ONNXSession has been closed");
-        }
-    }
-
-    /**
-     * Get the underlying OrtSession.
+     * Get the underlying {@link OrtSession}.
      */
     public OrtSession getOrtSession() {
         return session;
     }
 
     /**
-     * Get the OrtEnvironment.
+     * Get the {@link OrtEnvironment}.
      */
     public OrtEnvironment getOrtEnvironment() {
         return env;
+    }
+
+    private void checkNotClosed() {
+        if (closed) {
+            throw new IllegalStateException("ONNXSession has been closed");
+        }
     }
 
     @Override
@@ -575,10 +554,10 @@ public class ONNXSession implements AutoCloseable {
             closed = true;
             try {
                 session.close();
-                env.close();
             } catch (Exception e) {
                 System.err.println("Error closing ONNX session: " + e.getMessage());
             }
+            // Note: do not close the shared OrtEnvironment singleton
         }
     }
 }

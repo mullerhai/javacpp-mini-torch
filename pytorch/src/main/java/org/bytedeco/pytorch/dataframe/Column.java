@@ -17,7 +17,9 @@ public final class Column implements AutoCloseable {
         VECTOR,
         /** Multimodal / structured cell wrappers ({@code DataValue}). */
         IMAGE, AUDIO, VIDEO, EMBEDDING, BINARY, JSON,
-        LIST, MAP, STRUCT, GRAPH, POINT_CLOUD
+        LIST, MAP, STRUCT, GRAPH, POINT_CLOUD,
+        /** Unknown/placeholder type (e.g. for columns in pickle files before type inference). */
+        NULL
     }
 
     private final String name;

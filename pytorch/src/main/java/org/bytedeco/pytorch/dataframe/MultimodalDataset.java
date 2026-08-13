@@ -63,7 +63,7 @@ public class MultimodalDataset implements Closeable {
      * ├── text/ (text files)
      * └── metadata.json (optional alignment keys)
      */
-    public static MultimodalDataset load(String rootPath) throws IOException {
+    public static MultimodalDataset load(String rootPath) throws Exception {
         MultimodalDataset dataset = new MultimodalDataset();
         Path root = Path.of(rootPath);
         
@@ -118,6 +118,14 @@ public class MultimodalDataset implements Closeable {
      */
     public DataFrame get(String modality) {
         return modalities.get(modality);
+    }
+
+    /**
+     * Add a modality DataFrame.
+     */
+    public MultimodalDataset add(String name, DataFrame df) {
+        this.modalities.put(name, df);
+        return this;
     }
 
     /**
@@ -221,7 +229,7 @@ public class MultimodalDataset implements Closeable {
             
             DataFrame df = entry.getValue();
             if (modalityKey != null && !modalityKey.equals(baseKey)) {
-                df = df.renameColumn(modalityKey, baseKey);
+                df.renameColumn(modalityKey, baseKey);
             }
             
             result.put(entry.getKey(), df);

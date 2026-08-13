@@ -1,9 +1,7 @@
-package org.bytedeco.pytorch.dataframe.io;
+package org.bytedeco.pytorch.dataframe.io.lmdb;
 
 import org.bytedeco.pytorch.dataframe.Column;
 import org.bytedeco.pytorch.dataframe.DataFrame;
-import org.bytedeco.pytorch.dataframe.io.lmdb.LmdbReader;
-import org.bytedeco.pytorch.dataframe.io.lmdb.LmdbShow;
 
 import java.io.*;
 import java.nio.*;
@@ -298,28 +296,5 @@ public class LmdbWriter {
             }
         }
         return false;
-    }
-
-    // ====================== Options ======================
-
-    public static class LmdbOptions {
-        private int pageSize = 4096;
-        private boolean isImageDatabase = false;
-        private boolean isTensorDatabase = false;
-        private String keyColumn = "key";
-
-        public static LmdbOptions defaults() {
-            return new LmdbOptions();
-        }
-
-        public LmdbOptions pageSize(int s) { this.pageSize = s; return this; }
-        public LmdbOptions isImageDatabase(boolean b) { this.isImageDatabase = b; return this; }
-        public LmdbOptions isTensorDatabase(boolean b) { this.isTensorDatabase = b; return this; }
-        public LmdbOptions keyColumn(String c) { this.keyColumn = c; return this; }
-
-        public int pageSize() { return pageSize; }
-        public boolean isImageDatabase() { return isImageDatabase; }
-        public boolean isTensorDatabase() { return isTensorDatabase; }
-        public String keyColumn() { return keyColumn; }
     }
 }

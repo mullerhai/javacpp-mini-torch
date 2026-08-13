@@ -1,5 +1,9 @@
 package org.bytedeco.pytorch.dataframe.io;
 
+import org.bytedeco.pytorch.dataframe.csv.CsvOptions;
+import org.bytedeco.pytorch.dataframe.hdf5.Hdf5Reader;
+import org.bytedeco.pytorch.dataframe.json.JsonOptions;
+
 import java.io.BufferedInputStream;
 import java.io.IOException;
 import java.io.InputStream;

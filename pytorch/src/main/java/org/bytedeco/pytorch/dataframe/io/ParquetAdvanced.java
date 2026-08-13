@@ -1,5 +1,6 @@
 package org.bytedeco.pytorch.dataframe.io;
 
+import java.io.IOException;
 import java.nio.file.*;
 import java.util.*;
 import java.util.concurrent.*;
@@ -427,7 +428,7 @@ public final class ParquetAdvanced {
         }
 
         long fileSize = Files.size(p);
-        List<ColumnStats> columns = new ArrayList<>();
+        List<ParquetStats.ColumnStats> columns = new ArrayList<>();
 
         try (ParquetInputFormat probe = ParquetInputFormat.open(p)) {
             MessageType schema = probe.getSchema();
@@ -440,7 +441,7 @@ public final class ParquetAdvanced {
                 String type = field.isPrimitive()
                     ? field.asPrimitiveType().getPrimitiveTypeName().toString()
                     : "STRUCT";
-                columns.add(new ColumnStats(name, type, null, null, null, null, null));
+                columns.add(new ParquetStats.ColumnStats(name, type, null, null, null, null, null));
             }
 
             return new ParquetStats(path, fileSize, numRowGroups, numRows, columns);

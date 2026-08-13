@@ -2,9 +2,18 @@ package org.bytedeco.pytorch.dataframe.io;
 
 import org.bytedeco.pytorch.dataframe.Column;
 import org.bytedeco.pytorch.dataframe.DataFrame;
+import org.bytedeco.pytorch.dataframe.Schema;
 import org.bytedeco.pytorch.dataframe.csv.CsvOptions;
 import org.bytedeco.pytorch.dataframe.excel.ExcelOptions;
 import org.bytedeco.pytorch.dataframe.hdf5.Hdf5Options;
+import org.bytedeco.pytorch.dataframe.io.document.DocumentReader;
+import org.bytedeco.pytorch.dataframe.io.geo.RasterReader;
+import org.bytedeco.pytorch.dataframe.io.geo.ShapefileReader;
+import org.bytedeco.pytorch.dataframe.io.folder.ImageFolderReader;
+import org.bytedeco.pytorch.dataframe.io.folder.SoundFolderReader;
+import org.bytedeco.pytorch.dataframe.io.webdataset.WebDatasetReader;
+import org.bytedeco.pytorch.dataframe.io.onnx.ONNXReader;
+import org.bytedeco.pytorch.serving.onnxruntime.ONNXModelInfo;
 import org.bytedeco.pytorch.dataframe.json.JsonOptions;
 
 import java.nio.charset.Charset;
@@ -238,6 +247,7 @@ public final class DataFrameReader {
     public DataFrame soundfolder(String path) throws Exception { format("soundfolder"); return load(path); }
     public DataFrame webdataset(String path) throws Exception { format("webdataset"); return load(path); }
     public DataFrame wds(String path)       throws Exception { format("webdataset"); return load(path); }
+    public DataFrame textcorpus(String path) throws Exception { format("text"); return load(path); }
     public DataFrame pdf(String path)       throws Exception { format("pdf"); return load(path); }
     public DataFrame document(String path)  throws Exception { format("document"); return load(path); }
     public DataFrame shapefile(String path)  throws Exception { format("shapefile"); return load(path); }
@@ -359,6 +369,30 @@ public final class DataFrameReader {
             case "toml":        return readToml(path);
             case "bin":
             case "binary":      return readBin(path);
+            case "imagefolder":
+            case "images":      return ImageFolderReader.read(path);
+            case "soundfolder":
+            case "audiofolder":
+            case "audio":       return SoundFolderReader.read(path);
+            case "webdataset":
+            case "wds":
+            case "tar":         return WebDatasetReader.read(path);
+            case "pdf":
+            case "document":
+            case "txt":
+            case "text":
+            case "md":
+            case "markdown":
+            case "html":
+            case "xml":
+            case "rtf":         return DocumentReader.read(path);
+            case "shp":
+            case "shapefile":   return ShapefileReader.read(path);
+            case "tif":
+            case "tiff":
+            case "geotiff":
+            case "raster":      return RasterReader.read(path);
+            case "onnx":        return readOnnx(path);
             default:
                 throw new IllegalArgumentException("Unknown read format: '" + fmt + "'");
         }
@@ -558,5 +592,34 @@ public final class DataFrameReader {
 
     private DataFrame readBin(String path) throws Exception {
         return BinReader.read(path);
+    }
+
+    private DataFrame readOnnx(String path) throws Exception {
+        ONNXReader r = new ONNXReader();
+        r.load(path);
+        // ONNX models don't naturally map to rows; expose schema as a 1-row DataFrame
+        DataFrame df = DataFrame.create();
+        df.addColumn("producer_name", Column.DType.STRING);
+        df.addColumn("graph_name", Column.DType.STRING);
+        df.addColumn("domain", Column.DType.STRING);
+        df.addColumn("description", Column.DType.STRING);
+        df.addColumn("version", Column.DType.STRING);
+        df.addColumn("ir_version", Column.DType.INT64);
+        df.addColumn("num_inputs", Column.DType.INT32);
+        df.addColumn("num_outputs", Column.DType.INT32);
+        df.addColumn("source_path", Column.DType.STRING);
+        ONNXModelInfo info = r.getModelInfo();
+        int ri = df.addEmptyRow();
+        df.set(ri, "producer_name", info != null ? info.getProducerName() : "");
+        df.set(ri, "graph_name", info != null ? info.getGraphName() : "");
+        df.set(ri, "domain", info != null ? info.getDomain() : "");
+        df.set(ri, "description", info != null ? info.getDescription() : "");
+        df.set(ri, "version", info != null ? info.getVersion() : "");
+        df.set(ri, "ir_version", info != null ? info.getIrVersion() : 0L);
+        df.set(ri, "num_inputs", info != null ? info.getInputs().size() : 0);
+        df.set(ri, "num_outputs", info != null ? info.getOutputs().size() : 0);
+        df.set(ri, "source_path", path);
+        r.close();
+        return df;
     }
 }

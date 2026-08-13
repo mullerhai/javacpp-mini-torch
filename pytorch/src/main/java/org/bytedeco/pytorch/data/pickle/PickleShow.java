@@ -13,6 +13,8 @@
  */
 package org.bytedeco.pytorch.data.pickle;
 
+import java.util.Map;
+
 public final class PickleShow {
 
     public static final int DEFAULT_THRESHOLD = 100;
@@ -332,9 +334,9 @@ public final class PickleShow {
 
     // ====================== Schema ======================
 
-    private String schema(Object obj) {
-        return schema(obj, 0);
-    }
+//    private String schema(Object obj) {
+//        return schema(obj, 0);
+//    }
 
     private String schema(Object obj, int depth) {
         if (obj == null) return "null";

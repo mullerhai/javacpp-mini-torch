@@ -578,7 +578,7 @@ public class LmdbReader {
                     short nodePtr = buf.getShort(offset);
                     offset += 2;
                     
-                    buf.position(pageNum * pageSize + nodePtr);
+                    buf.position((int)(pageNum * pageSize + nodePtr));
                     long childPage = buf.getLong();
                     int keyLen = buf.getShort() & 0xFFFF;
                     byte[] key = new byte[keyLen];

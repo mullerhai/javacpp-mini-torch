@@ -6,6 +6,8 @@ import org.bytedeco.pytorch.dataframe.DataFrame;
 import java.io.*;
 import java.nio.*;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.*;
 
 /**
@@ -58,9 +60,9 @@ public class PickleWriter {
         writeOp(out, protocol >= 2 ? 0x80 : 0);  // PROTO
         writeInt(out, protocol, 1);
         
-        if (opt.dataFrameFormat().equals(PickleOptions.DataFrameFormat.LIST_OF_DICTS)) {
+        if (opt.dataFrameFormat().equals(DataFrameFormat.LIST_OF_DICTS)) {
             writeListOfDicts(df, out, protocol);
-        } else if (opt.dataFrameFormat().equals(PickleOptions.DataFrameFormat.PANDAS)) {
+        } else if (opt.dataFrameFormat().equals(DataFrameFormat.PANDAS)) {
             writePandasFormat(df, out, protocol);
         } else {
             writeTupleList(df, out, protocol);
@@ -187,18 +189,10 @@ public class PickleWriter {
             case BOOLEAN:
                 writeBoolean(out, val);
                 break;
-            case INT8:
-            case INT16:
             case INT32:
                 writeInt(out, ((Number) val).intValue(), 4);
                 break;
-            case UINT8:
-            case UINT16:
-            case UINT32:
-                writeInt(out, ((Number) val).intValue(), 4);
-                break;
             case INT64:
-            case UINT64:
                 writeInt(out, ((Number) val).longValue(), 8);
                 break;
             case FLOAT32:
@@ -214,7 +208,22 @@ public class PickleWriter {
                 writeBytes(out, (byte[]) val);
                 break;
             default:
-                writeString(out, val.toString(), protocol);
+                // INT8/INT16/UINT8/UINT16/UINT32/UINT64 collapsed into INT32/INT64,
+                // and all other types (TENSOR, DATE, LIST, MAP, ...) serialized as string.
+                if (val instanceof Number) {
+                    Number n = (Number) val;
+                    if (val instanceof Float || val instanceof Double) {
+                        writeDouble(out, n.doubleValue());
+                    } else if (n.longValue() >= Integer.MIN_VALUE && n.longValue() <= Integer.MAX_VALUE) {
+                        writeInt(out, n.intValue(), 4);
+                    } else {
+                        writeInt(out, n.longValue(), 8);
+                    }
+                } else if (val instanceof byte[]) {
+                    writeBytes(out, (byte[]) val);
+                } else {
+                    writeString(out, val.toString(), protocol);
+                }
         }
     }
 

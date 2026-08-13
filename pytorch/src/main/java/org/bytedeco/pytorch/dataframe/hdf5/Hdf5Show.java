@@ -3,6 +3,7 @@ package org.bytedeco.pytorch.dataframe.hdf5;
 import org.bytedeco.pytorch.dataframe.Column;
 import org.bytedeco.pytorch.dataframe.DataFrame;
 import org.bytedeco.pytorch.dataframe.hdf5.internal.Hdf5ReaderCore;
+import org.bytedeco.pytorch.dataframe.hdf5.internal.Hdf5WriterCore;
 
 import java.nio.file.Path;
 import java.util.*;

@@ -46,6 +46,13 @@ public final class LoadOptions {
     /** Optional dtype cast after load (null = keep on-disk dtype). */
     public final org.bytedeco.pytorch.global.torch.ScalarType dtype;
 
+    public boolean weightsOnly() { return weightsOnly; }
+    public Device mapLocation() { return mapLocation; }
+    public boolean zeroCopy() { return zeroCopy; }
+    public boolean strict() { return strict; }
+    public boolean dequantFp8() { return dequantFp8; }
+    public org.bytedeco.pytorch.global.torch.ScalarType dtype() { return dtype; }
+
     private LoadOptions(Builder b) {
         this.weightsOnly = b.weightsOnly;
         this.mapLocation = b.mapLocation;
@@ -60,7 +67,7 @@ public final class LoadOptions {
     }
 
     /** Python {@code weights_only=True} equivalent. */
-    public static LoadOptions weightsOnly() {
+    public static LoadOptions weightsOnlyLoad() {
         return new Builder().weightsOnly(true).build();
     }
 

@@ -191,6 +191,11 @@ public final class DataFrame implements AutoCloseable, Serializable {
         return col;
     }
 
+    /** Add column only if absent; no-op when the name already exists. */
+    public void addColumnIfAbsent(String name, Column.DType dtype) {
+        if (!columnMap.containsKey(name)) addColumn(name, dtype);
+    }
+
     public void renameColumn(String oldName, String newName) {
         Column col = columnMap.remove(oldName);
         if (col == null) throw new IllegalArgumentException("No such column: " + oldName);
@@ -314,6 +319,9 @@ public final class DataFrame implements AutoCloseable, Serializable {
         return new DataFrameWriter(this);
     }
 
+    public static  DataFrame readLmdb(String path) throws Exception {
+        return org.bytedeco.pytorch.dataframe.io.lmdb.LmdbReader.read(path);
+    }
     /**
      * Fluent reader entry point (Spark-style).
      *

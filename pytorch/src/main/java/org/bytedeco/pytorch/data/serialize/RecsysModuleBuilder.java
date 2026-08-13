@@ -91,11 +91,11 @@ public final class RecsysModuleBuilder {
     }
 
     public static Map<String, Tensor> loadWeightsOnly(Path path) throws IOException {
-        return loadWeightsOnly(path, LoadOptions.weightsOnly());
+        return loadWeightsOnly(path, LoadOptions.weightsOnlyLoad());
     }
 
     public static Map<String, Tensor> loadWeightsOnly(Path path, LoadOptions opts) throws IOException {
-        if (opts == null) opts = LoadOptions.weightsOnly();
+        if (opts == null) opts = LoadOptions.weightsOnlyLoad();
         else if (!opts.weightsOnly) {
             opts = opts.toBuilder().weightsOnly(true).build();
         }
