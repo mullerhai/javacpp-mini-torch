@@ -19,7 +19,12 @@ public final class FormatDetect {
 
     public enum Format {
         CSV, TSV, JSON, JSONL, PARQUET, ARROW, FEATHER, PICKLE,
-        EXCEL, HDF5, AVRO, ORC, NPZ, NPY, SAFETENSORS, GGUF, LANCE, TOML, BIN, UNKNOWN
+        EXCEL, HDF5, AVRO, ORC, NPZ, NPY, SAFETENSORS, GGUF, LANCE, TOML, BIN, IMDB, 
+        LMDB, IMAGEFOLDER, SOUNDFOLDER, WEBDATASET, TEXT,
+        PDF, DOCUMENT, HTML, MARKDOWN, XML, 
+        SHAPEFILE, RASTER, GEOTIFF,
+        VOXEL, MESH, POINTCLOUD,
+        UNKNOWN
     }
 
     public static Format detect(String path) {
@@ -71,8 +76,75 @@ public final class FormatDetect {
             case "lance": return Format.LANCE;
             case "toml": return Format.TOML;
             case "bin": return Format.BIN;
+            case "imdb": return Format.IMDB;
+            case "lmdb": case "mdb": return Format.LMDB;
+            case "imagefolder": case "images": return Format.IMAGEFOLDER;
+            case "soundfolder": case "audiofolder": case "audio": return Format.SOUNDFOLDER;
+            case "webdataset": case "wds": case "tar": return Format.WEBDATASET;
+            case "txt": case "text": return Format.TEXT;
+            case "pdf": return Format.PDF;
+            case "doc": case "docx": case "html": case "htm": 
+            case "markdown": case "md": case "xml": return Format.DOCUMENT;
+            case "shp": return Format.SHAPEFILE;
+            case "tif": case "tiff": case "dem": case "bil": return Format.RASTER;
+            case "geotiff": case "gtiff": return Format.GEOTIFF;
+            case "binvox": case "vox": case "raw3d": return Format.VOXEL;
+            case "obj": case "ply": case "stl": case "off": case "mesh": return Format.MESH;
+            case "pcd": case "xyz": case "las": case "laz": return Format.POINTCLOUD;
             default: return Format.UNKNOWN;
         }
+    }
+
+    /**
+     * Detect LMDB by directory structure or file content.
+     */
+    private static boolean isLmdbDirectory(Path p) {
+        if (!Files.isDirectory(p)) return false;
+        return Files.exists(p.resolve("data.mdb")) 
+            || Files.exists(p.resolve("train.mdb"))
+            || Files.exists(p.resolve("test.mdb"))
+            || Files.exists(p.resolve("lock.mdb"));
+    }
+
+    /**
+     * Detect ImageFolder by checking for image subdirectories.
+     */
+    private static boolean isImageFolderDirectory(Path p) {
+        if (!Files.isDirectory(p)) return false;
+        // ImageFolder has subdirectories with class names containing images
+        try (DirectoryStream<Path> stream = Files.newDirectoryStream(p)) {
+            for (Path entry : stream) {
+                if (Files.isDirectory(entry)) {
+                    // Check if directory contains image files
+                    try (DirectoryStream<Path> images = Files.newDirectoryStream(entry, "*.{jpg,JPG,png,PNG,gif,GIF,bmp,BMP,webp,WEBP}")) {
+                        if (images.iterator().hasNext()) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        } catch (Exception e) {}
+        return false;
+    }
+
+    /**
+     * Detect SoundFolder by checking for audio subdirectories.
+     */
+    private static boolean isSoundFolderDirectory(Path p) {
+        if (!Files.isDirectory(p)) return false;
+        try (DirectoryStream<Path> stream = Files.newDirectoryStream(p)) {
+            for (Path entry : stream) {
+                if (Files.isDirectory(entry)) {
+                    // Check if directory contains audio files
+                    try (DirectoryStream<Path> audio = Files.newDirectoryStream(entry, "*.{wav,mp3,flac,ogg,m4a,aac}")) {
+                        if (audio.iterator().hasNext()) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        } catch (Exception e) {}
+        return false;
     }
 
     public static Format detect(Path path) {
@@ -87,6 +159,23 @@ public final class FormatDetect {
     public static Format detectRobust(String path) {
         Format fmt = detect(path);
         if (fmt != Format.UNKNOWN) return fmt;
+        
+        // Try to detect by directory structure
+        try {
+            Path p = Path.of(path);
+            if (Files.isDirectory(p)) {
+                if (isLmdbDirectory(p)) {
+                    return Format.LMDB;
+                }
+                if (isImageFolderDirectory(p)) {
+                    return Format.IMAGEFOLDER;
+                }
+                if (isSoundFolderDirectory(p)) {
+                    return Format.SOUNDFOLDER;
+                }
+            }
+        } catch (Exception ignored) {}
+        
         return SchemaInfer.sniff(path);
     }
 
@@ -134,6 +223,31 @@ public final class FormatDetect {
                 return TomlReader.read(path);
             case BIN:
                 return BinReader.read(path);
+            case LMDB:
+                return org.bytedeco.pytorch.dataframe.io.lmdb.LmdbReader.read(path);
+            case IMAGEFOLDER:
+                return org.bytedeco.pytorch.dataframe.io.folder.ImageFolderReader.read(path);
+            case SOUNDFOLDER:
+                return org.bytedeco.pytorch.dataframe.io.folder.SoundFolderReader.read(path);
+            case WEBDATASET:
+                return org.bytedeco.pytorch.dataframe.io.webdataset.WebDatasetReader.read(path);
+            case TEXT:
+                return DataFrame.readText(path);
+            case PDF:
+                return org.bytedeco.pytorch.dataframe.io.document.PdfReader.read(path);
+            case DOCUMENT:
+                return org.bytedeco.pytorch.dataframe.io.document.DocumentReader.read(path);
+            case SHAPEFILE:
+                return org.bytedeco.pytorch.dataframe.io.geo.ShapefileReader.read(path);
+            case RASTER:
+            case GEOTIFF:
+                return org.bytedeco.pytorch.dataframe.io.geo.RasterReader.read(path);
+            case VOXEL:
+                return org.bytedeco.pytorch.data.multimodal.VoxelData.fromFile(path).toDataFrame();
+            case MESH:
+                return org.bytedeco.pytorch.data.multimodal.MeshData.fromFile(path).toDataFrame();
+            case POINTCLOUD:
+                return org.bytedeco.pytorch.dataframe.dtype.PointCloudData.fromFile(path).toDataFrame();
             default:
                 throw new IllegalArgumentException(
                     "Cannot auto-detect DataFrame format for path: " + path

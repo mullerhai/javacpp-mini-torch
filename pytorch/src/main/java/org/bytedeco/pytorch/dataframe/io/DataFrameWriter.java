@@ -9,6 +9,11 @@ import org.bytedeco.pytorch.dataframe.excel.ExcelOptions;
 import org.bytedeco.pytorch.dataframe.hdf5.Hdf5Options;
 import org.bytedeco.pytorch.data.avro.AvroOptions;
 import org.bytedeco.pytorch.data.orc.OrcOptions;
+import org.bytedeco.pytorch.dataframe.io.pickle.PickleWriter;
+import org.bytedeco.pytorch.dataframe.io.text.TextWriter;
+import org.bytedeco.pytorch.dataframe.io.config.YamlWriter;
+import org.bytedeco.pytorch.dataframe.io.tensor.SafetensorsWriter;
+import org.bytedeco.pytorch.dataframe.io.numpy.NumpyWriter;
 
 import java.io.OutputStreamWriter;
 import java.io.Writer;
@@ -49,7 +54,8 @@ import java.util.TreeMap;
  * <p>Supported short formats: {@code parquet}, {@code csv}, {@code tsv}, {@code json},
  * {@code jsonl}/{@code ndjson}, {@code arrow}/{@code feather}/{@code ipc}, {@code pickle}/{@code pkl},
  * {@code npz}, {@code npy}, {@code safetensors}, {@code gguf}, {@code excel}/{@code xlsx},
- * {@code hdf5}/{@code hdf}, {@code avro}, {@code orc}, {@code lance}.
+ * {@code hdf5}/{@code hdf}, {@code avro}, {@code orc}, {@code lance}, {@code bin}, {@code text},
+ * {@code yaml}, {@code lmdb}.
  */
 public final class DataFrameWriter {
     private final DataFrame df;
@@ -204,6 +210,16 @@ public final class DataFrameWriter {
     public void avro(String path)   throws Exception { format("avro").save(path); }
     public void orc(String path)    throws Exception { format("orc").save(path); }
     public void lance(String path)  throws Exception { format("lance").save(path); }
+    public void pickle(String path) throws Exception { format("pickle").save(path); }
+    public void pkl(String path)    throws Exception { format("pickle").save(path); }
+    public void npz(String path)    throws Exception { format("npz").save(path); }
+    public void npy(String path)    throws Exception { format("npy").save(path); }
+    public void safetensors(String path) throws Exception { format("safetensors").save(path); }
+    public void gguf(String path)   throws Exception { format("gguf").save(path); }
+    public void bin(String path)    throws Exception { format("bin").save(path); }
+    public void text(String path)   throws Exception { format("text").save(path); }
+    public void yaml(String path)   throws Exception { format("yaml").save(path); }
+    public void lmdb(String path)   throws Exception { format("lmdb").save(path); }
 
     // ---- core dispatch ----
 
@@ -258,8 +274,11 @@ public final class DataFrameWriter {
             case "orc":         writeOrc(path); break;
             case "lance":       writeLance(path); break;
             case "toml":        writeToml(path, TomlReader.TomlOptions.defaults()); break;
+            case "yaml":        writeYaml(path); break;
             case "bin":
-            case "binary":      writeBin(path, BinReader.BinOptions.defaults()); break;
+            case "binary":      writeBin(path); break;
+            case "text":        writeText(path); break;
+            case "lmdb":        writeLmdb(path); break;
             default:
                 throw new IllegalArgumentException("Unknown write format: '" + fmt + "'");
         }
@@ -270,6 +289,7 @@ public final class DataFrameWriter {
             case "parquet": case "csv": case "tsv": case "json": case "jsonl":
             case "ndjson": case "arrow": case "feather": case "ipc":
             case "hdf5": case "hdf": case "orc": case "avro": case "lance":
+            case "bin": case "binary": case "text": case "lmdb":
                 return true;
             default:
                 return false;
@@ -477,8 +497,20 @@ public final class DataFrameWriter {
         TomlReader.write(df, path, opt);
     }
 
-    private void writeBin(String path, BinReader.BinOptions opt) throws Exception {
-        BinReader.write(df, path, opt);
+    private void writeBin(String path) throws Exception {
+        BinWriter.write(df, path);
+    }
+
+    private void writeText(String path) throws Exception {
+        TextWriter.write(df, path);
+    }
+
+    private void writeYaml(String path) throws Exception {
+        YamlWriter.write(df, path);
+    }
+
+    private void writeLmdb(String path) throws Exception {
+        org.bytedeco.pytorch.dataframe.io.lmdb.LmdbWriter.write(df, path);
     }
 
     // ---- partitionBy implementation ----
@@ -559,6 +591,12 @@ public final class DataFrameWriter {
             case "npz":     return ".npz";
             case "npy":     return ".npy";
             case "safetensors": return ".safetensors";
+            case "gguf":     return ".gguf";
+            case "bin":
+            case "binary":   return ".bin";
+            case "text":     return ".txt";
+            case "yaml":     return ".yaml";
+            case "lmdb":     return ".lmdb";
             case "gguf":    return ".gguf";
             case "excel":
             case "xlsx":

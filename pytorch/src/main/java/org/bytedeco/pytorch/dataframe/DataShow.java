@@ -1,5 +1,7 @@
 package org.bytedeco.pytorch.dataframe;
 
+import org.bytedeco.pytorch.dataframe.io.ImdbShow;
+
 import java.io.*;
 import java.nio.file.*;
 import java.util.*;
@@ -35,6 +37,12 @@ public class DataShow {
         String ext = getExtension(p.getFileName().toString()).toLowerCase();
         
         switch (ext) {
+            case "csv":
+            case "tsv":
+            case "json":
+            case "jsonl":
+            case "ndjson":
+                return showTextLike(path, opts);
             case "npy":
                 return showNpy(path, opts);
             case "npz":
@@ -44,6 +52,7 @@ public class DataShow {
                 return showPT(path, opts);
             case "pkl":
             case "pickle":
+            case "imdb":
                 return showPickle(path, opts);
             case "safetensors":
                 return showSafeTensors(path, opts);
@@ -51,6 +60,30 @@ public class DataShow {
                 return showToml(path, opts);
             case "bin":
                 return showBin(path, opts);
+            case "hdf5":
+            case "hdf":
+                return showHdf5(path, opts);
+            case "parquet":
+            case "pq":
+                return showParquet(path, opts);
+            case "arrow":
+            case "ipc":
+            case "feather":
+                return showArrow(path, opts);
+            case "xlsx":
+            case "xls":
+            case "xlsm":
+                return showExcel(path, opts);
+            case "avro":
+                return showAvro(path, opts);
+            case "orc":
+                return showOrc(path, opts);
+            case "gguf":
+                return showGguf(path, opts);
+            case "lance":
+                return showLance(path, opts);
+            case "lmdb":
+                return showLmdb(path, opts);
             default:
                 return showRaw(path, opts);
         }
@@ -214,38 +247,49 @@ public class DataShow {
         return sb.toString();
     }
 
-    // ---- Pickle ----
+    // ---- Pickle / IMDB ----
 
     private static String showPickle(String path, ShowOptions opts) throws Exception {
-        Object obj = org.bytedeco.pytorch.data.pickle.Pickle.load(new File(path));
-        
-        StringBuilder sb = new StringBuilder();
-        sb.append("╔══════════════════════════════════════════════════════════════════════════════╗\n");
-        sb.append(String.format("║ Pickle object: %s                                              ║\n",
-                obj == null ? "null" : obj.getClass().getSimpleName()));
-        sb.append("╚══════════════════════════════════════════════════════════════════════════════╝\n\n");
-        
-        if (obj instanceof Map) {
-            Map<?, ?> map = (Map<?, ?>) obj;
-            sb.append("Dict with ").append(map.size()).append(" entries:\n");
-            int shown = 0;
-            for (Map.Entry<?, ?> e : map.entrySet()) {
-                if (shown++ >= opts.maxRows()) break;
-                sb.append(String.format("  %s: %s\n", e.getKey(), truncate(String.valueOf(e.getValue()), 50)));
+        // Use ImdbShow for better display
+        try {
+            return ImdbShow.show(path, new ImdbShow.ShowOptions()
+                .maxRows(opts.maxRows())
+                .maxCols(opts.maxCols()));
+        } catch (Exception e) {
+            // Fallback to basic pickle display
+            Object obj = org.bytedeco.pytorch.data.pickle.Pickle.load(new File(path));
+            
+            StringBuilder sb = new StringBuilder();
+            File file = new File(path);
+            sb.append("╔══════════════════════════════════════════════════════════════════════════════╗\n");
+            sb.append(String.format("║ Pickle/IMDB: %s                                            ║\n",
+                    obj == null ? "null" : obj.getClass().getSimpleName()));
+            sb.append(String.format("║ File: %s (%s)                                   ║\n",
+                    truncate(path, 55), formatBytes(file.length())));
+            sb.append("╚══════════════════════════════════════════════════════════════════════════════╝\n\n");
+            
+            if (obj instanceof Map) {
+                Map<?, ?> map = (Map<?, ?>) obj;
+                sb.append("Dict with ").append(map.size()).append(" entries:\n");
+                int shown = 0;
+                for (Map.Entry<?, ?> e : map.entrySet()) {
+                    if (shown++ >= opts.maxRows()) break;
+                    sb.append(String.format("  %s: %s\n", e.getKey(), truncate(String.valueOf(e.getValue()), 50)));
+                }
+            } else if (obj instanceof List) {
+                List<?> list = (List<?>) obj;
+                sb.append("List with ").append(list.size()).append(" entries:\n");
+                int shown = 0;
+                for (Object item : list) {
+                    if (shown++ >= opts.maxRows()) break;
+                    sb.append(String.format("  [%d] = %s\n", shown - 1, truncate(String.valueOf(item), 50)));
+                }
+            } else {
+                sb.append(String.valueOf(obj));
             }
-        } else if (obj instanceof List) {
-            List<?> list = (List<?>) obj;
-            sb.append("List with ").append(list.size()).append(" entries:\n");
-            int shown = 0;
-            for (Object item : list) {
-                if (shown++ >= opts.maxRows()) break;
-                sb.append(String.format("  [%d] = %s\n", shown - 1, truncate(String.valueOf(item), 50)));
-            }
-        } else {
-            sb.append(String.valueOf(obj));
+            
+            return sb.toString();
         }
-        
-        return sb.toString();
     }
 
     // ---- SafeTensors ----
@@ -319,44 +363,344 @@ public class DataShow {
     // ---- Binary ----
 
     private static String showBin(String path, ShowOptions opts) throws Exception {
+        // Use BinReader schema for better display
+        org.bytedeco.pytorch.dataframe.io.BinReader.BinSchema schema = 
+            org.bytedeco.pytorch.dataframe.io.BinReader.schema(path);
+        
         org.bytedeco.pytorch.dataframe.DataFrame df = 
             org.bytedeco.pytorch.dataframe.io.BinReader.read(path);
         
         StringBuilder sb = new StringBuilder();
         File file = new File(path);
+        
         sb.append("╔══════════════════════════════════════════════════════════════════════════════╗\n");
-        sb.append(String.format("║ Binary (.bin): %d rows × %d columns                                   ║\n",
-                df.rowCount(), df.columnCount()));
-        sb.append(String.format("║ File: %s (%d bytes)                                              ║\n",
-                truncate(path, 60), file.length()));
+        sb.append(String.format("║ Binary (.bin): %s                                             ║\n", 
+                schema.format != null ? schema.format : "MicroLens"));
+        sb.append(String.format("║ File: %-62s║\n", truncate(path, 62)));
+        sb.append(String.format("║ Size: %-59s║\n", formatBytes(file.length())));
         sb.append("╠══════════════════════════════════════════════════════════════════════════════╣\n");
         
-        // Show columns
-        for (int i = 0; i < df.columnCount(); i++) {
-            Column c = df.column(i);
-            sb.append("║ ").append(String.format("%-25s", truncate(c.name(), 25)));
-            sb.append(" │ ").append(String.format("%-10s", c.dtype().name()));
-            sb.append(" │ size=").append(c.size()).append(" ║\n");
+        // Show schema table
+        sb.append(String.format("║ %-3s │ %-20s │ %-10s │ %-15s ║\n", "#", "field", "dtype", "shape"));
+        sb.append("╠═════╪═══════════════════════╪════════════╪═══════════════════╣\n");
+        
+        int idx = 0;
+        for (org.bytedeco.pytorch.dataframe.io.BinReader.BinSchema.FieldInfo f : schema.fields) {
+            sb.append(String.format("║ %3d │ %-20s │ %-10s │ %-15s ║\n",
+                    idx++, truncate(f.name, 20), f.dtype, f.shape));
         }
         
         sb.append("╠══════════════════════════════════════════════════════════════════════════════╣\n");
         
-        // Show sample data
-        int rows = Math.min(opts.maxRows(), df.rowCount());
-        for (int r = 0; r < rows; r++) {
-            sb.append("║ ").append(String.format("%-3d", r)).append(": ");
-            for (int c = 0; c < Math.min(df.columnCount(), 4); c++) {
-                Object v = df.get(r, c);
-                String str = truncate(formatValue(v), 18);
-                sb.append(str);
-                if (c < Math.min(df.columnCount(), 4) - 1) sb.append(", ");
+        // Special handling for matrix data (like MicroLens embeddings)
+        boolean isMatrixData = schema.fields.size() > 0 && 
+            schema.fields.get(0).cols > 100;  // Likely matrix if many columns
+        
+        if (isMatrixData) {
+            sb.append("║                        Matrix Data Preview                             ║\n");
+            sb.append("╠══════════════════════════════════════════════════════════════════════════════╣\n");
+            sb.append(showMatrixPreview(df, schema, opts));
+        } else {
+            sb.append("║                         Data Preview                                   ║\n");
+            sb.append("╠══════════════════════════════════════════════════════════════════════════════╣\n");
+            
+            // Show columns header
+            int maxCols = Math.min(df.columnCount(), 5);
+            sb.append("║  idx │");
+            for (int c = 0; c < maxCols; c++) {
+                sb.append(String.format(" %-18s│", truncate(df.column(c).name(), 18)));
             }
-            if (df.columnCount() > 4) sb.append(", ...");
-            sb.append(" ║\n");
+            if (df.columnCount() > maxCols) sb.append("     ... │");
+            sb.append("\n");
+            
+            sb.append("╟──────┼");
+            for (int c = 0; c < maxCols; c++) {
+                sb.append("─────────────────────┼");
+            }
+            if (df.columnCount() > maxCols) sb.append("───────────┤");
+            sb.append("\n");
+            
+            // Show sample data rows
+            int rows = Math.min(opts.maxRows(), df.rowCount());
+            for (int r = 0; r < rows; r++) {
+                sb.append(String.format("║ %4d │", r));
+                for (int c = 0; c < maxCols; c++) {
+                    Object v = df.get(r, c);
+                    String str = formatValueCompact(v, 18);
+                    sb.append(" ").append(str).append("│");
+                }
+                if (df.columnCount() > maxCols) sb.append("     ... │");
+                sb.append("\n");
+            }
         }
         
         sb.append("╚══════════════════════════════════════════════════════════════════════════════╝\n");
         
+        return sb.toString();
+    }
+
+    /**
+     * Show matrix-style data with proper row/column grid.
+     */
+    private static String showMatrixPreview(DataFrame df, 
+            org.bytedeco.pytorch.dataframe.io.BinReader.BinSchema schema,
+            ShowOptions opts) {
+        StringBuilder sb = new StringBuilder();
+        
+        if (df.columnCount() == 0) return "║ (empty)                                                                    ║\n";
+        
+        Column col = df.column(0);
+        int totalCols = (int) col.size();
+        int displayCols = Math.min(totalCols, opts.maxCols(6));
+        int rows = df.rowCount();
+        
+        // Show column indices
+        sb.append("║        │");
+        for (int c = 0; c < displayCols; c++) {
+            if (c < displayCols - 1) {
+                sb.append(String.format("    col_%5d│", c));
+            } else {
+                sb.append(String.format("    col_%5d│", c));
+            }
+        }
+        if (totalCols > displayCols) sb.append("      ...│");
+        sb.append("\n");
+        
+        // Separator
+        sb.append("║────────┼");
+        for (int c = 0; c < displayCols; c++) {
+            sb.append("─────────────┼");
+        }
+        if (totalCols > displayCols) sb.append("─────────┤");
+        sb.append("\n");
+        
+        // Data rows
+        int displayRows = Math.min(rows, opts.maxRows());
+        for (int r = 0; r < displayRows; r++) {
+            sb.append(String.format("║ row_%3d │", r));
+            for (int c = 0; c < displayCols; c++) {
+                double val = toDouble(col.get(r * totalCols + c));
+                if (c < displayCols - 1) {
+                    sb.append(String.format(" %11.4f│", val));
+                } else {
+                    sb.append(String.format(" %11.4f│", val));
+                }
+            }
+            if (totalCols > displayCols) sb.append("      ...│");
+            sb.append("\n");
+        }
+        
+        // Trailing rows indicator
+        if (rows > displayRows) {
+            sb.append("║   ...  │");
+            for (int c = 0; c < displayCols; c++) sb.append("           ...│");
+            if (totalCols > displayCols) sb.append("─────────┤");
+            sb.append("\n");
+        }
+        
+        return sb.toString();
+    }
+
+    private static double toDouble(Object v) {
+        if (v == null) return 0.0;
+        if (v instanceof Number) return ((Number) v).doubleValue();
+        try { return Double.parseDouble(String.valueOf(v)); }
+        catch (Exception e) { return 0.0; }
+    }
+
+    private static String formatValueCompact(Object v, int maxLen) {
+        if (v == null) return padRight("null", maxLen);
+        String str;
+        if (v instanceof Number n) {
+            if (n instanceof Double || n instanceof Float) {
+                str = String.format("%.4f", n.doubleValue());
+            } else {
+                str = String.valueOf(n.longValue());
+            }
+        } else {
+            str = String.valueOf(v);
+        }
+        return padRight(truncate(str, maxLen), maxLen);
+    }
+
+    private static String padRight(String s, int len) {
+        if (s.length() >= len) return s.substring(0, len);
+        StringBuilder sb = new StringBuilder(s);
+        while (sb.length() < len) sb.append(' ');
+        return sb.toString();
+    }
+
+    // ---- HDF5 ----
+
+    private static String showHdf5(String path, ShowOptions opts) throws Exception {
+        org.bytedeco.pytorch.dataframe.DataFrame df = 
+            org.bytedeco.pytorch.dataframe.hdf5.Hdf5Reader.read(path, "/df");
+        
+        StringBuilder sb = new StringBuilder();
+        File file = new File(path);
+        
+        sb.append("╔══════════════════════════════════════════════════════════════════════════════╗\n");
+        sb.append(String.format("║ HDF5 (.h5): %d rows × %d columns                                        ║\n",
+                df.rowCount(), df.columnCount()));
+        sb.append(String.format("║ File: %s (%s)                                   ║\n",
+                truncate(path, 55), formatBytes(file.length())));
+        sb.append("╠══════════════════════════════════════════════════════════════════════════════╣\n");
+        
+        int maxCols = Math.min(df.columnCount(), 5);
+        sb.append("║  idx │");
+        for (int c = 0; c < maxCols; c++) {
+            sb.append(String.format(" %-18s│", truncate(df.column(c).name(), 18)));
+        }
+        if (df.columnCount() > maxCols) sb.append("       ... │");
+        sb.append("\n");
+        
+        sb.append("╟──────┼");
+        for (int c = 0; c < maxCols; c++) {
+            sb.append("──────────────────────┼");
+        }
+        if (df.columnCount() > maxCols) sb.append("───────────┤");
+        sb.append("\n");
+        
+        int rows = Math.min(opts.maxRows(), df.rowCount());
+        for (int r = 0; r < rows; r++) {
+            sb.append(String.format("║ %4d │", r));
+            for (int c = 0; c < maxCols; c++) {
+                Object v = df.get(r, c);
+                String str = formatValueCompact(v, 18);
+                sb.append(" ").append(str).append("│");
+            }
+            if (df.columnCount() > maxCols) sb.append("       ... │");
+            sb.append("\n");
+        }
+        
+        sb.append("╚══════════════════════════════════════════════════════════════════════════════╝\n");
+        return sb.toString();
+    }
+
+    // ---- CSV/TSV/JSON ----
+
+    private static String showTextLike(String path, ShowOptions opts) throws Exception {
+        org.bytedeco.pytorch.dataframe.DataFrame df = DataFrame.read(path);
+        return formatGenericShow(getExtension(path).toUpperCase(), path, df, opts);
+    }
+
+    // ---- Parquet ----
+
+    private static String showParquet(String path, ShowOptions opts) throws Exception {
+        org.bytedeco.pytorch.dataframe.DataFrame df = DataFrame.readParquet(path);
+        return formatGenericShow("Parquet", path, df, opts);
+    }
+
+    // ---- Arrow/Feather ----
+
+    private static String showArrow(String path, ShowOptions opts) throws Exception {
+        org.bytedeco.pytorch.dataframe.DataFrame df = DataFrame.readArrow(path);
+        return formatGenericShow("Arrow/Feather", path, df, opts);
+    }
+
+    // ---- Excel ----
+
+    private static String showExcel(String path, ShowOptions opts) throws Exception {
+        Map<String, org.bytedeco.pytorch.dataframe.DataFrame> sheets = DataFrame.readExcelAll(path);
+        StringBuilder sb = new StringBuilder();
+        File file = new File(path);
+        
+        sb.append("╔══════════════════════════════════════════════════════════════════════════════╗\n");
+        sb.append(String.format("║ Excel (.xlsx): %d sheets                                               ║\n",
+                sheets.size()));
+        sb.append(String.format("║ File: %s (%s)                                   ║\n",
+                truncate(path, 55), formatBytes(file.length())));
+        sb.append("╠══════════════════════════════════════════════════════════════════════════════╣\n");
+        sb.append(String.format("║ %-20s │ %-10s │ %-10s ║\n", "sheet_name", "rows", "columns"));
+        sb.append("╠════════════════════════╪════════════╪═════════════╣\n");
+        
+        for (Map.Entry<String, org.bytedeco.pytorch.dataframe.DataFrame> e : sheets.entrySet()) {
+            org.bytedeco.pytorch.dataframe.DataFrame df = e.getValue();
+            sb.append(String.format("║ %-20s │ %10d │ %10d ║\n",
+                    truncate(e.getKey(), 20), df.rowCount(), df.columnCount()));
+        }
+        sb.append("╚══════════════════════════════════════════════════════════════════════════════╝\n");
+        
+        return sb.toString();
+    }
+
+    // ---- Avro ----
+
+    private static String showAvro(String path, ShowOptions opts) throws Exception {
+        org.bytedeco.pytorch.dataframe.DataFrame df = DataFrame.readAvro(path);
+        return formatGenericShow("Avro", path, df, opts);
+    }
+
+    // ---- ORC ----
+
+    private static String showOrc(String path, ShowOptions opts) throws Exception {
+        org.bytedeco.pytorch.dataframe.DataFrame df = DataFrame.readOrc(path);
+        return formatGenericShow("ORC", path, df, opts);
+    }
+
+    // ---- GGUF ----
+
+    private static String showGguf(String path, ShowOptions opts) throws Exception {
+        org.bytedeco.pytorch.dataframe.DataFrame df = DataFrame.readGguf(path);
+        return formatGenericShow("GGUF", path, df, opts);
+    }
+
+    // ---- Lance ----
+
+    private static String showLance(String path, ShowOptions opts) throws Exception {
+        org.bytedeco.pytorch.dataframe.DataFrame df = DataFrame.readLance(path);
+        return formatGenericShow("Lance", path, df, opts);
+    }
+
+    // ---- Generic format show helper ----
+
+    private static String formatGenericShow(String formatName, String path, 
+            org.bytedeco.pytorch.dataframe.DataFrame df, ShowOptions opts) throws Exception {
+        StringBuilder sb = new StringBuilder();
+        File file = new File(path);
+        
+        sb.append("╔══════════════════════════════════════════════════════════════════════════════╗\n");
+        sb.append(String.format("║ %s: %d rows × %d columns                                        ║\n",
+                formatName, df.rowCount(), df.columnCount()));
+        sb.append(String.format("║ File: %s (%s)                                   ║\n",
+                truncate(path, 55), formatBytes(file.length())));
+        sb.append("╠══════════════════════════════════════════════════════════════════════════════╣\n");
+        
+        int maxCols = Math.min(df.columnCount(), 5);
+        sb.append("║  idx │");
+        for (int c = 0; c < maxCols; c++) {
+            sb.append(String.format(" %-18s│", truncate(df.column(c).name(), 18)));
+        }
+        if (df.columnCount() > maxCols) sb.append("       ... │");
+        sb.append("\n");
+        
+        sb.append("╟──────┼");
+        for (int c = 0; c < maxCols; c++) {
+            sb.append("──────────────────────┼");
+        }
+        if (df.columnCount() > maxCols) sb.append("───────────┤");
+        sb.append("\n");
+        
+        int rows = Math.min(opts.maxRows(), df.rowCount());
+        for (int r = 0; r < rows; r++) {
+            sb.append(String.format("║ %4d │", r));
+            for (int c = 0; c < maxCols; c++) {
+                Object v = df.get(r, c);
+                String str = formatValueCompact(v, 18);
+                sb.append(" ").append(str).append("│");
+            }
+            if (df.columnCount() > maxCols) sb.append("       ... │");
+            sb.append("\n");
+        }
+        
+        if (df.rowCount() > rows) {
+            sb.append("║  ... │");
+            for (int c = 0; c < maxCols; c++) sb.append("                ... │");
+            if (df.columnCount() > maxCols) sb.append("           ... │");
+            sb.append("\n");
+        }
+        
+        sb.append("╚══════════════════════════════════════════════════════════════════════════════╝\n");
         return sb.toString();
     }
 
@@ -625,10 +969,18 @@ public class DataShow {
         return sb.toString();
     }
 
+    private static String formatBytes(long bytes) {
+        if (bytes < 1024) return bytes + " B";
+        if (bytes < 1024 * 1024) return String.format("%.1f KB", bytes / 1024.0);
+        if (bytes < 1024 * 1024 * 1024) return String.format("%.1f MB", bytes / (1024.0 * 1024));
+        return String.format("%.2f GB", bytes / (1024.0 * 1024 * 1024));
+    }
+
     // ---- Inner classes ----
 
     public static class ShowOptions {
         private int maxRows = 10;
+        private int maxCols = 6;
         private int maxColWidth = 20;
         private int startRow = 0;
         private boolean showDetails = false;
@@ -638,11 +990,13 @@ public class DataShow {
         }
 
         public ShowOptions maxRows(int n) { this.maxRows = n; return this; }
+        public ShowOptions maxCols(int n) { this.maxCols = n; return this; }
         public ShowOptions maxColWidth(int w) { this.maxColWidth = w; return this; }
         public ShowOptions startRow(int r) { this.startRow = r; return this; }
         public ShowOptions showDetails(boolean b) { this.showDetails = b; return this; }
-        
+
         public int maxRows() { return maxRows; }
+        public int maxCols() { return maxCols; }
         public int maxColWidth() { return maxColWidth; }
         public int startRow() { return startRow; }
         public boolean showDetails() { return showDetails; }

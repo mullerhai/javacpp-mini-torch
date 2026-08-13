@@ -25,9 +25,22 @@ public final class VistaOptions {
     private boolean showCompressedView = false;
     private boolean openBrowser = true;
     private boolean evalMode = true;
+    private boolean showMetadata = true;
 
     public static VistaOptions defaults() {
         return new VistaOptions();
+    }
+
+    public boolean showMetadata() {
+        return showMetadata;
+    }
+
+    /**
+     * Show model metadata panel with name, parameters, layers, etc.
+     */
+    public VistaOptions showMetadata(boolean v) {
+        this.showMetadata = v;
+        return this;
     }
 
     public boolean showNonGradientNodes() {
@@ -147,5 +160,31 @@ public final class VistaOptions {
     public VistaOptions evalMode(boolean v) {
         this.evalMode = v;
         return this;
+    }
+
+    /**
+     * Fluent builder for VistaOptions.
+     */
+    public static Builder builder() {
+        return new Builder();
+    }
+
+    public static class Builder {
+        private final VistaOptions opts = new VistaOptions();
+
+        public Builder showMetadata(boolean v) { opts.showMetadata(v); return this; }
+        public Builder collapseModulesAfterDepth(int v) { opts.collapseModulesAfterDepth(v); return this; }
+        public Builder height(int v) { opts.height(v); return this; }
+        public Builder width(Integer v) { opts.width(v); return this; }
+        public Builder exportPath(String v) { opts.exportPath(v); return this; }
+        public Builder exportFormat(ExportFormat v) { opts.exportFormat(v); return this; }
+        public Builder openBrowser(boolean v) { opts.openBrowser(v); return this; }
+        public Builder evalMode(boolean v) { opts.evalMode(v); return this; }
+        public Builder showModuleAttrNames(boolean v) { opts.showModuleAttrNames(v); return this; }
+        public Builder showCompressedView(boolean v) { opts.showCompressedView(v); return this; }
+
+        public VistaOptions build() {
+            return opts;
+        }
     }
 }

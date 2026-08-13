@@ -1,5 +1,8 @@
 package org.bytedeco.pytorch.dataframe.io;
 
+import org.bytedeco.pytorch.dataframe.Column;
+import org.bytedeco.pytorch.dataframe.DataFrame;
+
 import java.io.*;
 import java.nio.*;
 import java.nio.ByteOrder;
@@ -17,39 +20,39 @@ import java.util.*;
  *   <li>NumPy .npy compatible format</li>
  *   <li>PyTorch tensor binary format</li>
  *   <li>Custom typed array format (BIN float32/int64)</li>
- *   <li>Arrow IPC binary format</li>
  * </ul>
  * 
  * <p>MicroLens Format:</p>
  * <pre>
  * [int32] num_fields
  * For each field:
- *   [int32] field_name_len
- *   [bytes] field_name (UTF-8)
- *   [4 bytes] type_marker ("SNET"=float32, "DNET"=float64, "IN64"=int64)
+ *   [int32] name_len
+ *   [bytes] name (UTF-8)
+ *   [4 bytes] dtype ("SNET"=float32, "DNET"=float64, "IN64"=int64)
  *   [int32] dim0
  *   [int32] dim1
- *   [data] actual binary data
+ *   [data] binary data
  * </pre>
  */
 public class BinReader {
 
-    private static final byte[] MAGIC_ML = new byte[]{0x4D, 0x4C, 0x42, 0x49}; // "MLBI" MicroLens Binary
+    private static final byte[] MAGIC_ML = new byte[]{0x4D, 0x4C, 0x42, 0x49}; // "MLBI"
     private static final byte[] MAGIC_RAW = new byte[]{0x42, 0x49, 0x4E, 0x01}; // "BIN\1"
-    private static final byte[] MAGIC_F32 = new byte[]{0x42, 0x49, 0x4E, 0x46}; // "BINF" float32
-    private static final byte[] MAGIC_I64 = new byte[]{0x42, 0x49, 0x4E, 0x49}; // "BINI" int64
+    private static final byte[] MAGIC_F32 = new byte[]{0x42, 0x49, 0x4E, 0x46}; // "BINF"
+    private static final byte[] MAGIC_I64 = new byte[]{0x42, 0x49, 0x4E, 0x49}; // "BINI"
     
     private BinReader() {}
 
+    // ====================== Public API ======================
+
     /**
      * Read binary file to DataFrame.
-     * Auto-detects format based on magic bytes or extension.
      */
-    public static org.bytedeco.pytorch.dataframe.DataFrame read(String path) throws IOException {
+    public static DataFrame read(String path) throws IOException {
         return read(path, BinOptions.autoDetect());
     }
 
-    public static org.bytedeco.pytorch.dataframe.DataFrame read(String path, BinOptions options) throws IOException {
+    public static DataFrame read(String path, BinOptions options) throws IOException {
         BinOptions opt = options == null ? BinOptions.autoDetect() : options;
         
         Path p = Path.of(path);
@@ -62,9 +65,8 @@ public class BinReader {
             }
         }
         
-        // Detect format
         if (opt.format() == BinFormat.AUTO) {
-            BinFormat detected = detectFormat(header);
+            BinFormat detected = detectFormat(header, path);
             opt = BinOptions.builder()
                 .format(detected)
                 .byteOrder(opt.byteOrder())
@@ -83,14 +85,11 @@ public class BinReader {
         };
     }
 
-    /**
-     * Write DataFrame to binary file.
-     */
-    public static void write(org.bytedeco.pytorch.dataframe.DataFrame df, String path) throws IOException {
+    public static void write(DataFrame df, String path) throws IOException {
         write(df, path, BinOptions.defaults());
     }
 
-    public static void write(org.bytedeco.pytorch.dataframe.DataFrame df, String path, BinOptions options) throws IOException {
+    public static void write(DataFrame df, String path, BinOptions options) throws IOException {
         BinOptions opt = options == null ? BinOptions.defaults() : options;
         
         if (df.columnCount() == 0) {
@@ -99,7 +98,7 @@ public class BinReader {
         
         BinFormat format = opt.format();
         if (format == BinFormat.AUTO) {
-            format = BinFormat.MICROLENS; // Default to our optimized format
+            format = BinFormat.MICROLENS;
         }
         
         switch (format) {
@@ -112,24 +111,150 @@ public class BinReader {
         }
     }
 
-    // ========================================================================
-    // MicroLens Custom Format Reader
-    // ========================================================================
+    // ====================== Schema API ======================
 
     /**
-     * Read MicroLens/MMCTR binary format.
-     * 
-     * Format:
-     * [int32] num_fields
-     * For each field:
-     *   [int32] field_name_len
-     *   [bytes] field_name (UTF-8)
-     *   [4 bytes] type_marker ("SNET"=float32, "DNET"=float64, "IN64"=int64)
-     *   [int32] dim0
-     *   [int32] dim1
-     *   [data] actual binary data
+     * Get schema information for binary file without loading all data.
      */
-    public static org.bytedeco.pytorch.dataframe.DataFrame readMicroLensFormat(String path, BinOptions options) throws IOException {
+    public static BinSchema schema(String path) throws IOException {
+        return schema(path, BinOptions.autoDetect());
+    }
+
+    public static BinSchema schema(String path, BinOptions options) throws IOException {
+        BinOptions opt = options == null ? BinOptions.autoDetect() : options;
+        
+        byte[] header = new byte[64];
+        try (FileInputStream fis = new FileInputStream(path)) {
+            fis.read(header);
+        }
+        
+        if (opt.format() == BinFormat.AUTO) {
+            BinFormat detected = detectFormat(header, path);
+            opt = BinOptions.builder()
+                .format(detected)
+                .byteOrder(opt.byteOrder())
+                .build();
+        }
+        
+        return switch (opt.format()) {
+            case MICROLENS -> inferMicroLensSchema(path, opt);
+            case RAW_F32 -> inferFloat32Schema(path, opt);
+            case RAW_I64 -> inferInt64Schema(path, opt);
+            case NPY -> inferNpySchema(path, opt);
+            case PT -> inferPtSchema(path, opt);
+            default -> inferMicroLensSchema(path, opt);
+        };
+    }
+
+    /**
+     * Print schema to stdout.
+     */
+    public static void printSchema(String path) throws IOException {
+        BinSchema schema = schema(path);
+        System.out.println(schema.toString());
+    }
+
+    /**
+     * Get schema as DataFrame for preview.
+     */
+    public static DataFrame schemaAsDataFrame(String path) throws IOException {
+        BinSchema s = schema(path);
+        DataFrame df = DataFrame.create();
+        df.addColumn("#", Column.DType.INT32);
+        df.addColumn("field_name", Column.DType.STRING);
+        df.addColumn("dtype", Column.DType.STRING);
+        df.addColumn("shape", Column.DType.STRING);
+        df.addColumn("rows", Column.DType.INT64);
+        df.addColumn("cols", Column.DType.INT64);
+        df.addColumn("size_bytes", Column.DType.INT64);
+
+        int idx = 0;
+        for (BinSchema.FieldInfo f : s.fields) {
+            int ri = df.addEmptyRow();
+            df.set(ri, "#", idx++);
+            df.set(ri, "field_name", f.name);
+            df.set(ri, "dtype", f.dtype);
+            df.set(ri, "shape", f.shape);
+            df.set(ri, "rows", f.rows);
+            df.set(ri, "cols", f.cols);
+            df.set(ri, "size_bytes", f.sizeBytes);
+        }
+        return df;
+    }
+
+    // ====================== Schema Classes ======================
+
+    public static class BinSchema {
+        public final String format;
+        public final long fileSize;
+        public final List<FieldInfo> fields = new ArrayList<>();
+
+        public BinSchema(String format, long fileSize) {
+            this.format = format;
+            this.fileSize = fileSize;
+        }
+
+        public static class FieldInfo {
+            public String name;
+            public String dtype;
+            public String shape;
+            public long rows;
+            public long cols;
+            public long sizeBytes;
+
+            public FieldInfo(String name, String dtype, long rows, long cols) {
+                this.name = name;
+                this.dtype = dtype;
+                this.rows = rows;
+                this.cols = cols;
+                this.shape = "[" + rows + ", " + cols + "]";
+                this.sizeBytes = rows * cols * elementSize(dtype);
+            }
+
+            private static int elementSize(String dtype) {
+                return switch (dtype) {
+                    case "float32", "int32" -> 4;
+                    case "float64", "int64" -> 8;
+                    case "string" -> 1;
+                    default -> 8;
+                };
+            }
+        }
+
+        @Override
+        public String toString() {
+            StringBuilder sb = new StringBuilder();
+            sb.append("╔══════════════════════════════════════════════════════════════════════╗\n");
+            sb.append(String.format("║ Binary Schema: %-46s ║\n", 
+                format != null ? format : "Unknown"));
+            sb.append(String.format("║ File size: %-50s ║\n", formatBytes(fileSize)));
+            sb.append("╠══════════════════════════════════════════════════════════════════════╣\n");
+            sb.append(String.format("║ %-3s │ %-20s │ %-10s │ %-15s ║\n", "#", "field_name", "dtype", "shape"));
+            sb.append("╠═════╪══════════════════════╪════════════╪═════════════════╣\n");
+            
+            for (int i = 0; i < fields.size(); i++) {
+                FieldInfo f = fields.get(i);
+                sb.append(String.format("║ %3d │ %-20s │ %-10s │ %-15s ║\n",
+                    i, 
+                    f.name.length() > 20 ? f.name.substring(0, 17) + "..." : f.name,
+                    f.dtype,
+                    f.shape));
+            }
+            sb.append("╚═════╧══════════════════════╧════════════╧═════════════════╝\n");
+            return sb.toString();
+        }
+
+        private static String formatBytes(long bytes) {
+            if (bytes < 1024) return bytes + " B";
+            if (bytes < 1024 * 1024) return String.format("%.1f KB", bytes / 1024.0);
+            if (bytes < 1024 * 1024 * 1024) return String.format("%.1f MB", bytes / (1024.0 * 1024));
+            return String.format("%.2f GB", bytes / (1024.0 * 1024 * 1024));
+        }
+    }
+
+    // ====================== MicroLens Format ======================
+
+    public static DataFrame readMicroLensFormat(String path, BinOptions options) throws IOException {
         BinOptions opt = options == null ? BinOptions.defaults() : options;
         
         try (FileInputStream fis = new FileInputStream(path);
@@ -139,42 +264,32 @@ public class BinReader {
             ch.read(buf);
             buf.flip();
             
-            org.bytedeco.pytorch.dataframe.DataFrame df = 
-                org.bytedeco.pytorch.dataframe.DataFrame.create();
+            DataFrame df = DataFrame.create();
             
-            // Read number of fields
             int numFields = buf.getInt();
             
             for (int f = 0; f < numFields; f++) {
-                // Read field name
                 int nameLen = buf.getInt();
                 byte[] nameBytes = new byte[nameLen];
                 buf.get(nameBytes);
                 String fieldName = new String(nameBytes, StandardCharsets.UTF_8);
                 
-                // Read type marker
                 byte[] typeMarker = new byte[4];
                 buf.get(typeMarker);
                 String type = new String(typeMarker, StandardCharsets.US_ASCII);
                 
-                // Read dimensions
                 int dim0 = buf.getInt();
                 int dim1 = buf.getInt();
                 
-                // Determine dtype
-                org.bytedeco.pytorch.dataframe.Column.DType dtype;
-                int elemSize;
-                switch (type) {
-                    case "SNET": dtype = org.bytedeco.pytorch.dataframe.Column.DType.FLOAT32; elemSize = 4; break;
-                    case "DNET": dtype = org.bytedeco.pytorch.dataframe.Column.DType.FLOAT64; elemSize = 8; break;
-                    case "IN64": dtype = org.bytedeco.pytorch.dataframe.Column.DType.INT64; elemSize = 8; break;
-                    default: dtype = org.bytedeco.pytorch.dataframe.Column.DType.FLOAT64; elemSize = 8; break;
-                }
+                Column.DType dtype = switch (type) {
+                    case "SNET" -> Column.DType.FLOAT32;
+                    case "DNET" -> Column.DType.FLOAT64;
+                    case "IN64" -> Column.DType.INT64;
+                    default -> Column.DType.FLOAT64;
+                };
                 
-                // Read data
                 int totalElems = dim0 * dim1;
-                org.bytedeco.pytorch.dataframe.Column col = 
-                    new org.bytedeco.pytorch.dataframe.Column(fieldName, dtype);
+                Column col = new Column(fieldName, dtype);
                 
                 for (int i = 0; i < totalElems; i++) {
                     switch (dtype) {
@@ -193,56 +308,102 @@ public class BinReader {
         }
     }
 
-    /**
-     * Write DataFrame in MicroLens binary format.
-     * 
-     * <p>This format stores each column as a separate tensor with metadata header.</p>
-     */
-    public static void writeMicroLensFormat(org.bytedeco.pytorch.dataframe.DataFrame df, String path, BinOptions options) throws IOException {
+    private static BinSchema inferMicroLensSchema(String path, BinOptions opt) throws IOException {
+        long fileSize = Files.size(Path.of(path));
+        BinSchema schema = new BinSchema("MicroLens", fileSize);
+        
+        try (FileInputStream fis = new FileInputStream(path);
+             FileChannel ch = fis.getChannel()) {
+            
+            ByteBuffer buf = ByteBuffer.allocate(64 * 1024).order(opt.byteOrder());
+            ch.read(buf);
+            buf.flip();
+            
+            if (buf.remaining() < 4) return schema;
+            
+            int numFields = buf.getInt();
+            
+            for (int f = 0; f < numFields; f++) {
+                if (buf.remaining() < 8) break;
+                
+                int nameLen = buf.getInt();
+                if (nameLen <= 0 || nameLen > 1024 || buf.remaining() < nameLen + 12) break;
+                
+                byte[] nameBytes = new byte[nameLen];
+                buf.get(nameBytes);
+                String fieldName;
+                try {
+                    fieldName = new String(nameBytes, StandardCharsets.UTF_8);
+                } catch (Exception e) {
+                    fieldName = "field_" + f;
+                }
+                
+                byte[] typeMarker = new byte[4];
+                buf.get(typeMarker);
+                String type = new String(typeMarker, StandardCharsets.US_ASCII);
+                
+                int dim0 = buf.getInt();
+                int dim1 = buf.getInt();
+                
+                String dtype = switch (type) {
+                    case "SNET" -> "float32";
+                    case "DNET" -> "float64";
+                    case "IN64" -> "int64";
+                    default -> "unknown";
+                };
+                
+                schema.fields.add(new BinSchema.FieldInfo(fieldName, dtype, dim0, dim1));
+                
+                // Skip data to next field
+                long elemSize = type.equals("SNET") ? 4 : 8;
+                long dataSize = (long) dim0 * dim1 * elemSize;
+                if (buf.remaining() >= dataSize) {
+                    buf.position(buf.position() + (int) dataSize);
+                } else {
+                    break;
+                }
+            }
+        }
+        
+        return schema;
+    }
+
+    public static void writeMicroLensFormat(DataFrame df, String path, BinOptions options) throws IOException {
         BinOptions opt = options == null ? BinOptions.defaults() : options;
         
         try (FileOutputStream fos = new FileOutputStream(path);
              FileChannel ch = fos.getChannel()) {
             
-            ByteArrayOutputStream baos = new ByteArrayOutputStream();
             ByteBuffer buf = ByteBuffer.allocate(8192).order(opt.byteOrder());
             
-            // Write number of fields
             int numFields = df.columnCount();
             buf.putInt(numFields);
             
             for (int c = 0; c < numFields; c++) {
-                org.bytedeco.pytorch.dataframe.Column col = df.column(c);
+                Column col = df.column(c);
                 String name = col.name();
                 
-                // Field name
                 byte[] nameBytes = name.getBytes(StandardCharsets.UTF_8);
                 buf.putInt(nameBytes.length);
                 buf.put(nameBytes);
                 
-                // Type marker
-                String typeMarker;
-                int elemSize;
-                switch (col.dtype()) {
-                    case FLOAT32: typeMarker = "SNET"; elemSize = 4; break;
-                    case INT64: typeMarker = "IN64"; elemSize = 8; break;
-                    case INT32: typeMarker = "IN64"; elemSize = 8; break;
-                    default: typeMarker = "DNET"; elemSize = 8; break;
-                }
+                String typeMarker = switch (col.dtype()) {
+                    case FLOAT32 -> "SNET";
+                    case INT64, INT32 -> "IN64";
+                    default -> "DNET";
+                };
                 buf.put(typeMarker.getBytes(StandardCharsets.US_ASCII));
                 
-                // Dimensions (treat as 2D: rows x 1 or rows x cols)
                 int rows = col.size();
                 int cols = estimateCols(col);
                 buf.putInt(rows);
                 buf.putInt(cols);
                 
-                // Flush header
                 buf.flip();
                 ch.write(buf);
                 buf.clear();
                 
-                // Write data
+                int elemSize = typeMarker.equals("SNET") ? 4 : 8;
                 ByteBuffer dataBuf = ByteBuffer.allocate(rows * cols * elemSize).order(opt.byteOrder());
                 writeColumnData(col, dataBuf, typeMarker);
                 dataBuf.flip();
@@ -251,7 +412,7 @@ public class BinReader {
         }
     }
 
-    private static int estimateCols(org.bytedeco.pytorch.dataframe.Column col) {
+    private static int estimateCols(Column col) {
         Object first = col.get(0);
         if (first instanceof float[]) return ((float[]) first).length;
         if (first instanceof double[]) return ((double[]) first).length;
@@ -260,7 +421,7 @@ public class BinReader {
         return 1;
     }
 
-    private static void writeColumnData(org.bytedeco.pytorch.dataframe.Column col, ByteBuffer buf, String type) {
+    private static void writeColumnData(Column col, ByteBuffer buf, String type) {
         for (int r = 0; r < col.size(); r++) {
             Object v = col.get(r);
             if (v == null) {
@@ -283,7 +444,6 @@ public class BinReader {
                 else if ("DNET".equals(type)) buf.putDouble(((Number) v).doubleValue());
                 else buf.putLong(((Number) v).longValue());
             } else {
-                // String - convert to bytes
                 if ("SNET".equals(type)) buf.putFloat(Float.parseFloat(String.valueOf(v)));
                 else if ("DNET".equals(type)) buf.putDouble(Double.parseDouble(String.valueOf(v)));
                 else buf.putLong(Long.parseLong(String.valueOf(v)));
@@ -291,11 +451,9 @@ public class BinReader {
         }
     }
 
-    // ========================================================================
-    // Float32 Binary Format
-    // ========================================================================
+    // ====================== Float32/Int64 Formats ======================
 
-    public static org.bytedeco.pytorch.dataframe.DataFrame readFloat32(String path, BinOptions options) throws IOException {
+    public static DataFrame readFloat32(String path, BinOptions options) throws IOException {
         BinOptions opt = options == null ? BinOptions.defaults() : options;
         
         try (FileInputStream fis = new FileInputStream(path);
@@ -305,7 +463,6 @@ public class BinReader {
             ch.read(buf);
             buf.flip();
             
-            // Read header
             byte[] magic = new byte[4];
             buf.get(magic);
             
@@ -323,14 +480,11 @@ public class BinReader {
                 float[] data = new float[floatCount];
                 buf.asFloatBuffer().get(data);
                 
-                org.bytedeco.pytorch.dataframe.DataFrame df = 
-                    org.bytedeco.pytorch.dataframe.DataFrame.create();
+                DataFrame df = DataFrame.create();
                 
                 for (int c = 0; c < cols; c++) {
                     String name = c < colNames.size() ? colNames.get(c) : "col_" + c;
-                    org.bytedeco.pytorch.dataframe.Column col = 
-                        new org.bytedeco.pytorch.dataframe.Column(name, 
-                            org.bytedeco.pytorch.dataframe.Column.DType.FLOAT64);
+                    Column col = new Column(name, Column.DType.FLOAT64);
                     for (int r = 0; r < rows; r++) {
                         col.add((double) data[r * cols + c]);
                     }
@@ -343,7 +497,41 @@ public class BinReader {
         }
     }
 
-    public static void writeFloat32(org.bytedeco.pytorch.dataframe.DataFrame df, String path, BinOptions opt) throws IOException {
+    private static BinSchema inferFloat32Schema(String path, BinOptions opt) throws IOException {
+        long fileSize = Files.size(Path.of(path));
+        BinSchema schema = new BinSchema("BINF (float32)", fileSize);
+        
+        try (FileInputStream fis = new FileInputStream(path);
+             FileChannel ch = fis.getChannel()) {
+            
+            ByteBuffer buf = ByteBuffer.allocate(1024).order(opt.byteOrder());
+            ch.read(buf);
+            buf.flip();
+            
+            byte[] magic = new byte[4];
+            buf.get(magic);
+            
+            if (Arrays.equals(magic, MAGIC_F32)) {
+                int rows = buf.getInt();
+                int cols = buf.getInt();
+                int namesLen = buf.getInt();
+                
+                byte[] namesBytes = new byte[namesLen];
+                buf.get(namesBytes);
+                String namesStr = new String(namesBytes, StandardCharsets.UTF_8);
+                List<String> colNames = Arrays.asList(namesStr.split(","));
+                
+                for (int c = 0; c < cols; c++) {
+                    String name = c < colNames.size() ? colNames.get(c) : "col_" + c;
+                    schema.fields.add(new BinSchema.FieldInfo(name, "float32", rows, 1));
+                }
+            }
+        }
+        
+        return schema;
+    }
+
+    public static void writeFloat32(DataFrame df, String path, BinOptions opt) throws IOException {
         try (FileOutputStream fos = new FileOutputStream(path);
              FileChannel ch = fos.getChannel()) {
             
@@ -369,7 +557,7 @@ public class BinReader {
             ch.write(header);
             
             for (int c = 0; c < cols; c++) {
-                org.bytedeco.pytorch.dataframe.Column col = df.column(c);
+                Column col = df.column(c);
                 float[] data = new float[rows];
                 for (int r = 0; r < rows; r++) {
                     Object v = col.get(r);
@@ -382,11 +570,7 @@ public class BinReader {
         }
     }
 
-    // ========================================================================
-    // Int64 Binary Format
-    // ========================================================================
-
-    public static org.bytedeco.pytorch.dataframe.DataFrame readInt64(String path, BinOptions options) throws IOException {
+    public static DataFrame readInt64(String path, BinOptions options) throws IOException {
         BinOptions opt = options == null ? BinOptions.defaults() : options;
         
         try (FileInputStream fis = new FileInputStream(path);
@@ -411,14 +595,11 @@ public class BinReader {
             long[] data = new long[rows * cols];
             buf.asLongBuffer().get(data);
             
-            org.bytedeco.pytorch.dataframe.DataFrame df = 
-                org.bytedeco.pytorch.dataframe.DataFrame.create();
+            DataFrame df = DataFrame.create();
             
             for (int c = 0; c < cols; c++) {
                 String name = c < colNames.size() ? colNames.get(c) : "col_" + c;
-                org.bytedeco.pytorch.dataframe.Column col = 
-                    new org.bytedeco.pytorch.dataframe.Column(name, 
-                        org.bytedeco.pytorch.dataframe.Column.DType.INT64);
+                Column col = new Column(name, Column.DType.INT64);
                 for (int r = 0; r < rows; r++) {
                     col.add(data[r * cols + c]);
                 }
@@ -428,7 +609,41 @@ public class BinReader {
         }
     }
 
-    public static void writeInt64(org.bytedeco.pytorch.dataframe.DataFrame df, String path, BinOptions opt) throws IOException {
+    private static BinSchema inferInt64Schema(String path, BinOptions opt) throws IOException {
+        long fileSize = Files.size(Path.of(path));
+        BinSchema schema = new BinSchema("BINI (int64)", fileSize);
+        
+        try (FileInputStream fis = new FileInputStream(path);
+             FileChannel ch = fis.getChannel()) {
+            
+            ByteBuffer buf = ByteBuffer.allocate(1024).order(opt.byteOrder());
+            ch.read(buf);
+            buf.flip();
+            
+            byte[] magic = new byte[4];
+            buf.get(magic);
+            
+            if (Arrays.equals(magic, MAGIC_I64)) {
+                int rows = buf.getInt();
+                int cols = buf.getInt();
+                int namesLen = buf.getInt();
+                
+                byte[] namesBytes = new byte[namesLen];
+                buf.get(namesBytes);
+                String namesStr = new String(namesBytes, StandardCharsets.UTF_8);
+                List<String> colNames = Arrays.asList(namesStr.split(","));
+                
+                for (int c = 0; c < cols; c++) {
+                    String name = c < colNames.size() ? colNames.get(c) : "col_" + c;
+                    schema.fields.add(new BinSchema.FieldInfo(name, "int64", rows, 1));
+                }
+            }
+        }
+        
+        return schema;
+    }
+
+    public static void writeInt64(DataFrame df, String path, BinOptions opt) throws IOException {
         try (FileOutputStream fos = new FileOutputStream(path);
              FileChannel ch = fos.getChannel()) {
             
@@ -454,7 +669,7 @@ public class BinReader {
             ch.write(header);
             
             for (int c = 0; c < cols; c++) {
-                org.bytedeco.pytorch.dataframe.Column col = df.column(c);
+                Column col = df.column(c);
                 long[] data = new long[rows];
                 for (int r = 0; r < rows; r++) {
                     Object v = col.get(r);
@@ -467,11 +682,9 @@ public class BinReader {
         }
     }
 
-    // ========================================================================
-    // Private Helpers
-    // ========================================================================
+    // ====================== Format Detection ======================
 
-    private static BinFormat detectFormat(byte[] header) {
+    private static BinFormat detectFormat(byte[] header, String path) {
         if (header.length < 4) return BinFormat.MICROLENS;
         
         // Check NPY
@@ -496,31 +709,27 @@ public class BinReader {
             return BinFormat.RAW;
         }
         
-        // Check MicroLens format (starts with int32 num_fields)
-        // MicroLens format starts with field count
-        // The header might be "embed" or "item_" which are field names
-        // We need to detect if it looks like our format
+        // Check MicroLens format
         if (isLikelyMicroLensFormat(header)) {
             return BinFormat.MICROLENS;
         }
         
-        return BinFormat.MICROLENS; // Default to MicroLens for these files
+        return BinFormat.MICROLENS;
     }
 
     private static boolean isLikelyMicroLensFormat(byte[] header) {
-        // Check if first 4 bytes could be a field count
         ByteBuffer buf = ByteBuffer.wrap(header).order(ByteOrder.LITTLE_ENDIAN);
         int numFields = buf.getInt();
         
         // Valid field counts are typically small numbers
         if (numFields < 0 || numFields > 1000) return false;
         
-        // Should have field name following
-        // The next bytes should be a reasonable length + name
         return true;
     }
 
-    private static org.bytedeco.pytorch.dataframe.DataFrame readRaw(String path, BinOptions opt) throws IOException {
+    // ====================== Raw Format ======================
+
+    private static DataFrame readRaw(String path, BinOptions opt) throws IOException {
         try (FileInputStream fis = new FileInputStream(path);
              FileChannel ch = fis.getChannel()) {
             
@@ -529,16 +738,13 @@ public class BinReader {
             ch.read(buf);
             buf.flip();
             
-            org.bytedeco.pytorch.dataframe.DataFrame df = 
-                org.bytedeco.pytorch.dataframe.DataFrame.create();
+            DataFrame df = DataFrame.create();
             
             int elemSize = opt.elemSize() > 0 ? opt.elemSize() : 8;
             int count = (int) (size / elemSize);
             
-            org.bytedeco.pytorch.dataframe.Column col = 
-                new org.bytedeco.pytorch.dataframe.Column("data", 
-                    elemSize == 4 ? org.bytedeco.pytorch.dataframe.Column.DType.FLOAT32 
-                                  : org.bytedeco.pytorch.dataframe.Column.DType.FLOAT64);
+            Column col = new Column("data", 
+                elemSize == 4 ? Column.DType.FLOAT32 : Column.DType.FLOAT64);
             
             if (elemSize == 8) {
                 while (buf.hasRemaining()) {
@@ -555,20 +761,58 @@ public class BinReader {
         }
     }
 
-    private static void writeRaw(org.bytedeco.pytorch.dataframe.DataFrame df, String path, BinOptions opt) throws IOException {
-        // Write as float32 by default
+    private static void writeRaw(DataFrame df, String path, BinOptions opt) throws IOException {
         writeFloat32(df, path, opt);
     }
 
-    private static org.bytedeco.pytorch.dataframe.DataFrame readNpyFormat(String path, BinOptions opt) throws IOException {
+    private static BinSchema inferNpySchema(String path, BinOptions opt) throws IOException {
         try {
-            return org.bytedeco.pytorch.dataframe.DataFrame.readNpy(path);
+            org.bytedeco.pytorch.data.numpy.NDArray arr = 
+                org.bytedeco.pytorch.data.numpy.NP.load(path);
+            long fileSize = Files.size(Path.of(path));
+            BinSchema schema = new BinSchema("NumPy (.npy)", fileSize);
+            
+            String shape = arr.shape.length > 0 ? Arrays.toString(arr.shape) : "[]";
+            long rows = arr.shape.length > 0 ? arr.shape[0] : 1;
+            long cols = arr.shape.length > 1 ? arr.shape[1] : 1;
+            
+            schema.fields.add(new BinSchema.FieldInfo("data", arr.dtype.toString(), rows, cols));
+            return schema;
+        } catch (Exception e) {
+            return new BinSchema("NumPy (.npy)", Files.size(Path.of(path)));
+        }
+    }
+
+    private static BinSchema inferPtSchema(String path, BinOptions opt) throws IOException {
+        try {
+            Map<String, org.bytedeco.pytorch.data.pt.PT.TensorData> tensors = 
+                org.bytedeco.pytorch.data.pt.PT.load(new File(path));
+            long fileSize = Files.size(Path.of(path));
+            BinSchema schema = new BinSchema("PyTorch (.pt)", fileSize);
+            
+            for (Map.Entry<String, org.bytedeco.pytorch.data.pt.PT.TensorData> e : tensors.entrySet()) {
+                org.bytedeco.pytorch.data.pt.PT.TensorData td = e.getValue();
+                long rows = td.shape.length > 0 ? td.shape[0] : 1;
+                long cols = td.shape.length > 1 ? td.shape[1] : 1;
+                schema.fields.add(new BinSchema.FieldInfo(e.getKey(), td.dtype.name(), rows, cols));
+            }
+            return schema;
+        } catch (Exception e) {
+            return new BinSchema("PyTorch (.pt)", Files.size(Path.of(path)));
+        }
+    }
+
+    // ====================== NPY/PT Wrappers ======================
+
+    private static DataFrame readNpyFormat(String path, BinOptions opt) throws IOException {
+        try {
+            return DataFrame.readNpy(path);
         } catch (Exception e) {
             throw new IOException("Failed to read NPY: " + e.getMessage(), e);
         }
     }
 
-    private static void writeNpyFormat(org.bytedeco.pytorch.dataframe.DataFrame df, String path, BinOptions opt) throws IOException {
+    private static void writeNpyFormat(DataFrame df, String path, BinOptions opt) throws IOException {
         try {
             df.toNumpy(path);
         } catch (Exception e) {
@@ -576,15 +820,15 @@ public class BinReader {
         }
     }
 
-    private static org.bytedeco.pytorch.dataframe.DataFrame readPtFormat(String path, BinOptions opt) throws IOException {
+    private static DataFrame readPtFormat(String path, BinOptions opt) throws IOException {
         try {
-            return org.bytedeco.pytorch.dataframe.DataFrame.readPT(path);
+            return DataFrame.readPT(path);
         } catch (Exception e) {
             throw new IOException("Failed to read PT: " + e.getMessage(), e);
         }
     }
 
-    private static void writePtFormat(org.bytedeco.pytorch.dataframe.DataFrame df, String path, BinOptions opt) throws IOException {
+    private static void writePtFormat(DataFrame df, String path, BinOptions opt) throws IOException {
         try {
             df.toPT(path);
         } catch (Exception e) {
@@ -592,18 +836,16 @@ public class BinReader {
         }
     }
 
-    // ========================================================================
-    // Options
-    // ========================================================================
+    // ====================== Options ======================
 
     public enum BinFormat {
         AUTO,
-        MICROLENS,  // MicroLens/MMCTR custom format (default)
-        RAW,        // Generic raw binary
-        RAW_F32,    // Our custom float32 format
-        RAW_I64,    // Our custom int64 format
-        NPY,        // NumPy format
-        PT          // PyTorch format
+        MICROLENS,
+        RAW,
+        RAW_F32,
+        RAW_I64,
+        NPY,
+        PT
     }
 
     public static class BinOptions {

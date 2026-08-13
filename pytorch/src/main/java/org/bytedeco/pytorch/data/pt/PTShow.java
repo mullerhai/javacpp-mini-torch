@@ -1,4 +1,5 @@
 package org.bytedeco.pytorch.data.pt;
+import org.bytedeco.pytorch.data.*;
 
 import java.util.*;
 

@@ -361,6 +361,76 @@ public final class SchemaInfer {
         return DataFrame.readArrow(path);
     }
 
+    public static DataFrame inferAsDataFrameBin(String path) throws Exception {
+        BinReader.BinSchema schema = BinReader.schema(path);
+        DataFrame df = DataFrame.create();
+        df.addColumn("#", Column.DType.INT32);
+        df.addColumn("field_name", Column.DType.STRING);
+        df.addColumn("dtype", Column.DType.STRING);
+        df.addColumn("shape", Column.DType.STRING);
+        df.addColumn("rows", Column.DType.INT64);
+        df.addColumn("cols", Column.DType.INT64);
+        df.addColumn("size_bytes", Column.DType.INT64);
+
+        int idx = 0;
+        for (BinReader.BinSchema.FieldInfo f : schema.fields) {
+            int ri = df.addEmptyRow();
+            df.set(ri, "#", idx++);
+            df.set(ri, "field_name", f.name);
+            df.set(ri, "dtype", f.dtype);
+            df.set(ri, "shape", f.shape);
+            df.set(ri, "rows", f.rows);
+            df.set(ri, "cols", f.cols);
+            df.set(ri, "size_bytes", f.sizeBytes);
+        }
+        return df;
+    }
+
+    public static DataFrame inferAsDataFrameImdb(String path) throws Exception {
+        ImdbReader.ImdbSchema schema = ImdbReader.schema(path);
+        DataFrame df = DataFrame.create();
+        df.addColumn("#", Column.DType.INT32);
+        df.addColumn("column_name", Column.DType.STRING);
+        df.addColumn("data_type", Column.DType.STRING);
+        df.addColumn("is_list", Column.DType.BOOLEAN);
+        df.addColumn("count", Column.DType.INT64);
+        df.addColumn("sample", Column.DType.STRING);
+
+        int idx = 0;
+        for (ImdbReader.ImdbSchema.FieldInfo f : schema.fields) {
+            int ri = df.addEmptyRow();
+            df.set(ri, "#", idx++);
+            df.set(ri, "column_name", f.name);
+            df.set(ri, "data_type", f.dtype);
+            df.set(ri, "is_list", f.isList);
+            df.set(ri, "count", (long) f.count);
+            df.set(ri, "sample", f.sample != null ? f.sample : "");
+        }
+        return df;
+    }
+
+    public static DataFrame inferAsDataFrameLmdb(String path) throws Exception {
+        org.bytedeco.pytorch.dataframe.io.lmdb.LmdbReader.LmdbSchema schema = 
+            org.bytedeco.pytorch.dataframe.io.lmdb.LmdbReader.schema(path);
+        DataFrame df = DataFrame.create();
+        df.addColumn("#", Column.DType.INT32);
+        df.addColumn("field_name", Column.DType.STRING);
+        df.addColumn("dtype", Column.DType.STRING);
+        df.addColumn("entry_count", Column.DType.INT64);
+        df.addColumn("sample", Column.DType.STRING);
+
+        int idx = 0;
+        for (org.bytedeco.pytorch.dataframe.io.lmdb.LmdbReader.LmdbSchema.FieldInfo f : schema.fields) {
+            int ri = df.addEmptyRow();
+            df.set(ri, "#", idx++);
+            df.set(ri, "field_name", f.name);
+            df.set(ri, "dtype", f.dtype);
+            df.set(ri, "entry_count", (long) f.count);
+            df.set(ri, "sample", f.sample != null ? f.sample : "");
+        }
+        return df;
+    }
+
     // ====================== Helpers ======================
 
     private static DataFrame schemaToPreviewDataFrame(Schema s, String path, String format) {

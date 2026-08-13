@@ -72,4 +72,22 @@ public final class Schema {
         }
         return sb.append('}').toString();
     }
+
+    /**
+     * Convert schema to a preview DataFrame.
+     */
+    public DataFrame toPreviewDataFrame() {
+        DataFrame df = DataFrame.create();
+        df.addColumn("column_name", Column.DType.STRING);
+        df.addColumn("data_type", Column.DType.STRING);
+        df.addColumn("nullable", Column.DType.BOOLEAN);
+
+        for (int i = 0; i < names.size(); i++) {
+            int ri = df.addEmptyRow();
+            df.set(ri, "column_name", names.get(i));
+            df.set(ri, "data_type", types.get(i).name());
+            df.set(ri, "nullable", true);
+        }
+        return df;
+    }
 }

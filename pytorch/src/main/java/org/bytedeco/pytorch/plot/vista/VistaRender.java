@@ -58,6 +58,7 @@ public final class VistaRender {
         payload.put("collapse_modules_after_depth", options.collapseModulesAfterDepth());
         payload.put("show_module_attr_names", options.showModuleAttrNames());
         payload.put("show_modular_view", options.showCompressedView());
+        payload.put("show_metadata", options.showMetadata());
         payload.put("height", options.height());
         payload.put("width", options.width());
         if (graph.exception() != null) {
@@ -129,6 +130,42 @@ public final class VistaRender {
         sb.append("<button type=\"button\" data-fmt=\"pdf\">PDF 文档</button>");
         sb.append("</div></div>");
         sb.append("</div></header>");
+
+        // ── model metadata panel ───────────────────────────────────────────
+        sb.append("<div class=\"vx-meta\" id=\"meta-").append(uniqueId).append("\">");
+        sb.append("<div class=\"vx-meta-title\">📊 Model Info</div>");
+        sb.append("<div class=\"vx-meta-grid\">");
+        sb.append("<div class=\"vx-meta-card\">");
+        sb.append("<div class=\"vx-meta-label\">Model Name</div>");
+        sb.append("<div class=\"vx-meta-value\" id=\"meta-name-").append(uniqueId).append("\">-</div>");
+        sb.append("</div>");
+        sb.append("<div class=\"vx-meta-card\">");
+        sb.append("<div class=\"vx-meta-label\">Format</div>");
+        sb.append("<div class=\"vx-meta-value\" id=\"meta-format-").append(uniqueId).append("\">-</div>");
+        sb.append("</div>");
+        sb.append("<div class=\"vx-meta-card\">");
+        sb.append("<div class=\"vx-meta-label\">Parameters</div>");
+        sb.append("<div class=\"vx-meta-value\" id=\"meta-params-").append(uniqueId).append("\">-</div>");
+        sb.append("</div>");
+        sb.append("<div class=\"vx-meta-card\">");
+        sb.append("<div class=\"vx-meta-label\">Layers</div>");
+        sb.append("<div class=\"vx-meta-value\" id=\"meta-layers-").append(uniqueId).append("\">-</div>");
+        sb.append("</div>");
+        sb.append("<div class=\"vx-meta-card\">");
+        sb.append("<div class=\"vx-meta-label\">File Size</div>");
+        sb.append("<div class=\"vx-meta-value\" id=\"meta-size-").append(uniqueId).append("\">-</div>");
+        sb.append("</div>");
+        sb.append("<div class=\"vx-meta-card\">");
+        sb.append("<div class=\"vx-meta-label\">Source</div>");
+        sb.append("<div class=\"vx-meta-value vx-meta-path\" id=\"meta-source-").append(uniqueId).append("\">-</div>");
+        sb.append("</div>");
+        sb.append("</div>");
+        // Layer breakdown
+        sb.append("<div class=\"vx-meta-layers\" id=\"meta-layers-detail-").append(uniqueId).append("\">");
+        sb.append("<div class=\"vx-meta-label\">Layer Breakdown</div>");
+        sb.append("<div class=\"vx-meta-layer-list\" id=\"meta-layer-list-").append(uniqueId).append("\"></div>");
+        sb.append("</div>");
+        sb.append("</div>");
 
         sb.append("<div id=\"err-").append(uniqueId).append("\" class=\"vx-err\" hidden></div>");
         sb.append("<div class=\"vx-toast\" id=\"toast-").append(uniqueId).append("\" hidden></div>");
@@ -339,6 +376,25 @@ public final class VistaRender {
         sb.append("border-top:1px solid var(--line);text-align:center;flex-shrink:0}");
         sb.append(".vx-foot a{color:var(--accent);text-decoration:none;font-weight:700}");
 
+        // ── model metadata panel ───────────────────────────────────────────
+        sb.append(".vx-meta{margin:12px 14px;padding:14px;border-radius:14px;background:var(--bg2);");
+        sb.append("border:1px solid var(--line);box-shadow:var(--shadow)}");
+        sb.append(".vx-meta-title{font-weight:900;font-size:13px;margin-bottom:12px;color:var(--accent)}");
+        sb.append(".vx-meta-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px}");
+        sb.append(".vx-meta-card{background:color-mix(in srgb,var(--accent) 6%,var(--bg));");
+        sb.append("border-radius:10px;padding:8px 10px}");
+        sb.append(".vx-meta-label{font-size:9px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}");
+        sb.append(".vx-meta-value{font-size:13px;font-weight:800;color:var(--ink);margin-top:2px}");
+        sb.append(".vx-meta-path{font-size:10px;font-family:var(--mono);word-break:break-all}");
+        sb.append(".vx-meta-layers{margin-top:10px}");
+        sb.append(".vx-meta-layer-list{max-height:200px;overflow-y:auto;font-family:var(--mono);font-size:10px}");
+        sb.append(".vx-meta-layer-item{display:flex;justify-content:space-between;padding:4px 6px;");
+        sb.append("border-bottom:1px dashed var(--line)}");
+        sb.append(".vx-meta-layer-item:last-child{border-bottom:0}");
+        sb.append(".vx-meta-layer-name{color:var(--ink);flex:1;margin-right:8px}");
+        sb.append(".vx-meta-layer-type{color:var(--muted);margin-right:8px}");
+        sb.append(".vx-meta-layer-params{color:var(--accent);font-weight:700}");
+
         // SVG nodes — NO css transform on .vn
         sb.append(".vn{cursor:pointer}");
         sb.append(".vn .card{filter:url(#soft-").append(id).append(");transition:stroke .15s,fill .15s,filter .2s}");
@@ -435,6 +491,45 @@ public final class VistaRender {
         s.append("const logoEl=document.getElementById('logo-'+ID);\n");
         s.append("const exportMenu=document.getElementById('export-menu-'+ID);\n");
         s.append("if(raw.error_message){errBox.hidden=false;errBox.textContent='⚠️ '+raw.error_message;}\n");
+        s.append("const showMeta=!!raw.show_metadata;\n");
+        s.append("if(showMeta){\n");
+        s.append("  const modelMeta=nodeMeta['_model_meta_']||{};\n");
+        s.append("  if(modelMeta.name) document.getElementById('meta-name-'+ID).textContent=modelMeta.name;\n");
+        s.append("  if(modelMeta.format) document.getElementById('meta-format-'+ID).textContent=modelMeta.format;\n");
+        s.append("  if(modelMeta.param_count_formatted) document.getElementById('meta-params-'+ID).textContent=modelMeta.param_count_formatted;\n");
+        s.append("  if(modelMeta.layer_count) document.getElementById('meta-layers-'+ID).textContent=modelMeta.layer_count;\n");
+        s.append("  if(modelMeta.file_size_formatted) document.getElementById('meta-size-'+ID).textContent=modelMeta.file_size_formatted;\n");
+        s.append("  if(modelMeta.source){\n");
+        s.append("    const srcEl=document.getElementById('meta-source-'+ID);\n");
+        s.append("    if(srcEl){\n");
+        s.append("      const name=modelMeta.source.split(/[/\\\\]/).pop();\n");
+        s.append("      srcEl.textContent=name||modelMeta.source;\n");
+        s.append("      srcEl.title=modelMeta.source;\n");
+        s.append("    }\n");
+        s.append("  }\n");
+        s.append("  const layerList=document.getElementById('meta-layer-list-'+ID);\n");
+        s.append("  const layers=modelMeta.layers||[];\n");
+        s.append("  if(layerList&&layers.length>0){\n");
+        s.append("    layers.slice(0,20).forEach(function(l){\n");
+        s.append("      const item=document.createElement('div');\n");
+        s.append("      item.className='vx-meta-layer-item';\n");
+        s.append("      item.innerHTML='<span class=\"vx-meta-layer-name\">'+(l.name||'').slice(0,30)+'</span>'+\n");
+        s.append("        '<span class=\"vx-meta-layer-type\">'+(l.type||'')+'</span>'+\n");
+        s.append("        '<span class=\"vx-meta-layer-params\">'+(l.params>=1000000?(l.params/1000000).toFixed(1)+'M':(l.params>=1000?(l.params/1000).toFixed(1)+'K':l.params))+'</span>';\n");
+        s.append("      layerList.appendChild(item);\n");
+        s.append("    });\n");
+        s.append("    if(layers.length>20){\n");
+        s.append("      const more=document.createElement('div');\n");
+        s.append("      more.className='vx-meta-layer-item';\n");
+        s.append("      more.style.fontStyle='italic';\n");
+        s.append("      more.textContent='... and '+(layers.length-20)+' more layers';\n");
+        s.append("      layerList.appendChild(more);\n");
+        s.append("    }\n");
+        s.append("  }\n");
+        s.append("} else {\n");
+        s.append("  const metaPanel=document.getElementById('meta-'+ID);\n");
+        s.append("  if(metaPanel) metaPanel.style.display='none';\n");
+        s.append("}\n");
 
         s.append("let transform={k:1}, selected=null, selectedName=null;\n");
         s.append("let orient='LR'; // LR | RL | TB | BT\n");

@@ -232,17 +232,28 @@ public final class DataFrameReader {
     public DataFrame hdf(String path, String key) throws Exception {
         options("key", key); format("hdf5"); return load(path);
     }
+    public DataFrame imdb(String path)       throws Exception { format("imdb");    return load(path); }
+    public DataFrame lmdb(String path)      throws Exception { format("lmdb");    return load(path); }
+    public DataFrame imagefolder(String path) throws Exception { format("imagefolder"); return load(path); }
+    public DataFrame soundfolder(String path) throws Exception { format("soundfolder"); return load(path); }
+    public DataFrame webdataset(String path) throws Exception { format("webdataset"); return load(path); }
+    public DataFrame wds(String path)       throws Exception { format("webdataset"); return load(path); }
+    public DataFrame pdf(String path)       throws Exception { format("pdf"); return load(path); }
+    public DataFrame document(String path)  throws Exception { format("document"); return load(path); }
+    public DataFrame shapefile(String path)  throws Exception { format("shapefile"); return load(path); }
+    public DataFrame raster(String path)     throws Exception { format("raster"); return load(path); }
+    public DataFrame voxel(String path)     throws Exception { format("voxel"); return load(path); }
+    public DataFrame mesh(String path)       throws Exception { format("mesh"); return load(path); }
+    public DataFrame pointcloud(String path) throws Exception { format("pointcloud"); return load(path); }
+    public DataFrame pcd(String path)       throws Exception { format("pointcloud"); return load(path); }
     public DataFrame avro(String path)        throws Exception { format("avro");    return load(path); }
     public DataFrame orc(String path)         throws Exception { format("orc");     return load(path); }
     public DataFrame lance(String path)       throws Exception { format("lance");    return load(path); }
     public DataFrame toml(String path)        throws Exception { format("toml");    return load(path); }
     public DataFrame bin(String path)         throws Exception { format("bin");     return load(path); }
 
-    // ====================== Schema Preview (without full load) ======================
-
     /**
-     * Preview schema without loading full data.
-     * Returns a minimal DataFrame with column names and types only.
+     * Preview schema without loading full data for binary files.
      */
     public DataFrame schemaPreview(String path) throws Exception {
         if (path == null) throw new IllegalArgumentException("path required");
@@ -271,6 +282,10 @@ public final class DataFrameReader {
             case "hdf5":
             case "hdf":
                 return SchemaInfer.inferAsDataFrameHdf5(path);
+            case "imdb":
+                return SchemaInfer.inferAsDataFrameImdb(path);
+            case "lmdb":
+                return SchemaInfer.inferAsDataFrameLmdb(path);
             case "pickle":
             case "pkl":
                 return SchemaInfer.inferAsDataFramePickle(path);
@@ -282,6 +297,9 @@ public final class DataFrameReader {
             case "feather":
             case "ipc":
                 return SchemaInfer.inferAsDataFrameArrow(path);
+            case "bin":
+            case "binary":
+                return SchemaInfer.inferAsDataFrameBin(path);
             default:
                 // Fallback: load and extract schema
                 DataFrame df = load(path);
@@ -333,6 +351,8 @@ public final class DataFrameReader {
             case "xls":         return readExcel(path);
             case "hdf5":
             case "hdf":         return readHdf(path);
+            case "imdb":        return readImdb(path);
+            case "lmdb":       return readLmdb(path);
             case "avro":        return readAvro(path);
             case "orc":         return readOrc(path);
             case "lance":       return DataFrame.readLance(path);
@@ -514,6 +534,14 @@ public final class DataFrameReader {
     private DataFrame readHdf(String path) throws Exception {
         String key = options.getOrDefault("key", options.getOrDefault("group", "/df"));
         return DataFrame.readHdf(path, key);
+    }
+
+    private DataFrame readImdb(String path) throws Exception {
+        return ImdbReader.read(path);
+    }
+
+    private DataFrame readLmdb(String path) throws Exception {
+        return org.bytedeco.pytorch.dataframe.io.lmdb.LmdbReader.read(path);
     }
 
     private DataFrame readAvro(String path) throws Exception {
