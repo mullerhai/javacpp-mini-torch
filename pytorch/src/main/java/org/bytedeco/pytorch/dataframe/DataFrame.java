@@ -404,20 +404,103 @@ public final class DataFrame implements AutoCloseable, Serializable {
 
     // ---- I/O: NumPy ----
 
+    /**
+     * Read NPY file into DataFrame.
+     * 
+     * <p>For 2D arrays, creates one column per column (matrix mode).
+     * For 1D arrays, creates a single column named after the filename or schema hint.
+     * For N-D arrays (N>2), flattens to a single column.</p>
+     * 
+     * <p>Schema can override column names for 2D arrays:</p>
+     * <pre>
+     *   // Override default "col_0", "col_1" with custom names
+     *   DataFrame.readNpy("matrix.npy", Map.of("col_0", Column.DType.FLOAT64, 
+     *                                             "col_1", Column.DType.FLOAT64))
+     * </pre>
+     */
     public static DataFrame readNpy(String path) throws Exception {
+        return readNpy(path, null);
+    }
+
+    /**
+     * Read NPY file with optional schema for column naming.
+     * 
+     * @param path File path
+     * @param schema Optional column schema (for 2D arrays, maps index to name; ignored for 1D)
+     */
+    public static DataFrame readNpy(String path, Map<String, Column.DType> schema) throws Exception {
         NDArray arr = NP.load(path);
-        Column.DType dtype = numpyDType(arr.dtype);
-        Column col = new Column("data", dtype);
-        long total = 1;
-        for (long d : arr.shape) total *= d;
-        if (NDArray.isFloatFamily(arr.dtype)) {
-            for (int i = 0; i < total; i++) col.add(arr.getDouble(i));
+        
+        if (arr.shape.length == 1) {
+            // 1D array: single column
+            Column.DType dtype = numpyDType(arr.dtype);
+            String colName = schema != null && !schema.isEmpty() 
+                ? schema.keySet().iterator().next() 
+                : inferColumnName(path);
+            Column col = new Column(colName, dtype);
+            long total = arr.shape[0];
+            if (NDArray.isFloatFamily(arr.dtype)) {
+                for (int i = 0; i < total; i++) col.add(arr.getDouble(i));
+            } else {
+                for (int i = 0; i < total; i++) col.add(arr.getLong(i));
+            }
+            DataFrame df = DataFrame.create();
+            df.addColumn(col);
+            return df;
+        } else if (arr.shape.length == 2) {
+            // 2D array: matrix mode - one column per column
+            int rows = (int) arr.shape[0];
+            int cols = (int) arr.shape[1];
+            DataFrame df = DataFrame.create();
+            
+            // Build column names from schema or default
+            String[] colNames = new String[cols];
+            if (schema != null && !schema.isEmpty()) {
+                int i = 0;
+                for (Map.Entry<String, Column.DType> e : schema.entrySet()) {
+                    if (i < cols) {
+                        colNames[i++] = e.getKey();
+                    }
+                }
+            }
+            for (int c = 0; c < cols; c++) {
+                if (colNames[c] == null) {
+                    colNames[c] = "col_" + c;
+                }
+                Column col = new Column(colNames[c], numpyDType(arr.dtype));
+                for (int r = 0; r < rows; r++) {
+                    double val = arr.getDouble(r * cols + c);
+                    if (NDArray.isFloatFamily(arr.dtype)) {
+                        col.add(val);
+                    } else {
+                        col.add((long) val);
+                    }
+                }
+                df.addColumn(col);
+            }
+            return df;
         } else {
-            for (int i = 0; i < total; i++) col.add(arr.getLong(i));
+            // N-D array: flatten to single column
+            Column.DType dtype = numpyDType(arr.dtype);
+            Column col = new Column("data", dtype);
+            long total = arr.size;
+            if (NDArray.isFloatFamily(arr.dtype)) {
+                for (int i = 0; i < total; i++) col.add(arr.getDouble(i));
+            } else {
+                for (int i = 0; i < total; i++) col.add(arr.getLong(i));
+            }
+            DataFrame df = DataFrame.create();
+            df.addColumn(col);
+            return df;
         }
-        DataFrame df = DataFrame.create();
-        df.addColumn(col);
-        return df;
+    }
+
+    private static String inferColumnName(String path) {
+        if (path == null) return "data";
+        int slash = path.lastIndexOf('/');
+        String name = slash >= 0 ? path.substring(slash + 1) : path;
+        int dot = name.lastIndexOf('.');
+        return dot > 0 ? name.substring(0, dot) : name;
     }
 
     public void toNumpy(String path) throws Exception {

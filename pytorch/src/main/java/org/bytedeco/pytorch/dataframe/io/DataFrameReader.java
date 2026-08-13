@@ -238,6 +238,64 @@ public final class DataFrameReader {
     public DataFrame toml(String path)        throws Exception { format("toml");    return load(path); }
     public DataFrame bin(String path)         throws Exception { format("bin");     return load(path); }
 
+    // ====================== Schema Preview (without full load) ======================
+
+    /**
+     * Preview schema without loading full data.
+     * Returns a minimal DataFrame with column names and types only.
+     */
+    public DataFrame schemaPreview(String path) throws Exception {
+        if (path == null) throw new IllegalArgumentException("path required");
+        String fmt = format;
+        if (fmt == null || fmt.isEmpty()) {
+            fmt = FormatDetect.detectRobust(path).name().toLowerCase(Locale.ROOT);
+        }
+        
+        switch (fmt) {
+            case "csv":
+            case "tsv":
+                return SchemaInfer.inferAsDataFrame(path, buildCsvOptions());
+            case "json":
+            case "jsonl":
+            case "ndjson":
+                return SchemaInfer.inferAsDataFrame(path, buildJsonOptions(
+                    fmt.equals("jsonl") || fmt.equals("ndjson") 
+                        ? JsonOptions.Orient.LINES 
+                        : JsonOptions.Orient.RECORDS));
+            case "parquet":
+                return SchemaInfer.inferAsDataFrameParquet(path);
+            case "npy":
+                return SchemaInfer.inferAsDataFrameNpy(path);
+            case "npz":
+                return SchemaInfer.inferAsDataFrameNpz(path);
+            case "hdf5":
+            case "hdf":
+                return SchemaInfer.inferAsDataFrameHdf5(path);
+            case "pickle":
+            case "pkl":
+                return SchemaInfer.inferAsDataFramePickle(path);
+            case "excel":
+            case "xlsx":
+            case "xls":
+                return SchemaInfer.inferAsDataFrameExcel(path);
+            case "arrow":
+            case "feather":
+            case "ipc":
+                return SchemaInfer.inferAsDataFrameArrow(path);
+            default:
+                // Fallback: load and extract schema
+                DataFrame df = load(path);
+                return Schema.fromDataFrame(df).toPreviewDataFrame();
+        }
+    }
+
+    /**
+     * Print schema preview to stdout.
+     */
+    public void printSchemaPreview(String path) throws Exception {
+        System.out.print(schemaPreview(path));
+    }
+
     /**
      * Plain text → single-column DataFrame with column {@code "value"}.
      * Lines are trimmed; blank lines are skipped by default.
@@ -267,7 +325,7 @@ public final class DataFrameReader {
             case "pickle":
             case "pkl":         return readPickle(path);
             case "npz":         return DataFrame.readNpz(path);
-            case "npy":         return DataFrame.readNpy(path);
+            case "npy":         return DataFrame.readNpy(path, schema);
             case "safetensors": return DataFrame.readSafetensors(path);
             case "gguf":        return DataFrame.readGguf(path);
             case "excel":

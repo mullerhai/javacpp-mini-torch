@@ -213,4 +213,59 @@ public final class Hdf5Reader {
         String leaf = slash >= 0 ? key.substring(slash + 1) : key;
         return leaf.isEmpty() ? "value" : leaf;
     }
+
+    // ====================== Show / Schema methods ======================
+
+    /**
+     * Print schema to stdout.
+     */
+    public static void printSchema(String path) throws Exception {
+        Hdf5Show.show().printSchema(path);
+    }
+
+    /**
+     * Print schema for a specific key.
+     */
+    public static void printSchema(String path, String key) throws Exception {
+        Hdf5Show.show().printSchema(path, key);
+    }
+
+    /**
+     * Get schema string.
+     */
+    public static String schema(String path) throws Exception {
+        return Hdf5Show.show().schema(path);
+    }
+
+    /**
+     * Get schema string for a specific key.
+     */
+    public static String schema(String path, String key) throws Exception {
+        return Hdf5Show.show().schema(path, key);
+    }
+
+    /**
+     * Get file structure tree string.
+     */
+    public static String tree(String path) throws Exception {
+        return Hdf5Show.show().tree(path);
+    }
+
+    /**
+     * Print file structure tree.
+     */
+    public static void printTree(String path) throws Exception {
+        Hdf5Show.show().printTree(path);
+    }
+
+    /**
+     * Get metadata map.
+     */
+    public static Map<String, Object> metadata(String path) throws Exception {
+        return Hdf5Show.show().metadata(path);
+    }
+
+    private static Hdf5Show show() {
+        return new Hdf5Show();
+    }
 }
