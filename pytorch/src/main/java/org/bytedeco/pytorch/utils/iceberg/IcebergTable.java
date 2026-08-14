@@ -301,6 +301,7 @@ public final class IcebergTable implements AutoCloseable {
             case LIST, VECTOR -> Types.ListType.ofOptional(Integer.MAX_VALUE - 10, Types.StringType.get());
             case MAP, STRUCT, JSON, GRAPH -> Types.StringType.get(); // serialized fallback
             case STRING, TENSOR -> Types.StringType.get();
+            case NULL -> Types.StringType.get(); // null-only column → serialized string
         };
     }
 

@@ -2,6 +2,7 @@ package org.bytedeco.pytorch.dataframe.io.config;
 
 import org.bytedeco.pytorch.dataframe.Column;
 import org.bytedeco.pytorch.dataframe.DataFrame;
+import org.bytedeco.pytorch.dataframe.io.config.MediaBackend.Backend;
 
 import java.io.*;
 import java.nio.file.*;
@@ -72,12 +73,15 @@ public class ImageFolderReader {
         }
         
         DataFrame df = DataFrame.create();
-        
+
+        // Resolve backend up-front so all schema decisions match the path actually used.
+        Backend backend = MediaBackend.resolve(opts.backend());
+
         // Build schema
         df.addColumn("relative_path", Column.DType.STRING);
         df.addColumn("class_name", Column.DType.STRING);
         df.addColumn("class_index", Column.DType.INT32);
-        
+
         if (opts.includePath()) {
             df.addColumn("full_path", Column.DType.STRING);
         }
@@ -86,6 +90,14 @@ public class ImageFolderReader {
         }
         if (opts.includeModifiedTime()) {
             df.addColumn("modified_time", Column.DType.INT64);
+        }
+        if (opts.eagerDecode() && backend == Backend.FFMPEG_OPENCV
+                && opts.imageTensorCol() != null && !opts.imageTensorCol().isBlank()) {
+            // TENSOR-typed cells carrying [C,H,W] image tensors from OpenCV.
+            df.addColumn(opts.imageTensorCol(), Column.DType.TENSOR);
+        }
+        if (opts.storeBytes()) {
+            df.addColumn(opts.bytesCol(), Column.DType.BINARY);
         }
         
         // Discover classes (subdirectories)
@@ -168,9 +180,10 @@ public class ImageFolderReader {
         return count;
     }
 
-    private static void collectImages(DataFrame df, Path dir, Path rootPath, 
+    private static void collectImages(DataFrame df, Path dir, Path rootPath,
                                       String className, int classIdx,
                                       ImageFolderOptions opts, int startRow) throws IOException {
+        Backend backend = MediaBackend.resolve(opts.backend());
         try (DirectoryStream<Path> stream = Files.newDirectoryStream(dir)) {
             for (Path entry : stream) {
                 if (Files.isDirectory(entry)) {
@@ -179,13 +192,13 @@ public class ImageFolderReader {
                     }
                 } else if (isImageFile(entry)) {
                     int ri = df.addEmptyRow();
-                    
+
                     // Relative path from root
                     String relativePath = rootPath.relativize(entry).toString();
                     df.set(ri, "relative_path", relativePath);
                     df.set(ri, "class_name", className);
                     df.set(ri, "class_index", classIdx);
-                    
+
                     if (opts.includePath()) {
                         df.set(ri, "full_path", entry.toAbsolutePath().toString());
                     }
@@ -199,8 +212,32 @@ public class ImageFolderReader {
                             df.set(ri, "modified_time", 0L);
                         }
                     }
+
+                    // Eager decode via OpenCV (or legacy InputStream fallback).
+                    if (opts.eagerDecode() && backend == Backend.FFMPEG_OPENCV
+                            && opts.imageTensorCol() != null && !opts.imageTensorCol().isBlank()) {
+                        Object t = MediaBackend.openImage(entry);
+                        if (t != null) df.set(ri, opts.imageTensorCol(), t);
+                    }
+                    if (opts.storeBytes()) {
+                        df.set(ri, opts.bytesCol(), readAllBytes(entry));
+                    }
                 }
             }
+        }
+    }
+
+    private static byte[] readAllBytes(Path p) throws IOException {
+        long sz = Files.size(p);
+        if (sz > Integer.MAX_VALUE) {
+            throw new IOException("Image too large for in-memory BINARY column: " + p);
+        }
+        try (InputStream is = Files.newInputStream(p)) {
+            ByteArrayOutputStream baos = new ByteArrayOutputStream((int) sz);
+            byte[] buf = new byte[8192];
+            int n;
+            while ((n = is.read(buf)) > 0) baos.write(buf, 0, n);
+            return baos.toByteArray();
         }
     }
 

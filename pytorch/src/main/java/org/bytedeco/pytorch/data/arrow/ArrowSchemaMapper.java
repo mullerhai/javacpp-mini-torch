@@ -77,7 +77,7 @@ public final class ArrowSchemaMapper {
                 }
                 yield primitive(name, new ArrowType.Utf8());
             }
-            case JSON, STRING, TENSOR, IMAGE, AUDIO, VIDEO, GRAPH, POINT_CLOUD ->
+            case JSON, STRING, TENSOR, IMAGE, AUDIO, VIDEO, GRAPH, POINT_CLOUD, NULL ->
                 primitive(name, new ArrowType.Utf8());
         };
     }

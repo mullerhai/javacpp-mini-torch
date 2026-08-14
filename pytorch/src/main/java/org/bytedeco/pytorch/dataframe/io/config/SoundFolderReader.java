@@ -2,6 +2,7 @@ package org.bytedeco.pytorch.dataframe.io.config;
 
 import org.bytedeco.pytorch.dataframe.Column;
 import org.bytedeco.pytorch.dataframe.DataFrame;
+import org.bytedeco.pytorch.dataframe.io.config.MediaBackend.Backend;
 
 import java.io.*;
 import java.nio.file.*;
@@ -71,12 +72,14 @@ public class SoundFolderReader {
         }
         
         DataFrame df = DataFrame.create();
-        
+
+        Backend backend = MediaBackend.resolve(opts.backend());
+
         // Build schema
         df.addColumn("relative_path", Column.DType.STRING);
         df.addColumn("category", Column.DType.STRING);
         df.addColumn("category_index", Column.DType.INT32);
-        
+
         if (opts.includePath()) {
             df.addColumn("full_path", Column.DType.STRING);
         }
@@ -91,6 +94,19 @@ public class SoundFolderReader {
         }
         if (opts.includeName()) {
             df.addColumn("file_name", Column.DType.STRING);
+        }
+        if (backend == Backend.FFMPEG_OPENCV) {
+            df.addColumn("sample_rate", Column.DType.INT32);
+            df.addColumn("channels", Column.DType.INT32);
+            df.addColumn("num_samples", Column.DType.INT64);
+            df.addColumn("duration_seconds", Column.DType.FLOAT64);
+        }
+        if (opts.eagerDecode() && backend == Backend.FFMPEG_OPENCV
+                && opts.waveformCol() != null && !opts.waveformCol().isBlank()) {
+            df.addColumn(opts.waveformCol(), Column.DType.TENSOR);
+        }
+        if (opts.storeBytes()) {
+            df.addColumn(opts.bytesCol(), Column.DType.BINARY);
         }
         
         // Discover categories (subdirectories)
@@ -133,6 +149,7 @@ public class SoundFolderReader {
     private static void collectAudioFiles(DataFrame df, Path dir, Path rootPath,
                                         String category, int categoryIdx,
                                         SoundFolderOptions opts) throws IOException {
+        Backend backend = MediaBackend.resolve(opts.backend());
         try (DirectoryStream<Path> stream = Files.newDirectoryStream(dir)) {
             for (Path entry : stream) {
                 if (Files.isDirectory(entry)) {
@@ -141,13 +158,13 @@ public class SoundFolderReader {
                     }
                 } else if (isAudioFile(entry)) {
                     int ri = df.addEmptyRow();
-                    
+
                     // Relative path from root
                     String relativePath = rootPath.relativize(entry).toString();
                     df.set(ri, "relative_path", relativePath);
                     df.set(ri, "category", category);
                     df.set(ri, "category_index", categoryIdx);
-                    
+
                     if (opts.includePath()) {
                         df.set(ri, "full_path", entry.toAbsolutePath().toString());
                     }
@@ -169,8 +186,66 @@ public class SoundFolderReader {
                     if (opts.includeName()) {
                         df.set(ri, "file_name", entry.getFileName().toString());
                     }
+
+                    // FFmpeg probe + eager decode.
+                    if (backend == Backend.FFMPEG_OPENCV) {
+                        boolean probeOk = false;
+                        if (opts.maxBytes() <= 0 || Files.size(entry) <= opts.maxBytes()) {
+                            try (MediaBackend.AC af = MediaBackend.openAudioHandle(entry.toString())) {
+                                if (af != null) {
+                                    int sr = ((Number) reflect(af.handle, "sampleRate")).intValue();
+                                    int ch = ((Number) reflect(af.handle, "channels")).intValue();
+                                    long ns = ((Number) reflect(af.handle, "numSamples")).longValue();
+                                    double du = ((Number) reflect(af.handle, "durationSec")).doubleValue();
+                                    df.set(ri, "sample_rate", sr);
+                                    df.set(ri, "channels", ch);
+                                    df.set(ri, "num_samples", ns);
+                                    df.set(ri, "duration_seconds", du);
+                                    if (opts.eagerDecode()
+                                            && opts.waveformCol() != null && !opts.waveformCol().isBlank()) {
+                                        Object wave = reflect(af.handle, "read");
+                                        if (wave != null) df.set(ri, opts.waveformCol(), wave);
+                                    }
+                                    probeOk = true;
+                                }
+                            } catch (Throwable t) {
+                                // native unavailable or decode failure: fall through,
+                                // columns above stay null; caller can retry later.
+                            }
+                        }
+                        if (!probeOk) {
+                            df.set(ri, "sample_rate", 0);
+                            df.set(ri, "channels", 0);
+                            df.set(ri, "num_samples", 0L);
+                            df.set(ri, "duration_seconds", 0.0);
+                        }
+                    }
+
+                    if (opts.storeBytes() && opts.maxBytes() > 0
+                            ? Files.size(entry) <= opts.maxBytes() : true) {
+                        long sz;
+                        try { sz = Files.size(entry); }
+                        catch (IOException e) { sz = 0L; }
+                        if (sz <= Integer.MAX_VALUE) {
+                            df.set(ri, opts.bytesCol(), readAllBytes(entry));
+                        }
+                    }
                 }
             }
+        }
+    }
+
+    private static byte[] readAllBytes(Path p) throws IOException {
+        long sz = Files.size(p);
+        if (sz > Integer.MAX_VALUE) {
+            throw new IOException("Audio too large for in-memory BINARY column: " + p);
+        }
+        try (InputStream is = Files.newInputStream(p)) {
+            ByteArrayOutputStream baos = new ByteArrayOutputStream((int) sz);
+            byte[] buf = new byte[8192];
+            int n;
+            while ((n = is.read(buf)) > 0) baos.write(buf, 0, n);
+            return baos.toByteArray();
         }
     }
 
@@ -226,4 +301,11 @@ public class SoundFolderReader {
     // ====================== Options ======================
 
 
+    private static Object reflect(Object target, String name) {
+        try {
+            return target.getClass().getMethod(name).invoke(target);
+        } catch (Throwable t) {
+            return null;
+        }
+    }
 }

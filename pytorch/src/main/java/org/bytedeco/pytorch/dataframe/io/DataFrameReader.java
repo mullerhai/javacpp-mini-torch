@@ -10,6 +10,7 @@ import org.bytedeco.pytorch.dataframe.io.config.RasterReader;
 import org.bytedeco.pytorch.dataframe.io.config.ShapefileReader;
 import org.bytedeco.pytorch.dataframe.io.config.ImageFolderReader;
 import org.bytedeco.pytorch.dataframe.io.config.SoundFolderReader;
+import org.bytedeco.pytorch.dataframe.io.config.VideoFolderReader;
 import org.bytedeco.pytorch.dataframe.io.config.WebDatasetReader;
 import org.bytedeco.pytorch.dataframe.io.onnx.ONNXReader;
 import org.bytedeco.pytorch.serving.onnxruntime.ONNXModelInfo;
@@ -241,6 +242,7 @@ public final class DataFrameReader {
     public DataFrame lmdb(String path)      throws Exception { format("lmdb");    return load(path); }
     public DataFrame imagefolder(String path) throws Exception { format("imagefolder"); return load(path); }
     public DataFrame soundfolder(String path) throws Exception { format("soundfolder"); return load(path); }
+    public DataFrame videofolder(String path) throws Exception  { format("videofolder"); return load(path); }
     public DataFrame webdataset(String path) throws Exception { format("webdataset"); return load(path); }
     public DataFrame wds(String path)       throws Exception { format("webdataset"); return load(path); }
     public DataFrame textcorpus(String path) throws Exception { format("text"); return load(path); }
@@ -370,6 +372,9 @@ public final class DataFrameReader {
             case "soundfolder":
             case "audiofolder":
             case "audio":       return SoundFolderReader.read(path);
+            case "videofolder":
+            case "video":
+            case "videos":      return VideoFolderReader.read(path);
             case "webdataset":
             case "wds":
             case "tar":         return WebDatasetReader.read(path);

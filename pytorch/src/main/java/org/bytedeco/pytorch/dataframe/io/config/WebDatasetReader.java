@@ -10,7 +10,7 @@ import java.util.zip.GZIPInputStream;
 
 /**
  * Enterprise-grade reader for WebDataset format.
- * 
+ *
  * <p>WebDataset is a dataset format for large-scale machine learning workloads.
  * It stores data as tar archives with naming conventions like:</p>
  * <pre>
@@ -21,25 +21,55 @@ import java.util.zip.GZIPInputStream;
  * ├── 000001.json
  * └── ...
  * </pre>
- * 
+ *
  * <p>Each sample consists of multiple files with the same key (shard index + sample ID).
  * Common suffixes: .jpg, .png, .json, .txt, .cls, .pydpickle, .pt, .npy, .arrow</p>
- * 
+ *
+ * <p><b>Three read modes</b> via {@link Mode}:
+ * <ul>
+ *   <li>{@code TAR} — original WebDataset tar shards (default; this is also what
+ *       {@code AUTO} picks when the path ends in {@code .tar}, {@code .tar.gz}, or
+ *       matches a brace range of tars).</li>
+ *   <li>{@code HF_PARQUET} — HuggingFace {@code datasets} layout (one dataset per
+ *       config/split, sharded parquet / arrow / csv / json / jsonl / txt files).
+ *       Each row gets the same {@code __key__}, {@code __shard__}, {@code __tar_file__}
+ *       columns as tar mode, plus two extras: {@code __hf_dataset__} and
+ *       {@code __hf_split__} for traceability. Backed by the project's
+ *       {@code org.bytedeco.pytorch.utils.datasets.HfDataset} / {@code HfDatasets}
+ *       which already support parquet / arrow / csv / json / jsonl / orc / avro /
+ *       text — i.e. many data formats out of the box.</li>
+ *   <li>{@code AUTO} — sniff the path: tars → TAR, anything else → HF_PARQUET.</li>
+ * </ul>
+ *
  * <p>Example usage:</p>
  * <pre>
  *   DataFrame df = WebDatasetReader.read("/path/to/dataset.tar");
- *   
+ *
  *   // Read multiple shards
  *   DataFrame df = WebDatasetReader.read("dataset-{000000..000099}.tar");
- *   
+ *
  *   // With options
  *   WebDatasetReader.WebDatasetOptions opts = WebDatasetReader.options()
- *       .decodeImages(true)
+ *       .mode(WebDatasetReader.Mode.HF_PARQUET)
+ *       .hfDataset("HF_DATASET_NAME", "config_name", "train")
  *       .maxSamples(10000);
- *   DataFrame df = WebDatasetReader.read("/path/to/dataset.tar", opts);
+ *   DataFrame df = WebDatasetReader.read("/path/to/hf_snapshot", opts);
+ *
+ *   // Or just point at a local parquet/arrow/csv/jsonl file
+ *   DataFrame df = WebDatasetReader.read("/data/train-00000.parquet");
  * </pre>
  */
 public class WebDatasetReader {
+
+    /** Source geometry for {@link WebDatasetReader#read(String, WebDatasetOptions)}. */
+    public enum Mode {
+        /** Tar shards (with brace-expansion glob). Original WebDataset layout. */
+        TAR,
+        /** HuggingFace parquet/arrow/csv/jsonl/etc. shards via {@code HfDataset}. */
+        HF_PARQUET,
+        /** Auto-detect: tars → TAR, everything else → HF_PARQUET. */
+        AUTO
+    }
 
     private WebDatasetReader() {}
 
@@ -69,7 +99,14 @@ public class WebDatasetReader {
 
     public static DataFrame read(String path, WebDatasetOptions options) throws IOException {
         WebDatasetOptions opts = options == null ? WebDatasetOptions.defaults() : options;
-        
+        Mode mode = opts.mode() == null ? Mode.AUTO : opts.mode();
+        if (mode == Mode.AUTO) {
+            mode = looksLikeTar(path) ? Mode.TAR : Mode.HF_PARQUET;
+        }
+        if (mode == Mode.HF_PARQUET) {
+            return readHfDataset(path, opts);
+        }
+        // Falls through to TAR layout below.
         DataFrame df = DataFrame.create();
         df.addColumn("__key__", Column.DType.STRING);
         df.addColumn("__shard__", Column.DType.INT32);
@@ -350,6 +387,145 @@ public class WebDatasetReader {
         public boolean isDirectory() { return name.endsWith("/"); }
     }
 
+    // ====================== HuggingFace parquet / etc. ======================
+
+    /**
+     * Heuristic: does {@code path} look like a tar shard (or a brace range of tars)?
+     * Used by {@link Mode#AUTO} to pick between TAR and HF_PARQUET modes.
+     */
+    private static boolean looksLikeTar(String path) {
+        if (path == null) return false;
+        String lower = path.toLowerCase(java.util.Locale.ROOT);
+        if (lower.endsWith(".tar") || lower.endsWith(".tar.gz") || lower.endsWith(".tgz")) {
+            return true;
+        }
+        // brace pattern like dataset-{000000..000099}.tar
+        if (lower.contains("{") && lower.contains("..") && lower.contains("}")) {
+            int braceEnd = lower.indexOf('}');
+            if (braceEnd > 0 && lower.substring(braceEnd).toLowerCase(java.util.Locale.ROOT)
+                    .matches(".*\\.(tar|tar\\.gz|tgz)$")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * HuggingFace path: delegate to {@code org.bytedeco.pytorch.utils.datasets.HfDataset}
+     * (single file) or {@code HfDatasets.loadDataset} (config/split selection), then
+     * lift the result into a DataFrame with the same WebDataset bookkeeping columns.
+     */
+    private static DataFrame readHfDataset(String path, WebDatasetOptions opts) throws IOException {
+        org.bytedeco.pytorch.utils.datasets.HfDataset hf;
+        String dsId = opts.hfDataset();
+        String config = opts.hfConfig();
+        String split = opts.hfSplit();
+
+        if (dsId != null && !dsId.isBlank()) {
+            // Forward HF_TOKEN / etc. via builder hooks when provided.
+            org.bytedeco.pytorch.utils.datasets.HfDatasets.LoadConfig lc =
+                    org.bytedeco.pytorch.utils.datasets.HfDatasets.LoadConfig.builder()
+                            .token(opts.hfToken())
+                            .endpoint(opts.hfEndpoint())
+                            .revision(opts.hfRevision())
+                            .take(opts.maxSamples() > 0 ? opts.maxSamples() : -1)
+                            .build();
+            // The 4-arg overload always returns a DatasetDict; pick the requested
+            // split if specified, else the first available.
+            org.bytedeco.pytorch.utils.datasets.HfDataset.DatasetDict dict =
+                    org.bytedeco.pytorch.utils.datasets.HfDatasets.loadDataset(
+                            dsId, config, split, lc);
+            if (split != null && !split.isBlank() && dict.splits().containsKey(split)) {
+                hf = dict.get(split);
+            } else {
+                hf = dict.splits().values().iterator().next();
+            }
+        } else if (path == null) {
+            throw new IOException("WebDatasetReader.read(HF_PARQUET) requires a path or hfDataset(...)");
+        } else {
+            java.nio.file.Path p = java.nio.file.Paths.get(path);
+            if (java.nio.file.Files.isDirectory(p)) {
+                hf = org.bytedeco.pytorch.utils.datasets.HfDataset.fromDirectory(p, true);
+            } else {
+                hf = org.bytedeco.pytorch.utils.datasets.HfDataset.fromFile(p,
+                        opts.maxSamples() > 0 ? opts.maxSamples() : -1);
+            }
+        }
+
+        DataFrame df = DataFrame.create();
+        df.addColumn("__key__", Column.DType.STRING);
+        df.addColumn("__shard__", Column.DType.INT32);
+        df.addColumn("__tar_file__", Column.DType.STRING);
+        df.addColumn("__hf_dataset__", Column.DType.STRING);
+        df.addColumn("__hf_split__", Column.DType.STRING);
+
+        // Source path forwarded to __tar_file__ in HF mode for column-shape parity.
+        String source = path == null ? "<hub:" + dsId + ">" : path;
+        String resolvedSplit = split == null ? "<default>" : split;
+
+        int stop = hf.size();
+        if (opts.maxSamples() > 0 && opts.maxSamples() < stop) stop = opts.maxSamples();
+        for (int i = 0; i < stop; i++) {
+            Map<String, Object> row = hf.get(i);
+            int ri = df.addEmptyRow();
+            df.set(ri, "__key__", String.valueOf(i));
+            df.set(ri, "__shard__", 0);
+            df.set(ri, "__tar_file__", source);
+            df.set(ri, "__hf_dataset__", dsId == null ? "" : dsId);
+            df.set(ri, "__hf_split__", resolvedSplit);
+
+            // Fan-out: each row field becomes a column. Suffix-based gating reuses
+            // the same flags as tar mode (includeJson, includeText, …) so callers
+            // get consistent behaviour across the two read modes.
+            for (Map.Entry<String, Object> e : row.entrySet()) {
+                String key = e.getKey();
+                if (key.startsWith("__")) continue;
+                String lower = key.toLowerCase(java.util.Locale.ROOT);
+                Object value = e.getValue();
+                Column.DType dt = inferDtype(value);
+                boolean include = decideInclude(lower, dt, opts);
+                if (!include) continue;
+                String colName = "__hf_" + key + "__";
+                df.addColumnIfAbsent(colName, dt);
+                df.set(ri, colName, value);
+            }
+        }
+        return df;
+    }
+
+    /** Pick the most permissive {@link Column.DType} compatible with the value. */
+    private static Column.DType inferDtype(Object value) {
+        if (value == null) return Column.DType.STRING;
+        if (value instanceof Boolean) return Column.DType.BOOLEAN;
+        if (value instanceof Integer || value instanceof Long
+                || value instanceof Short || value instanceof Byte) return Column.DType.INT64;
+        if (value instanceof Float || value instanceof Double) return Column.DType.FLOAT64;
+        if (value instanceof byte[]) return Column.DType.BINARY;
+        if (value instanceof List) return Column.DType.LIST;
+        if (value instanceof Map) return Column.DType.MAP;
+        return Column.DType.STRING;
+    }
+
+    /**
+     * Mirror the tar-mode inclusion logic so both readers honour the same
+     * {@code include{X}} flags. Heuristic: JSON/JSONL → json, TXT/TEXT → text,
+     * PT/PKL → tensors, NPY/ARROW → arrays, label-ish keys → labels.
+     */
+    private static boolean decideInclude(String lowerKey, Column.DType dt, WebDatasetOptions opts) {
+        if (lowerKey.endsWith(".json") || lowerKey.endsWith(".jsonl")) return opts.includeJson();
+        if (lowerKey.endsWith(".txt") || lowerKey.endsWith(".text")
+                || lowerKey.endsWith(".summary") || lowerKey.endsWith(".caption")) return opts.includeText();
+        if (lowerKey.endsWith(".pt") || lowerKey.endsWith(".pydpickle")
+                || lowerKey.endsWith(".pickle")) return opts.includeTensors();
+        if (lowerKey.endsWith(".npy") || lowerKey.endsWith(".arrow")) return opts.includeArrays();
+        if (lowerKey.endsWith(".cls") || lowerKey.endsWith(".label")
+                || lowerKey.endsWith(".class") || lowerKey.endsWith(".target")) return opts.includeLabels();
+        if (lowerKey.endsWith(".jpg") || lowerKey.endsWith(".jpeg")
+                || lowerKey.endsWith(".png") || lowerKey.endsWith(".webp")) return opts.includeImages();
+        if (dt == Column.DType.BINARY) return opts.includeOther();
+        return true;
+    }
+
     // ====================== Options ======================
 
     public static class WebDatasetOptions {
@@ -363,6 +539,15 @@ public class WebDatasetReader {
         private boolean includeLabels = true;
         private boolean includeOther = false;
         private boolean failOnError = false;
+
+        // ---- HF / multi-format routing ----
+        private Mode mode = Mode.AUTO;
+        private String hfDataset = null;
+        private String hfConfig = null;
+        private String hfSplit = null;
+        private String hfToken = null;
+        private String hfEndpoint = null;
+        private String hfRevision = null;
 
         public static WebDatasetOptions defaults() {
             return new WebDatasetOptions();
@@ -379,6 +564,18 @@ public class WebDatasetReader {
         public WebDatasetOptions includeOther(boolean v) { this.includeOther = v; return this; }
         public WebDatasetOptions failOnError(boolean v) { this.failOnError = v; return this; }
 
+        /** Force a read mode (default is {@link Mode#AUTO}). */
+        public WebDatasetOptions mode(Mode v) { this.mode = v == null ? Mode.AUTO : v; return this; }
+        /** HuggingFace dataset id (e.g. {@code glue}, {@code imdb}). When set, the path
+         *  argument is unused and the loader tries to download a snapshot via
+         *  {@code HfDatasets.loadDataset}. */
+        public WebDatasetOptions hfDataset(String v) { this.hfDataset = v; return this; }
+        public WebDatasetOptions hfConfig(String v) { this.hfConfig = v; return this; }
+        public WebDatasetOptions hfSplit(String v) { this.hfSplit = v; return this; }
+        public WebDatasetOptions hfToken(String v) { this.hfToken = v; return this; }
+        public WebDatasetOptions hfEndpoint(String v) { this.hfEndpoint = v; return this; }
+        public WebDatasetOptions hfRevision(String v) { this.hfRevision = v; return this; }
+
         public int maxSamples() { return maxSamples; }
         public boolean decodeImages() { return decodeImages; }
         public boolean includeImages() { return includeImages; }
@@ -389,5 +586,13 @@ public class WebDatasetReader {
         public boolean includeLabels() { return includeLabels; }
         public boolean includeOther() { return includeOther; }
         public boolean failOnError() { return failOnError; }
+
+        public Mode mode() { return mode; }
+        public String hfDataset() { return hfDataset; }
+        public String hfConfig() { return hfConfig; }
+        public String hfSplit() { return hfSplit; }
+        public String hfToken() { return hfToken; }
+        public String hfEndpoint() { return hfEndpoint; }
+        public String hfRevision() { return hfRevision; }
     }
 }
