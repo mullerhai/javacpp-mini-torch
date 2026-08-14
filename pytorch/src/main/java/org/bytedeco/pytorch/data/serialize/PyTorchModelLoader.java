@@ -54,6 +54,8 @@ import java.util.zip.ZipFile;
  *     WeightBagModule mod = PyTorchModelLoader.loadAsModule(file);
  * }
  * }</pre>
+ *
+ * @see JitBridge For streamlined inference workflows with TorchScript models
  */
 public final class PyTorchModelLoader {
 
@@ -959,21 +961,33 @@ public final class PyTorchModelLoader {
 
     /**
      * Save a Module to TorchScript format.
+     *
+     * <p><b>Note:</b> This requires the native JNI implementation.
+     * Without it, an UnsupportedOperationException is thrown.
+     *
+     * @param module The nn.Module to save
+     * @param file   The output .pt file
+     * @throws UnsupportedOperationException if native JNI is not available
      */
     public static void saveAsTorchScript(Module module, File file) {
-        JitModule jit = module_to_jit(module);
-        jit.save(file.getAbsolutePath());
+        throw new UnsupportedOperationException(
+            "Saving nn.Module as TorchScript requires native JNI implementation. " +
+            "Use WeightBagModule.saveNative() for native checkpoint format instead.");
     }
 
     /**
      * Save a Module to TorchScript with extras.
+     *
+     * @param module The nn.Module to save
+     * @param file   The output .pt file
+     * @param extras Extra files map
+     * @throws UnsupportedOperationException if native JNI is not available
      */
     public static void saveAsTorchScript(Module module, File file, ExtraFilesMap extras) {
-        JitModule jit = module_to_jit(module);
-        jit.save(file.getAbsolutePath(), extras);
+        throw new UnsupportedOperationException(
+            "Saving nn.Module as TorchScript requires native JNI implementation. " +
+            "Use WeightBagModule.saveNative() for native checkpoint format instead.");
     }
-
-    private static native JitModule module_to_jit(Module module);
 
     // ---- Compatibility ----
 
