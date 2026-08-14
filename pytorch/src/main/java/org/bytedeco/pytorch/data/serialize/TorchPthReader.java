@@ -750,14 +750,50 @@ public final class TorchPthReader {
                     } else if (arg0 instanceof String) {
                         // Embedded pickle as UTF-8 encoded string (BINUNICODE)
                         inner = ((String) arg0).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                    } else if (arg0 instanceof Object[]) {
+                        // Embedded pickle wrapped in a tuple
+                        for (Object o : (Object[]) arg0) {
+                            if (o instanceof byte[]) {
+                                inner = (byte[]) o;
+                                break;
+                            } else if (o instanceof String) {
+                                inner = ((String) o).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                                break;
+                            }
+                        }
+                    } else if (arg0 instanceof List) {
+                        for (Object o : (List<?>) arg0) {
+                            if (o instanceof byte[]) {
+                                inner = (byte[]) o;
+                                break;
+                            } else if (o instanceof String) {
+                                inner = ((String) o).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                                break;
+                            }
+                        }
                     }
                     if (inner != null && inner.length > 0) {
-                        // Build a "storages" map by recursively parsing the inner pickle
-                        // to extract all storage bytes keyed by index.
-                        Map<String, byte[]> innerStorages = extractEmbeddedStorages(inner);
-                        TorchUnpickler innerUnp = new TorchUnpickler(inner, innerStorages,
-                                ByteOrder.LITTLE_ENDIAN);
-                        return innerUnp.load();
+                        // Check if this looks like a pickle (starts with protocol marker)
+                        if (inner.length > 2 && (inner[0] & 0xff) >= 0x80 && (inner[0] & 0xff) <= 0x8f) {
+                            // Build a "storages" map by recursively parsing the inner pickle
+                            // to extract all storage bytes keyed by index.
+                            Map<String, byte[]> innerStorages = extractEmbeddedStorages(inner);
+                            TorchUnpickler innerUnp = new TorchUnpickler(inner, innerStorages,
+                                    ByteOrder.LITTLE_ENDIAN);
+                            return innerUnp.load();
+                        }
+                        // Otherwise return as byte storage
+                        return new StorageView("FloatStorage", inner);
+                    }
+                }
+                // Handle torch.storage.FloatStorage(storage_data) and similar
+                // This constructs a storage directly from bytes
+                if ("torch.storage".equals(g.mod) && a.length >= 1) {
+                    Object arg0 = a[0];
+                    if (arg0 instanceof byte[]) {
+                        // Direct byte storage - create StorageView
+                        String storageType = g.name; // e.g., "FloatStorage"
+                        return new StorageView(storageType, (byte[]) arg0);
                     }
                 }
                 // Handle _codecs.encode('latin1', bytes):
@@ -814,15 +850,125 @@ public final class TorchPthReader {
             long[] stride = toLongArray(a[3]);
             // requires_grad at a[4] ignored
 
-            StorageView storage;
-            if (storageObj instanceof StorageView) {
-                storage = (StorageView) storageObj;
-            } else {
-                throw new IOException("tensor storage is not a StorageView: "
-                    + (storageObj == null ? null : storageObj.getClass()));
-            }
-
+            StorageView storage = extractStorageFromObject(storageObj);
             return storageToTensor(storage, storageOffset, size, stride);
+        }
+
+        /**
+         * Extract StorageView from various storage representations.
+         */
+        private StorageView extractStorageFromObject(Object storageObj) throws IOException {
+            if (storageObj instanceof StorageView) {
+                return (StorageView) storageObj;
+            }
+            if (storageObj instanceof Map) {
+                // storageObj is an OrderedDict with storage metadata
+                // e.g., {'data': <bytes>, 'size_bytes': <int>, ...}
+                @SuppressWarnings("unchecked")
+                Map<Object, Object> storageMap = (Map<Object, Object>) storageObj;
+                Object dataObj = storageMap.get("data");
+                if (dataObj instanceof byte[]) {
+                    return new StorageView("FloatStorage", (byte[]) dataObj);
+                }
+                throw new IOException("tensor storage OrderedDict has no byte 'data' field: "
+                    + storageMap.keySet());
+            }
+            if (storageObj instanceof Object[]) {
+                // storageObj might be a tuple from _load_from_bytes
+                for (Object o : (Object[]) storageObj) {
+                    if (o instanceof byte[]) {
+                        return new StorageView("FloatStorage", (byte[]) o);
+                    }
+                    if (o instanceof String) {
+                        try {
+                            byte[] b = ((String) o).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                            if (b.length > 0) {
+                                return new StorageView("FloatStorage", b);
+                            }
+                        } catch (Exception ignored) {}
+                    }
+                }
+            }
+            if (storageObj instanceof List) {
+                for (Object o : (List<?>) storageObj) {
+                    if (o instanceof byte[]) {
+                        return new StorageView("FloatStorage", (byte[]) o);
+                    }
+                    if (o instanceof String) {
+                        try {
+                            byte[] b = ((String) o).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                            if (b.length > 0) {
+                                return new StorageView("FloatStorage", b);
+                            }
+                        } catch (Exception ignored) {}
+                    }
+                }
+            }
+            if (storageObj instanceof StubObject) {
+                // Try to extract storage from StubObject's args
+                StubObject stub = (StubObject) storageObj;
+                if (stub.args != null) {
+                    if (stub.args instanceof Object[]) {
+                        for (Object o : (Object[]) stub.args) {
+                            if (o instanceof byte[]) {
+                                return new StorageView("FloatStorage", (byte[]) o);
+                            }
+                            StorageView sv = extractStorageFromObject(o);
+                            if (sv != null) return sv;
+                        }
+                    } else if (stub.args instanceof List) {
+                        for (Object o : (List<?>) stub.args) {
+                            if (o instanceof byte[]) {
+                                return new StorageView("FloatStorage", (byte[]) o);
+                            }
+                            StorageView sv = extractStorageFromObject(o);
+                            if (sv != null) return sv;
+                        }
+                    } else if (stub.args instanceof byte[]) {
+                        return new StorageView("FloatStorage", (byte[]) stub.args);
+                    } else if (stub.args instanceof String) {
+                        // This might be an encoded pickle string
+                        // Try to decode it as UTF-8 bytes
+                        try {
+                            byte[] b = ((String) stub.args).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                            if (b.length > 0) {
+                                return new StorageView("FloatStorage", b);
+                            }
+                        } catch (Exception ignored) {}
+                    } else {
+                        StorageView sv = extractStorageFromObject(stub.args);
+                        if (sv != null) return sv;
+                    }
+                }
+            }
+            if (storageObj instanceof byte[]) {
+                return new StorageView("FloatStorage", (byte[]) storageObj);
+            }
+            if (storageObj instanceof String) {
+                // String storage - could be latin1 encoded bytes or an embedded pickle
+                String str = (String) storageObj;
+                // Check if it looks like a pickle (starts with protocol marker)
+                try {
+                    byte[] strBytes = str.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                    if (strBytes.length > 2 && (strBytes[0] & 0xff) >= 0x80 && (strBytes[0] & 0xff) <= 0x8f) {
+                        // This is an embedded pickle - parse it
+                        Map<String, byte[]> innerStorages = extractEmbeddedStorages(strBytes);
+                        TorchUnpickler innerUnp = new TorchUnpickler(strBytes, innerStorages, ByteOrder.LITTLE_ENDIAN);
+                        Object innerResult = innerUnp.load();
+                        // The result should contain FloatStorage
+                        return extractStorageFromObject(innerResult);
+                    }
+                    // Treat as latin1 encoded bytes
+                    byte[] latin1Bytes = str.getBytes(java.nio.charset.StandardCharsets.ISO_8859_1);
+                    if (latin1Bytes.length > 0) {
+                        return new StorageView("FloatStorage", latin1Bytes);
+                    }
+                } catch (Exception e) {
+                    // Fall through to exception
+                }
+            }
+            throw new IOException("tensor storage is not a StorageView: "
+                + (storageObj == null ? null : storageObj.getClass()));
         }
 
         /**

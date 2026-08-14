@@ -462,20 +462,30 @@ public final class PyTorchModelLoader {
             int numTensors = bb.getInt();
 
             for (int i = 0; i < numTensors; i++) {
-                byte[] metaBuf = new byte[8];
-                raf.readFully(metaBuf);
-                java.nio.ByteBuffer metaBb = java.nio.ByteBuffer.wrap(metaBuf).order(java.nio.ByteOrder.LITTLE_ENDIAN);
-                int nameLen = metaBb.getInt();
-                int dtype = metaBb.getInt();
+                // Read name_len
+                byte[] nameLenBuf = new byte[4];
+                raf.readFully(nameLenBuf);
+                java.nio.ByteBuffer nameLenBb = java.nio.ByteBuffer.wrap(nameLenBuf).order(java.nio.ByteOrder.LITTLE_ENDIAN);
+                int nameLen = nameLenBb.getInt();
 
+                // Read name
                 byte[] nameBytes = new byte[nameLen];
                 raf.readFully(nameBytes);
                 String name = new String(nameBytes, StandardCharsets.UTF_8);
 
-                byte[] dimsHeaderBuf = new byte[4];
-                raf.readFully(dimsHeaderBuf);
-                java.nio.ByteBuffer dimsHeaderBb = java.nio.ByteBuffer.wrap(dimsHeaderBuf).order(java.nio.ByteOrder.LITTLE_ENDIAN);
-                int ndims = dimsHeaderBb.getInt();
+                // Read dtype
+                byte[] dtypeBuf = new byte[4];
+                raf.readFully(dtypeBuf);
+                java.nio.ByteBuffer dtypeBb = java.nio.ByteBuffer.wrap(dtypeBuf).order(java.nio.ByteOrder.LITTLE_ENDIAN);
+                int dtype = dtypeBb.getInt();
+
+                // Read ndims
+                byte[] ndimsBuf = new byte[4];
+                raf.readFully(ndimsBuf);
+                java.nio.ByteBuffer ndimsBb = java.nio.ByteBuffer.wrap(ndimsBuf).order(java.nio.ByteOrder.LITTLE_ENDIAN);
+                int ndims = ndimsBb.getInt();
+
+                // Read dims as int64
                 long[] dims = new long[ndims];
                 byte[] dimBuf = new byte[ndims * 8];
                 raf.readFully(dimBuf);

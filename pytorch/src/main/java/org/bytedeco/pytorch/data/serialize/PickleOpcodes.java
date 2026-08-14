@@ -1,4 +1,6 @@
 package org.bytedeco.pytorch.data.serialize;
+import org.bytedeco.pytorch.jit.*;
+import org.bytedeco.pytorch.distributed.*;
 
 /**
  * Pickle protocol opcodes.
