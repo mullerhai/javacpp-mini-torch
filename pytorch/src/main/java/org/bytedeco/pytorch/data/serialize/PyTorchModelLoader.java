@@ -444,6 +444,7 @@ public final class PyTorchModelLoader {
     /**
      * Load MicroLens .bin format (custom binary format).
      * Format: MLNS + version(4) + num_tensors(4) + [name_len(4) + name + dtype(4) + ndims(4) + dims[n] + data]
+     * NOTE: All integers are little-endian (matching Python struct.unpack("<i", ...))
      */
     private static Map<String, Tensor> loadMicroLensBin(File file, LoadOptions opts) throws IOException {
         Map<String, Tensor> result = new LinkedHashMap<>();
@@ -454,21 +455,33 @@ public final class PyTorchModelLoader {
                 throw new IOException("Not a MicroLens binary file: " + file);
             }
 
-            int version = Integer.reverseBytes(raf.readInt());
-            int numTensors = Integer.reverseBytes(raf.readInt());
+            byte[] headerBuf = new byte[8];
+            raf.readFully(headerBuf);
+            java.nio.ByteBuffer bb = java.nio.ByteBuffer.wrap(headerBuf).order(java.nio.ByteOrder.LITTLE_ENDIAN);
+            int version = bb.getInt();
+            int numTensors = bb.getInt();
 
             for (int i = 0; i < numTensors; i++) {
-                int nameLen = Integer.reverseBytes(raf.readInt());
+                byte[] metaBuf = new byte[8];
+                raf.readFully(metaBuf);
+                java.nio.ByteBuffer metaBb = java.nio.ByteBuffer.wrap(metaBuf).order(java.nio.ByteOrder.LITTLE_ENDIAN);
+                int nameLen = metaBb.getInt();
+                int dtype = metaBb.getInt();
+
                 byte[] nameBytes = new byte[nameLen];
                 raf.readFully(nameBytes);
                 String name = new String(nameBytes, StandardCharsets.UTF_8);
 
-                int dtype = Integer.reverseBytes(raf.readInt());
-                int ndims = Integer.reverseBytes(raf.readInt());
+                byte[] dimsHeaderBuf = new byte[4];
+                raf.readFully(dimsHeaderBuf);
+                java.nio.ByteBuffer dimsHeaderBb = java.nio.ByteBuffer.wrap(dimsHeaderBuf).order(java.nio.ByteOrder.LITTLE_ENDIAN);
+                int ndims = dimsHeaderBb.getInt();
                 long[] dims = new long[ndims];
+                byte[] dimBuf = new byte[ndims * 8];
+                raf.readFully(dimBuf);
+                java.nio.ByteBuffer dimBb = java.nio.ByteBuffer.wrap(dimBuf).order(java.nio.ByteOrder.LITTLE_ENDIAN);
                 for (int d = 0; d < ndims; d++) {
-                    // Dimensions are stored as int32, not int64
-                    dims[d] = Integer.reverseBytes(raf.readInt()) & 0xFFFFFFFFL;
+                    dims[d] = dimBb.getLong();
                 }
 
                 ScalarType scalarType = customBinScalarType(dtype);

@@ -179,8 +179,9 @@ public final class TorchPthReader {
 
     /** Convenience: load a standalone pickle and extract tensor map. */
     public static Map<String, Tensor> loadPickleStateDict(File file) throws IOException {
-        // Use PickleUtils with our pure-Java unpickler for standalone pickles
-        return PickleUtils.loadPickleStateDict(file);
+        // Use TorchUnpickler for standalone pickles
+        Object root = loadStandalonePickle(file);
+        return extractStateDict(root);
     }
 
     /**

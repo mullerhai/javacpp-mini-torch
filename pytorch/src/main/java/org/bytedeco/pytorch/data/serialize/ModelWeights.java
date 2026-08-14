@@ -46,6 +46,10 @@ public final class ModelWeights {
         if (file == null || !file.isFile()) return Format.UNKNOWN;
         String name = file.getName().toLowerCase(Locale.ROOT);
         if (name.endsWith(".safetensors")) return Format.SAFETENSORS;
+        if (name.endsWith(".pkl") || name.endsWith(".pickle")) {
+            // Standalone pickle files - will be handled by TorchPthReader.loadPickleStateDict
+            return Format.UNKNOWN; // ModelWeights.load() will fallback to TorchPthReader
+        }
         if (name.endsWith(".pth") || name.endsWith(".pt") || name.endsWith(".bin")) {
             if (TorchPthReader.isZipTorch(file)) return Format.TORCH_PTH_ZIP;
             // .bin is often raw pytorch_model.bin (also zip torch) or something else
