@@ -124,7 +124,7 @@ public final class ConstitutionalAITrainer extends BaseTrainer {
     }
 
     @Override
-    protected Tensor computeLoss(Map<String, Tensor> batch) {
+    public Tensor computeLoss(Map<String, Tensor> batch) {
         // Extract initial response
         Tensor inputIds = require(batch, "input_ids");
         Tensor attentionMask = batch.get("attention_mask");

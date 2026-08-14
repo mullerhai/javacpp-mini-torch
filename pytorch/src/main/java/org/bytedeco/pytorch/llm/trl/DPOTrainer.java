@@ -130,7 +130,7 @@ public final class DPOTrainer extends BaseTrainer {
     }
 
     @Override
-    protected Tensor computeLoss(Map<String, Tensor> batch) {
+    public Tensor computeLoss(Map<String, Tensor> batch) {
         // Fast path: precomputed log-probs
         if (batch.containsKey("policy_chosen_logps")
                 && batch.get("policy_chosen_logps") != null

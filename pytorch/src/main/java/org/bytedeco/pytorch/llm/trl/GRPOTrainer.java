@@ -129,7 +129,7 @@ public final class GRPOTrainer extends BaseTrainer {
     }
 
     @Override
-    protected Tensor computeLoss(Map<String, Tensor> batch) {
+    public Tensor computeLoss(Map<String, Tensor> batch) {
         Tensor rewards = require(batch, "rewards");
         int groupSize = grpoConfig.numGenerations();
 

@@ -97,7 +97,7 @@ public final class EnsembleRewardTrainer extends BaseTrainer {
     }
 
     @Override
-    protected Tensor computeLoss(Map<String, Tensor> batch) {
+    public Tensor computeLoss(Map<String, Tensor> batch) {
         // Extract rewards
         Tensor targetRewards = require(batch, "rewards");
         int batchSize = (int) targetRewards.size(0);

@@ -100,7 +100,7 @@ public final class SFTTrainer extends BaseTrainer {
     }
 
     @Override
-    protected Tensor computeLoss(Map<String, Tensor> batch) {
+    public Tensor computeLoss(Map<String, Tensor> batch) {
         Tensor inputIds = require(batch, "input_ids");
         Tensor labels = batch.containsKey("labels") && batch.get("labels") != null
                 ? batch.get("labels")

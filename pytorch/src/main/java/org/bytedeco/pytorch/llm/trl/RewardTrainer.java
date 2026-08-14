@@ -105,7 +105,7 @@ public final class RewardTrainer extends BaseTrainer {
     }
 
     @Override
-    protected Tensor computeLoss(Map<String, Tensor> batch) {
+    public Tensor computeLoss(Map<String, Tensor> batch) {
         Tensor chosen;
         Tensor rejected;
 

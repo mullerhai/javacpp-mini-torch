@@ -1,4 +1,5 @@
 package org.bytedeco.pytorch.data.serialize;
+import org.bytedeco.pytorch.global.torch.ScalarType;
 import org.bytedeco.pytorch.nn.*;
 import org.bytedeco.pytorch.nn.options.*;
 import org.bytedeco.pytorch.nn.modules.*;
@@ -426,7 +427,12 @@ public final class StructureModuleBuilder {
                     dest.copy_(src.detach().contiguous());
                 }
                 if (!isBufferRole(role)) {
-                    try { dest.requires_grad_(requiresGrad); } catch (Throwable ignored) {}
+                    // Only set requires_grad if the tensor supports gradients
+                    if (requiresGrad && !supportsGradients(dest)) {
+                        try { dest.requires_grad_(false); } catch (Throwable ignored) {}
+                    } else {
+                        try { dest.requires_grad_(requiresGrad); } catch (Throwable ignored) {}
+                    }
                 }
                 return true;
             }
@@ -506,11 +512,17 @@ public final class StructureModuleBuilder {
         Tensor ownedT = src.detach().clone().contiguous();
         try {
             if (buffer) {
-                ownedT.requires_grad_(false);
+                try { ownedT.requires_grad_(false); } catch (Throwable ignored) {}
                 target.register_buffer(leaf, ownedT);
             } else {
-                ownedT.requires_grad_(requiresGrad);
-                target.register_parameter(leaf, ownedT, requiresGrad);
+                // Only set requires_grad if the tensor supports gradients
+                if (requiresGrad && !supportsGradients(ownedT)) {
+                    try { ownedT.requires_grad_(false); } catch (Throwable ignored) {}
+                    target.register_parameter(leaf, ownedT, false);
+                } else {
+                    try { ownedT.requires_grad_(requiresGrad); } catch (Throwable ignored) {}
+                    target.register_parameter(leaf, ownedT, requiresGrad);
+                }
             }
         } catch (Throwable ignored) {}
         // caller stores under full key
@@ -570,6 +582,31 @@ public final class StructureModuleBuilder {
         return r.equals("running_mean") || r.equals("running_var")
                 || r.equals("num_batches_tracked")
                 || r.endsWith("_mean") || r.endsWith("_var");
+    }
+
+    /**
+     * Check if a tensor dtype supports gradients.
+     * Only floating point and complex types can require gradients.
+     */
+    private static boolean supportsGradients(Tensor t) {
+        if (t == null || t.isNull() || !t.defined()) return false;
+        try {
+            ScalarType dtype = t.dtype().toScalarType();
+            if (dtype == null) return false;
+            // Floating point types
+            if (dtype == ScalarType.Float || dtype == ScalarType.Double
+                || dtype == ScalarType.Half || dtype == ScalarType.BFloat16) {
+                return true;
+            }
+            // Complex types
+            if (dtype == ScalarType.ComplexFloat || dtype == ScalarType.ComplexDouble
+                || dtype == ScalarType.ComplexHalf) {
+                return true;
+            }
+            return false;
+        } catch (Throwable e) {
+            return false;
+        }
     }
 
     private static Tensor retain(Tensor byRef) {

@@ -138,7 +138,7 @@ public final class KTOTrainer extends BaseTrainer {
     }
 
     @Override
-    protected Tensor computeLoss(Map<String, Tensor> batch) {
+    public Tensor computeLoss(Map<String, Tensor> batch) {
         // Fast path: precomputed log-probs
         if (batch.containsKey("chosen_logps") && batch.get("chosen_logps") != null) {
             return computeFromLogps(batch);

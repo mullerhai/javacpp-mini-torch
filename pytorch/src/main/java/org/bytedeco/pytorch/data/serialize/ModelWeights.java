@@ -38,7 +38,7 @@ import java.util.Objects;
  * ({@code weights_only}, {@code map_location}, {@code strict}, zero-copy, dtype).
  */
 public final class ModelWeights {
-    public enum Format { SAFETENSORS, TORCH_PTH_ZIP, UNKNOWN }
+    public enum Format { SAFETENSORS, TORCH_PTH_ZIP, PICKLE, BIN_MICROLENS, BIN_NAMED, BIN_GENERIC, UNKNOWN }
 
     private ModelWeights() {}
 
@@ -48,17 +48,89 @@ public final class ModelWeights {
         if (name.endsWith(".safetensors")) return Format.SAFETENSORS;
         if (name.endsWith(".pkl") || name.endsWith(".pickle")) {
             // Standalone pickle files - will be handled by TorchPthReader.loadPickleStateDict
-            return Format.UNKNOWN; // ModelWeights.load() will fallback to TorchPthReader
+            if (TorchPthReader.isStandalonePickle(file)) {
+                return Format.PICKLE;
+            }
+            return Format.UNKNOWN;
         }
         if (name.endsWith(".pth") || name.endsWith(".pt") || name.endsWith(".bin")) {
             if (TorchPthReader.isZipTorch(file)) return Format.TORCH_PTH_ZIP;
             // .bin is often raw pytorch_model.bin (also zip torch) or something else
             if (isSafetensorsMagic(file)) return Format.SAFETENSORS;
+            // Detect custom binary formats for .bin files
+            if (name.endsWith(".bin")) {
+                return detectBinFormat(file);
+            }
             return Format.UNKNOWN;
         }
         if (isSafetensorsMagic(file)) return Format.SAFETENSORS;
         if (TorchPthReader.isZipTorch(file)) return Format.TORCH_PTH_ZIP;
         return Format.UNKNOWN;
+    }
+
+    /**
+     * Detect specific .bin format based on file structure.
+     */
+    private static Format detectBinFormat(File file) throws IOException {
+        byte[] magic = new byte[8];
+        try (InputStream in = Files.newInputStream(file.toPath())) {
+            int read = in.read(magic);
+            if (read < 4) return Format.UNKNOWN;
+
+            // Check for our custom binary format (MicroLens) - "MLNS" magic
+            if (magic[0] == 'M' && magic[1] == 'L' && magic[2] == 'N' && magic[3] == 'S') {
+                return Format.BIN_MICROLENS;
+            }
+
+            // Check for pickle protocol
+            if (magic[0] >= 0x80 && magic[0] <= 0x8F) {
+                return Format.PICKLE;
+            }
+
+            // Check for named-tensor binary format
+            if (looksLikeNamedBinHeader(file)) {
+                return Format.BIN_NAMED;
+            }
+
+            // Default: treat as generic binary state-dict
+            return Format.BIN_GENERIC;
+        }
+    }
+
+    /**
+     * Check if the file starts with a small int32 name length followed by an ASCII
+     * string (named-tensor binary format).
+     */
+    private static boolean looksLikeNamedBinHeader(File file) throws IOException {
+        if (file.length() < 8) return false;
+        try (InputStream in = Files.newInputStream(file.toPath())) {
+            byte[] m4 = new byte[4];
+            if (in.read(m4) < 4) return false;
+            int firstInt = ((m4[0] & 0xff))
+                     | ((m4[1] & 0xff) << 8)
+                     | ((m4[2] & 0xff) << 16)
+                     | ((m4[3] & 0xff) << 24);
+            // Reject obvious non-format magic bytes
+            if (firstInt == 'P' | (firstInt & 0xff) == 'M' || firstInt < 0) return false;
+            int nameLen = firstInt;
+            if (nameLen <= 0 || nameLen > 256 || nameLen > file.length() - 4) return false;
+            // Read name + 8 trailing bytes (dtype + ndims)
+            byte[] rest = new byte[nameLen + 8];
+            if (in.read(rest) < rest.length) return false;
+            for (int i = 0; i < nameLen; i++) {
+                int b = rest[i] & 0xff;
+                if (b < 0x20 || b > 0x7e) return false;
+            }
+            int dtype = ((rest[nameLen] & 0xff))
+                      | ((rest[nameLen + 1] & 0xff) << 8)
+                      | ((rest[nameLen + 2] & 0xff) << 16)
+                      | ((rest[nameLen + 3] & 0xff) << 24);
+            int ndims = ((rest[nameLen + 4] & 0xff))
+                      | ((rest[nameLen + 5] & 0xff) << 8)
+                      | ((rest[nameLen + 6] & 0xff) << 16)
+                      | ((rest[nameLen + 7] & 0xff) << 24);
+            return dtype >= 0 && dtype <= 4 && ndims >= 0 && ndims <= 8;
+        }
     }
 
     public static Format detect(Path path) throws IOException {
@@ -99,14 +171,6 @@ public final class ModelWeights {
         }
 
         Format fmt = detect(file);
-        if (fmt == Format.UNKNOWN) {
-            // Fallback: standalone Python pickle (.pkl) — delegates to TorchPthReader.
-            try {
-                if (TorchPthReader.isStandalonePickle(file)) {
-                    return TorchPthReader.loadPickleStateDict(file);
-                }
-            } catch (IOException ignored) {}
-        }
         switch (fmt) {
             case SAFETENSORS:
                 return SafeTensors.loadFile(file, opts);
@@ -124,9 +188,17 @@ public final class ModelWeights {
                 }
                 return SafeTensors.applyMapLocation(sd, opts);
             }
+            case PICKLE:
+                // Standalone Python pickle - delegate to TorchPthReader
+                return TorchPthReader.loadPickleStateDict(file);
+            case BIN_MICROLENS:
+            case BIN_NAMED:
+            case BIN_GENERIC:
+                // Custom binary formats - delegate to PyTorchModelLoader
+                return PyTorchModelLoader.loadBin(file, opts);
             default:
                 throw new IOException("Unrecognized weight format: " + file
-                    + " (expected .safetensors or torch ZIP .pth/.pt)");
+                    + " (expected .safetensors, torch ZIP .pth/.pt, pickle .pkl, or binary .bin)");
         }
     }
 

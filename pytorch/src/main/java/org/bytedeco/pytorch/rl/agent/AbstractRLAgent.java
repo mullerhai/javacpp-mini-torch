@@ -1,60 +1,127 @@
+/*
+ * Copyright (C) 2020-2026 Eduardo Gonzalez, Hervé Guillemet, Samuel Audet
+ *
+ * Licensed either under the Apache License, Version 2.0, or (at your option)
+ * under the terms of the GNU General Public License as published by
+ * the Free Software Foundation (subject to the "Classpath" exception),
+ * either version 2, or any later version (collectively, the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.gnu.org/licenses/
+ *     http://www.gnu.org/licenses/
+ *     http://www.gnu.org/software/classpath/license.html
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 package org.bytedeco.pytorch.rl.agent;
-import org.bytedeco.pytorch.optim.*;
 
+import org.bytedeco.pytorch.optim.*;
 import org.bytedeco.pytorch.optim.Optimizer;
 import org.bytedeco.pytorch.Tensor;
 import org.bytedeco.pytorch.TensorVector;
 import org.bytedeco.pytorch.rl.ReplayBuffer;
 import org.bytedeco.pytorch.rl.critic.AbstractActorCritic;
-import org.bytedeco.pytorch.rl.critic.LMActorCritic;
+
+import java.util.Objects;
 
 /**
- * RL Agent 抽象父类
- * 统一所有训练器的核心行为（训练、采样、资源管理）
+ * Abstract base class for reinforcement learning agents.
+ *
+ * <p>This class unifies core behaviors across all training algorithms including
+ * training, sampling, and resource management. Subclasses implement specific
+ * algorithms like PPO, GRPO, A2C, etc.
+ *
+ * <p>Key features:
+ * <ul>
+ *   <li>Model and optimizer management</li>
+ *   <li>Experience buffer integration</li>
+ *   <li>Resource lifecycle management (AutoCloseable)</li>
+ *   <li>Gradient tracking and computation</li>
+ * </ul>
+ *
+ * @see PPOAgent
+ * @see GRPOAgent
+ * @see A2CAgent
  */
-public abstract class AbstractRLAgent {
-    protected final AbstractActorCritic model; // 策略-价值模型
-    protected final Optimizer optimizer;       // 优化器
-    protected final ReplayBuffer replayBuffer; // 经验缓冲区
+public abstract class AbstractRLAgent implements AutoCloseable {
+
+    // ==================== Core Components ====================
+
+    /** Policy-value model */
+    protected final AbstractActorCritic model;
+
+    /** Optimizer for model parameters */
+    protected final Optimizer optimizer;
+
+    /** Experience replay buffer */
+    protected final ReplayBuffer replayBuffer;
+
+    // ==================== State Tracking ====================
+
+    /** Training step counter */
+    protected int trainingStep = 0;
+
+    /** Whether agent is in training mode */
+    protected volatile boolean training = true;
+
+    // ==================== Constructor ====================
 
     /**
-     * 构造函数
-     * @param model 策略-价值模型
-     * @param optimizer 优化器
-     * @param replayBuffer 经验缓冲区
+     * Create a new RL agent.
+     *
+     * @param model Policy-value model
+     * @param optimizer Optimizer
+     * @param replayBuffer Experience buffer
      */
-    public AbstractRLAgent(AbstractActorCritic model, Optimizer optimizer, ReplayBuffer replayBuffer) {
-        this.model = model;
+    protected AbstractRLAgent(AbstractActorCritic model, Optimizer optimizer, ReplayBuffer replayBuffer) {
+        this.model = Objects.requireNonNull(model, "model");
         this.optimizer = optimizer;
         this.replayBuffer = replayBuffer;
     }
 
+    // ==================== Core Methods ====================
+
     /**
-     * 单步训练（核心方法）
-     * @return 训练损失
+     * Perform one training step.
+     *
+     * @return Training loss tensor
      */
     public abstract Tensor trainStep();
 
-    protected void freezeModel(AbstractActorCritic model) {
-        var paramsVector = model.parameters();
-        var begin = paramsVector.begin();
-        var end = paramsVector.end();
-        while(!begin.equals(end)) {
-            var param = begin.get();
-            param.requires_grad_(false);
-            begin.increment();
-        }
-        paramsVector.close();
-    }
     /**
-     * 采样动作（收集经验）
-     * @param state 状态张量
-     * @return 动作 + 对数概率 + 价值（按需返回）
+     * Sample actions from the policy.
+     *
+     * @param state State tensor [batch, obs_dim]
+     * @return Array containing [action, log_prob, value] tensors
      */
     public abstract Tensor[] sample(Tensor state);
 
     /**
-     * 清空缓冲区
+     * Sample a single action (for inference).
+     *
+     * @param state State tensor
+     * @return Action tensor
+     */
+    public Tensor sampleAction(Tensor state) {
+        Tensor[] result = sample(state);
+        Tensor action = result[0];
+        // Close intermediate tensors
+        for (int i = 1; i < result.length; i++) {
+            if (result[i] != null) result[i].close();
+        }
+        return action;
+    }
+
+    // ==================== Buffer Management ====================
+
+    /**
+     * Clear the experience buffer.
      */
     public void clearBuffer() {
         if (replayBuffer != null) {
@@ -62,16 +129,138 @@ public abstract class AbstractRLAgent {
         }
     }
 
+    // ==================== Mode Control ====================
+
     /**
-     * 释放所有资源（统一接口）
+     * Set training mode.
      */
-    public void close() {
-        if (model != null) model.close();
-        if (optimizer != null) optimizer.close();
-        if (replayBuffer != null) replayBuffer.clear();
+    public void train() {
+        this.training = true;
+        if (model != null) {
+            model.train(true);
+        }
     }
 
-    // 通用Getter
-    public AbstractActorCritic getModel() { return model; }
-    public ReplayBuffer getReplayBuffer() { return replayBuffer; }
+    /**
+     * Set evaluation mode.
+     */
+    public void eval() {
+        this.training = false;
+        if (model != null) {
+            model.eval();
+        }
+    }
+
+    /**
+     * Check if in training mode.
+     */
+    public boolean isTraining() {
+        return training;
+    }
+
+    // ==================== Gradient Operations ====================
+
+    /**
+     * Freeze model parameters (for reference models, etc.).
+     */
+    protected void freezeModel(AbstractActorCritic model) {
+        if (model == null) return;
+        var paramsVector = model.parameters();
+        var begin = paramsVector.begin();
+        var end = paramsVector.end();
+        while (!begin.equals(end)) {
+            var param = begin.get();
+            param.requires_grad_(false);
+            begin.increment();
+        }
+        paramsVector.close();
+    }
+
+    /**
+     * Zero gradients in optimizer.
+     */
+    protected void zeroGrad() {
+        if (optimizer != null) {
+            optimizer.zero_grad();
+        }
+    }
+
+    /**
+     * Perform optimizer step.
+     */
+    protected void step() {
+        if (optimizer != null) {
+            optimizer.step();
+        }
+    }
+
+    // ==================== Lifecycle ====================
+
+    /**
+     * Close and release all resources.
+     */
+    @Override
+    public void close() {
+        training = false;
+        if (model != null) {
+            model.close();
+        }
+        if (optimizer != null) {
+            optimizer.close();
+        }
+        if (replayBuffer != null) {
+            replayBuffer.clear();
+        }
+    }
+
+    // ==================== Getters ====================
+
+    public AbstractActorCritic getModel() {
+        return model;
+    }
+
+    public ReplayBuffer getReplayBuffer() {
+        return replayBuffer;
+    }
+
+    public Optimizer getOptimizer() {
+        return optimizer;
+    }
+
+    public int getTrainingStep() {
+        return trainingStep;
+    }
+
+    /**
+     * Get algorithm identifier.
+     */
+    public String algorithm() {
+        return getClass().getSimpleName().replace("Agent", "");
+    }
+
+    // ==================== Statistics ====================
+
+    /**
+     * Get trainable parameters.
+     */
+    public TensorVector parameters() {
+        return model.parameters();
+    }
+
+    /**
+     * Get number of parameters.
+     */
+    public long numParameters() {
+        long count = 0;
+        var params = model.parameters();
+        var begin = params.begin();
+        var end = params.end();
+        while (!begin.equals(end)) {
+            var param = begin.get();
+            count += param.numel();
+            begin.increment();
+        }
+        params.close();
+        return count;
+    }
 }

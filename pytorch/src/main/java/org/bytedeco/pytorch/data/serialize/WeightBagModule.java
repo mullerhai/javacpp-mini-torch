@@ -1,4 +1,5 @@
 package org.bytedeco.pytorch.data.serialize;
+import org.bytedeco.pytorch.global.torch.ScalarType;
 import org.bytedeco.pytorch.optim.options.*;
 import org.bytedeco.pytorch.serialize.*;
 import org.bytedeco.pytorch.nn.*;
@@ -448,6 +449,13 @@ public class WeightBagModule extends Module {
                 // Python-style ZIP — same pure-Java path (works for both origins
                 // when the payload is a state_dict pickle)
                 return fromPythonPth(file, requiresGrad);
+            case PICKLE:
+                // Standalone Python pickle — load state_dict and build module
+                Map<String, Tensor> sd = TorchPthReader.loadPickleStateDict(file);
+                if (sd.isEmpty()) {
+                    throw new IOException("no tensors extracted from pickle file: " + file);
+                }
+                return new WeightBagModule(sd, requiresGrad, true, true, null);
             default:
                 // Try ZIP anyway (some JavaCPP dumps still use PK zip)
                 if (TorchPthReader.isZipTorch(file)) {
@@ -455,8 +463,8 @@ public class WeightBagModule extends Module {
                 }
                 throw new IOException(
                         "fromJavacppPth: unrecognized format for " + file
-                        + " — expected Python torch ZIP .pth, safetensors, or a"
-                        + " checkpoint convertible via TorchPthReader."
+                        + " — expected Python torch ZIP .pth, safetensors, pickle .pkl,"
+                        + " or a checkpoint convertible via TorchPthReader."
                         + " For complete structure round-trip prefer"
                         + " WeightBagModule.saveSafetensors / fromSafetensors.");
         }
@@ -611,6 +619,13 @@ public class WeightBagModule extends Module {
                 }
                 return bag;
             }
+            case PICKLE:
+            case BIN_MICROLENS:
+            case BIN_NAMED:
+            case BIN_GENERIC:
+                // Standalone pickle or binary formats - load state_dict and build module
+                Map<String, Tensor> sd = PyTorchModelLoader.loadBin(file, opts);
+                return new WeightBagModule(sd, requiresGrad, true, true, null);
             default:
                 return fromJavacppPth(file, requiresGrad);
         }
@@ -813,10 +828,43 @@ public class WeightBagModule extends Module {
         } else {
             owned = value;
         }
-        owned.requires_grad_(requiresGrad);
-        // NEVER store register_parameter return (ByRef dangles)
-        parent.register_parameter(leaf, owned, requiresGrad);
+        // Only set requires_grad if the tensor supports gradients (floating point or complex types)
+        boolean gradSupported = supportsGradients(owned);
+        if (requiresGrad && !gradSupported) {
+            // Skip setting requires_grad for non-gradient-supporting types (e.g., integer tensors)
+            try { owned.requires_grad_(false); } catch (Throwable ignored) {}
+            try { parent.register_parameter(leaf, owned, false); } catch (Throwable ignored) {}
+        } else {
+            try { owned.requires_grad_(requiresGrad); } catch (Throwable ignored) {}
+            // NEVER store register_parameter return (ByRef dangles)
+            try { parent.register_parameter(leaf, owned, requiresGrad); } catch (Throwable ignored) {}
+        }
         ownedParams.put(key, owned);
+    }
+
+    /**
+     * Check if a tensor dtype supports gradients.
+     * Only floating point and complex types can require gradients.
+     */
+    private static boolean supportsGradients(Tensor t) {
+        if (t == null || t.isNull() || !t.defined()) return false;
+        try {
+            ScalarType dtype = t.dtype().toScalarType();
+            if (dtype == null) return false;
+            // Floating point types
+            if (dtype == ScalarType.Float || dtype == ScalarType.Double
+                || dtype == ScalarType.Half || dtype == ScalarType.BFloat16) {
+                return true;
+            }
+            // Complex types
+            if (dtype == ScalarType.ComplexFloat || dtype == ScalarType.ComplexDouble
+                || dtype == ScalarType.ComplexHalf) {
+                return true;
+            }
+            return false;
+        } catch (Throwable e) {
+            return false;
+        }
     }
 
     // ---- access -------------------------------------------------------------

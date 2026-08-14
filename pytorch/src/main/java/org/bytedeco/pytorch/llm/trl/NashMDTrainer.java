@@ -140,7 +140,7 @@ public final class NashMDTrainer extends BaseTrainer {
     }
 
     @Override
-    protected Tensor computeLoss(Map<String, Tensor> batch) {
+    public Tensor computeLoss(Map<String, Tensor> batch) {
         Tensor rewards = require(batch, "rewards");
         int numObjectives = nashConfig.numObjectives();
 

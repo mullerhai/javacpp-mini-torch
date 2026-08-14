@@ -89,7 +89,7 @@ public final class ORPOTrainer extends BaseTrainer {
     }
 
     @Override
-    protected Tensor computeLoss(Map<String, Tensor> batch) {
+    public Tensor computeLoss(Map<String, Tensor> batch) {
         if (batch.containsKey("policy_chosen_logps")
                 && batch.get("policy_chosen_logps") != null
                 && batch.get("policy_chosen_logps").defined()) {

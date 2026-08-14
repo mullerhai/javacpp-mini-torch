@@ -118,7 +118,7 @@ public final class MultiModalGRPOTrainer extends BaseTrainer {
     }
 
     @Override
-    protected Tensor computeLoss(Map<String, Tensor> batch) {
+    public Tensor computeLoss(Map<String, Tensor> batch) {
         // Extract rewards
         Tensor rewards = require(batch, "rewards");
         Tensor modalityRewards = batch.get("modality_rewards");

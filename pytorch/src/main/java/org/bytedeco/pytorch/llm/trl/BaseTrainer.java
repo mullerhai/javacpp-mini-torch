@@ -75,6 +75,7 @@ public abstract class BaseTrainer implements AutoCloseable {
     public int globalStep() { return globalStep; }
     public boolean isTraining() { return training; }
 
+//    public String algorithm()
     public BaseTrainer addCallback(TrainerCallback cb) {
         if (cb != null) {
             callbacks.add(cb);
@@ -92,7 +93,7 @@ public abstract class BaseTrainer implements AutoCloseable {
      * Compute scalar loss for one micro-batch. Gradients should flow through
      * the returned tensor; do not call {@code backward} here.
      */
-    protected abstract Tensor computeLoss(Map<String, Tensor> batch);
+    public abstract Tensor computeLoss(Map<String, Tensor> batch);
 
     /**
      * One optimizer micro-step with gradient accumulation.

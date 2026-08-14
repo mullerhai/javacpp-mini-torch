@@ -1,4 +1,5 @@
 package org.bytedeco.pytorch.data.serialize;
+import org.bytedeco.pytorch.global.torch.ScalarType;
 import org.bytedeco.pytorch.jit.*;
 import org.bytedeco.pytorch.nn.*;
 import org.bytedeco.pytorch.nn.modules.container.*;
@@ -1874,13 +1875,20 @@ public final class StateDictModuleBuilder {
             if (src == null || !src.defined()) continue;
             Tensor owned = clone ? safeClone(src) : src;
             boolean isBuf = isBufferRole(role);
+            boolean gradSupported = supportsGradients(owned);
             if (isBuf) {
-                owned.requires_grad_(false);
+                try { owned.requires_grad_(false); } catch (Throwable ignored) {}
                 // NEVER store register_buffer return (ByRef)
                 target.register_buffer(role, owned);
             } else {
-                owned.requires_grad_(requiresGrad);
-                target.register_parameter(role, owned, requiresGrad);
+                if (requiresGrad && !gradSupported) {
+                    // Skip setting requires_grad for non-gradient-supporting types (e.g., integer tensors)
+                    try { owned.requires_grad_(false); } catch (Throwable ignored) {}
+                    target.register_parameter(role, owned, false);
+                } else {
+                    try { owned.requires_grad_(requiresGrad); } catch (Throwable ignored) {}
+                    target.register_parameter(role, owned, requiresGrad);
+                }
             }
             if (ownedOut != null) {
                 String full = (pathPrefix == null || pathPrefix.isEmpty())
@@ -1897,7 +1905,15 @@ public final class StateDictModuleBuilder {
         try (NoGradGuard guard = new NoGradGuard()) {
             dest.copy_(use);
         }
-        dest.requires_grad_(requiresGrad);
+        // Only set requires_grad if the tensor supports gradients (floating point or complex)
+        if (requiresGrad && !supportsGradients(dest)) {
+            return; // Skip setting requires_grad for non-gradient-supporting types
+        }
+        try {
+            dest.requires_grad_(requiresGrad);
+        } catch (Throwable ignored) {
+            // Ignore if setting requires_grad fails (e.g., integer tensors)
+        }
     }
 
     private static Tensor safeClone(Tensor src) {
@@ -1910,6 +1926,31 @@ public final class StateDictModuleBuilder {
             // named parameters: set requires_grad
             // Module.to / parameters iteration is heavy; leaves already set via copyInto
         } catch (Throwable ignored) {}
+    }
+
+    /**
+     * Check if a tensor dtype supports gradients.
+     * Only floating point and complex types can require gradients.
+     */
+    private static boolean supportsGradients(Tensor t) {
+        if (t == null || t.isNull() || !t.defined()) return false;
+        try {
+            ScalarType dtype = t.dtype().toScalarType();
+            if (dtype == null) return false;
+            // Floating point types
+            if (dtype == ScalarType.Float || dtype == ScalarType.Double
+                || dtype == ScalarType.Half || dtype == ScalarType.BFloat16) {
+                return true;
+            }
+            // Complex types
+            if (dtype == ScalarType.ComplexFloat || dtype == ScalarType.ComplexDouble
+                || dtype == ScalarType.ComplexHalf) {
+                return true;
+            }
+            return false;
+        } catch (Throwable e) {
+            return false;
+        }
     }
 
     private static boolean isBufferRole(String role) {

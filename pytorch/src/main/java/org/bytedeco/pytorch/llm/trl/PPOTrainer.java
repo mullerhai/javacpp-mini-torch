@@ -146,7 +146,7 @@ public final class PPOTrainer extends BaseTrainer {
     }
 
     @Override
-    protected Tensor computeLoss(Map<String, Tensor> batch) {
+    public Tensor computeLoss(Map<String, Tensor> batch) {
         Tensor oldLogprobs = require(batch, "old_logprobs");
         Tensor advantages = require(batch, "advantages");
         Tensor returns = require(batch, "returns");

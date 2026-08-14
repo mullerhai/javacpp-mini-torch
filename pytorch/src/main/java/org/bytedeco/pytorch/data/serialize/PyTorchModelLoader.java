@@ -12,6 +12,7 @@ import org.bytedeco.pytorch.nn.Module;
 import org.bytedeco.pytorch.data.safetensors.LoadOptions;
 import org.bytedeco.pytorch.global.torch;
 import org.bytedeco.pytorch.global.torch.DeviceType;
+import org.bytedeco.pytorch.serving.onnxruntime.ONNXModuleWrapper;
 
 import java.io.*;
 import java.nio.ByteBuffer;
@@ -78,6 +79,8 @@ public final class PyTorchModelLoader {
         BIN_NAMED,
         /** NumPy array format */
         NUMPY,
+        /** ONNX model format (.onnx) - requires ONNX Runtime */
+        ONNX,
         /** Unknown format */
         UNKNOWN
     }
@@ -101,11 +104,29 @@ public final class PyTorchModelLoader {
      * Detect the type of a PyTorch model file.
      */
     public static ModelType detectModelType(File file) throws IOException {
-        if (file == null || !file.isFile()) {
+        if (file == null) {
             return ModelType.UNKNOWN;
         }
 
         String name = file.getName().toLowerCase();
+
+        // Check extension first for non-existent files
+        if (!file.isFile()) {
+            if (name.endsWith(".pkl") || name.endsWith(".pickle")) {
+                return ModelType.PICKLE;
+            }
+            if (name.endsWith(".pt") || name.endsWith(".pth")) {
+                return ModelType.STATE_DICT;
+            }
+            if (name.endsWith(".safetensors")) {
+                return ModelType.STATE_DICT;
+            }
+            if (name.endsWith(".bin")) {
+                return ModelType.BIN_GENERIC;
+            }
+            return ModelType.UNKNOWN;
+        }
+
         byte[] magic = new byte[8];
         try (InputStream in = Files.newInputStream(file.toPath())) {
             int read = in.read(magic);
@@ -152,6 +173,9 @@ public final class PyTorchModelLoader {
         }
         if (name.endsWith(".pkl") || name.endsWith(".pickle")) {
             return ModelType.PICKLE;
+        }
+        if (name.endsWith(".onnx")) {
+            return ModelType.ONNX;
         }
         if (name.endsWith(".bin")) {
             return ModelType.BIN_GENERIC; // .bin files default to BIN format
@@ -350,6 +374,95 @@ public final class PyTorchModelLoader {
         }
     }
 
+    // ---- ONNX Loading ----
+
+    /**
+     * Convert ONNX model to JitModule (supports inference AND training).
+     *
+     * <p>This is the recommended method for ONNX models when you need full
+     * PyTorch functionality including training.</p>
+     *
+     * <pre>{@code
+     * // Convert and load as JitModule
+     * JitModule jit = PyTorchModelLoader.loadOnnxAsJitModule("model.onnx");
+     *
+     * // Now you can use it for training!
+     * Tensor output = jit.forward(input);
+     * }</pre>
+     *
+     * @param file Path to ONNX model (.onnx)
+     * @return JitModule ready for inference and training
+     * @throws IOException if conversion fails
+     * @see OnnxToJitConverter For conversion options
+     */
+    public static JitModule loadOnnxAsJitModule(File file) throws IOException {
+        return OnnxToJitBridge.convertToJitModule(file.toPath());
+    }
+
+    /**
+     * Convert ONNX model to JitModule.
+     */
+    public static JitModule loadOnnxAsJitModule(Path path) throws IOException {
+        return OnnxToJitBridge.convertToJitModule(path);
+    }
+
+    /**
+     * Convert ONNX model to JitModule.
+     */
+    public static JitModule loadOnnxAsJitModule(String path) throws IOException {
+        return OnnxToJitBridge.convertToJitModule(Path.of(path));
+    }
+
+    /**
+     * Load an ONNX model as a PyTorch-compatible Module wrapper (inference only).
+     *
+     * <p>For full training support, use {@link #loadOnnxAsJitModule(Path)} instead.</p>
+     *
+     * @param file Path to ONNX model (.onnx)
+     * @return Module wrapper for inference (NOT a JitModule)
+     * @throws IOException if loading fails
+     */
+    public static Module loadOnnxAsModule(File file) throws IOException {
+        return OnnxToJitBridge.loadAsModule(file.toPath());
+    }
+
+    /**
+     * Load an ONNX model as a PyTorch-compatible Module wrapper.
+     */
+    public static Module loadOnnxAsModule(Path path) throws IOException {
+        return OnnxToJitBridge.loadAsModule(path);
+    }
+
+    /**
+     * Load an ONNX model as a PyTorch-compatible Module wrapper.
+     */
+    public static Module loadOnnxAsModule(String path) throws IOException {
+        return OnnxToJitBridge.loadAsModule(Path.of(path));
+    }
+
+    /**
+     * Check if ONNX model can potentially be converted to TorchScript.
+     *
+     * @param onnxFile Path to ONNX model
+     * @return true if conversion might succeed
+     */
+    public static boolean canConvertOnnxToJit(Path onnxFile) {
+        return OnnxToJitBridge.isPotentiallyConvertible(onnxFile);
+    }
+
+    /**
+     * Generate Python script for ONNX → TorchScript conversion.
+     *
+     * <p>This script should be run in Python with torch and onnxruntime installed.
+     * The resulting .pt file can be loaded with {@link #loadJitScript(String)}.</p>
+     *
+     * @param onnxFile Path to ONNX model
+     * @return Python code for conversion
+     */
+    public static String generateOnnxToJitScript(Path onnxFile) {
+        return OnnxToJitBridge.generatePythonConversionScript(onnxFile);
+    }
+
     // ---- StateDict Loading ----
 
     /**
@@ -378,22 +491,40 @@ public final class PyTorchModelLoader {
      * Load weights and convert to a trainable Module.
      * The module structure mirrors the original Python model.
      *
-     * @param file Weight file (.safetensors, .pt, .pth)
-     * @return Trainable WeightBagModule
+     * <p>For ONNX models, use {@link #loadOnnxAsJitModule(Path)} for full
+     * inference and training support, or use this method for inference-only.</p>
+     *
+     * @param file Weight file (.safetensors, .pt, .pth, .bin, .pkl, .onnx)
+     * @return Trainable WeightBagModule (or ONNXModuleWrapper for ONNX)
      */
-    public static WeightBagModule loadAsModule(File file) throws IOException {
-        return ModelWeights.toModule(file);
+    public static Module loadAsModule(File file) throws IOException {
+        ModelType type = detectModelType(file);
+        switch (type) {
+            case BIN_MICROLENS:
+            case BIN_NAMED:
+            case BIN_GENERIC:
+            case PICKLE:
+                // Binary formats and standalone pickle - load as state_dict first
+                Map<String, Tensor> sd = loadBin(file);
+                return new WeightBagModule(sd, true, true, true, null);
+            case ONNX:
+                // ONNX models - return a wrapper for inference only
+                // For training support, use loadOnnxAsJitModule()
+                return OnnxToJitBridge.loadAsModule(file.toPath());
+            default:
+                return ModelWeights.toModule(file);
+        }
     }
 
-    public static WeightBagModule loadAsModule(Path path) throws IOException {
+    public static Module loadAsModule(Path path) throws IOException {
         return loadAsModule(path.toFile());
     }
 
-    public static WeightBagModule loadAsModule(String path) throws IOException {
+    public static Module loadAsModule(String path) throws IOException {
         return loadAsModule(new File(path));
     }
 
-    public static WeightBagModule loadAsModule(File file, boolean requiresGrad) throws IOException {
+    public static Module loadAsModule(File file, boolean requiresGrad) throws IOException {
         return ModelWeights.toModule(file, requiresGrad);
     }
 
@@ -938,7 +1069,7 @@ public final class PyTorchModelLoader {
             System.out.printf("  %-60s %-15s %s%n",
                 entry.getKey(),
                 formatShape(t.sizes()),
-                t.dtype().toString());
+                t.dtype().toScalarType().toString());
             totalParams += t.numel();
             totalBytes += t.element_size() * t.numel();
         }

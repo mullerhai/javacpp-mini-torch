@@ -128,7 +128,7 @@ public final class PPOXTrainer extends BaseTrainer {
     }
 
     @Override
-    protected Tensor computeLoss(Map<String, Tensor> batch) {
+    public Tensor computeLoss(Map<String, Tensor> batch) {
         // Extract necessary tensors
         Tensor logProbs = require(batch, "log_probs");
         Tensor oldLogProbs = require(batch, "old_log_probs");

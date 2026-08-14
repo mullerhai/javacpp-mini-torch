@@ -1,11 +1,11 @@
 package org.bytedeco.pytorch.rl.env;
 
 import org.bytedeco.pytorch.Tensor;
-import org.bytedeco.pytorch.rl.StepResult2;
+import org.bytedeco.pytorch.rl.StepResult;
 
 import static org.bytedeco.pytorch.global.torch.tensor;
 
-public class TradingEnv {
+public class TradingEnv implements Env {
     private final float[] prices;       // 原始价格序列 (Close)
     private final float[][] features;   // 预处理后的特征 (如 RSI, ROC)
     private int currentIndex;
@@ -14,6 +14,41 @@ public class TradingEnv {
     private double balance = 10000.0;   // 初始资金
     private double shares = 0;          // 持仓数
     private final double feeRate = 0.0001; // 万一手续费
+
+    // ==================== Env Interface Implementation ====================
+
+    @Override
+    public StepResult reset() {
+        this.currentIndex = 20;
+        this.balance = 10000.0;
+        this.shares = 0;
+        this.entryPrice = 0.0;
+        return currentStepResult();
+    }
+
+    @Override
+    public StepResult step(int action) {
+        return step((float) action);
+    }
+
+    @Override
+    public int actionSpaceSize() {
+        return 1; // 连续动作空间，用 float 表示
+    }
+
+    private StepResult currentStepResult() {
+        float[] rawObs = features[currentIndex];
+        float[] obsWithAccount = new float[6];
+        System.arraycopy(rawObs, 0, obsWithAccount, 0, 4);
+        obsWithAccount[4] = (shares > 0) ? 1.0f : -1.0f;
+        double currentPnL = (shares > 0) ? (prices[currentIndex] - entryPrice) / entryPrice : 0;
+        obsWithAccount[5] = (float) currentPnL * 10.0f;
+        Tensor observation = tensor(obsWithAccount).unsqueeze(0);
+        boolean done = (currentIndex >= prices.length - 1);
+        return new StepResult(observation, 0.0, done);
+    }
+
+    // ==================== Existing Methods ====================
 
     public Tensor getCurrentStateTensor() {
         float[] rawObs = features[currentIndex];
@@ -24,8 +59,6 @@ public class TradingEnv {
     }
 
     public Tensor getCurrentStateTensor2() {
-        // 这里的 Tensor.fromArray 是基础算子，不会产生递归
-        // 返回 [1, FeatureDim]
         return tensor(this.features[currentIndex]).unsqueeze(0);
     }
     public TradingEnv(float[] prices, float[][] features) {
@@ -40,7 +73,7 @@ public class TradingEnv {
      * @param action 模型的预测值（通常在 -2.0 到 2.0 之间）
      * @return 包含下一步观察值、奖励和结束标志的结果对象
      */
-    public StepResult2 step(float action) {
+    public StepResult step(float action) {
         // 1. 获取当前和下一步的价格数据
         double currentPrice = prices[currentIndex];
         double nextPrice = prices[currentIndex + 1];
@@ -116,9 +149,9 @@ public class TradingEnv {
 
         // --- 8. 返回结果 ---
         Tensor observation = tensor(obsWithAccount).unsqueeze(0);
-        return new StepResult2(observation, (float) reward, done);
+        return new StepResult(observation, reward, done);
     }
-    public StepResult2 step7(float action) {
+    public StepResult step7(float action) {
         // --- 1. 基础状态准备 ---
         double currentPrice = prices[currentIndex];
         double nextPrice = prices[currentIndex + 1]; // 预看下一步用于算奖励
@@ -191,13 +224,13 @@ public class TradingEnv {
         obsWithState[5] = (float) currentPnL * 10.0f; // 放大 10 倍，增强神经网络感知力
 
         // --- 6. 返回结果 ---
-        return new StepResult2(
+        return new StepResult(
                 tensor(obsWithState).unsqueeze(0),
-                (float) reward,
+                reward,
                 done
         );
     }
-    public StepResult2 step6(float action) {
+    public StepResult step6(float action) {
         // --- 1. 初始化当前步数据 ---
         double currentPrice = prices[currentIndex];
         double prevNetWorth = balance + (shares * currentPrice);
@@ -264,13 +297,13 @@ public class TradingEnv {
         // --- 6. 封装结果 ---
         Tensor observation = tensor(obsWithState).unsqueeze(0);
 
-        return new StepResult2(
+        return new StepResult(
                 observation,
-                (float) reward,
+                reward,
                 done
         );
     }
-    public StepResult2 step5(float action) {
+    public StepResult step5(float action) {
         double currentPrice = prices[currentIndex];
         double prevNetWorth = balance + (shares * currentPrice);
 
@@ -327,13 +360,13 @@ public class TradingEnv {
         System.arraycopy(rawObs, 0, obsWithState, 0, 4);
         obsWithState[4] = (shares > 0) ? 1.0f : -1.0f;
 
-        return new StepResult2(
+        return new StepResult(
                 tensor(obsWithState).unsqueeze(0),
-                (float) reward,
+                reward,
                 done
         );
     }
-    public StepResult2 step4(float action) {
+    public StepResult step4(float action) {
         // 1. 计算操作前的净值
         double currentPrice = prices[currentIndex];
         double prevNetWorth = balance + (shares * currentPrice);
@@ -383,13 +416,13 @@ public class TradingEnv {
         System.arraycopy(rawObs, 0, obsWithState, 0, rawObs.length);
         obsWithState[rawObs.length] = (shares > 0) ? 1.0f : -1.0f; // 告诉模型你手里有没有货
 
-        return new StepResult2(
+        return new StepResult(
                 tensor(obsWithState).unsqueeze(0), // 观察值 Tensor
-                (float) reward,
+                reward,
                 done
         );
     }
-    public StepResult2 step2(int action) {
+    public StepResult step2(int action) {
         float currentPrice = prices[currentIndex];
         double prevNetWorth = balance + shares * currentPrice;
 
@@ -413,13 +446,6 @@ public class TradingEnv {
         // 构造状态 Tensor [1, FeatureSize]
         Tensor obs = tensor(features[currentIndex]).unsqueeze(0);
 
-        return new StepResult2(obs, reward, done);
-    }
-
-    public void reset() {
-        this.currentIndex = 20;
-        this.balance = 10000.0;
-        this.shares = 0;
-
+        return new StepResult(obs, reward, done);
     }
 }

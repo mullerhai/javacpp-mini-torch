@@ -118,7 +118,7 @@ public final class RLOOTrainer extends BaseTrainer {
     }
 
     @Override
-    protected Tensor computeLoss(Map<String, Tensor> batch) {
+    public Tensor computeLoss(Map<String, Tensor> batch) {
         // Extract rewards
         Tensor rewards = require(batch, "rewards");
 

@@ -147,7 +147,7 @@ public final class RMRTTrainer extends BaseTrainer {
     }
 
     @Override
-    protected Tensor computeLoss(Map<String, Tensor> batch) {
+    public Tensor computeLoss(Map<String, Tensor> batch) {
         switch (mode) {
             case REWARD_ONLY:
                 return computeRewardLoss(batch);

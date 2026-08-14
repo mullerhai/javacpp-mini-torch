@@ -558,28 +558,36 @@ public final class TorchPthReader {
                         break;
                     }
                     case TUPLE1: {
-                        Object a = stack.remove(stack.size() - 1);
-                        stack.add(new Object[]{a});
+                        if (stack.size() >= 1) {
+                            Object a = stack.remove(stack.size() - 1);
+                            stack.add(new Object[]{a});
+                        }
                         break;
                     }
                     case TUPLE2: {
-                        Object b = stack.remove(stack.size() - 1);
-                        Object a = stack.remove(stack.size() - 1);
-                        stack.add(new Object[]{a, b});
+                        if (stack.size() >= 2) {
+                            Object b = stack.remove(stack.size() - 1);
+                            Object a = stack.remove(stack.size() - 1);
+                            stack.add(new Object[]{a, b});
+                        }
                         break;
                     }
                     case TUPLE3: {
-                        Object c = stack.remove(stack.size() - 1);
-                        Object b = stack.remove(stack.size() - 1);
-                        Object a = stack.remove(stack.size() - 1);
-                        stack.add(new Object[]{a, b, c});
+                        if (stack.size() >= 3) {
+                            Object c = stack.remove(stack.size() - 1);
+                            Object b = stack.remove(stack.size() - 1);
+                            Object a = stack.remove(stack.size() - 1);
+                            stack.add(new Object[]{a, b, c});
+                        }
                         break;
                     }
                     case APPEND: {
-                        Object v = stack.remove(stack.size() - 1);
-                        @SuppressWarnings("unchecked")
-                        List<Object> list = (List<Object>) stack.get(stack.size() - 1);
-                        list.add(v);
+                        if (stack.size() >= 2) {
+                            Object v = stack.remove(stack.size() - 1);
+                            @SuppressWarnings("unchecked")
+                            List<Object> list = (List<Object>) stack.get(stack.size() - 1);
+                            list.add(v);
+                        }
                         break;
                     }
                     case APPENDS: {
@@ -591,11 +599,13 @@ public final class TorchPthReader {
                         break;
                     }
                     case SETITEM: {
-                        Object v = stack.remove(stack.size() - 1);
-                        Object k = stack.remove(stack.size() - 1);
-                        @SuppressWarnings("unchecked")
-                        Map<Object, Object> dict = (Map<Object, Object>) stack.get(stack.size() - 1);
-                        dict.put(k, v);
+                        if (stack.size() >= 3) {
+                            Object v = stack.remove(stack.size() - 1);
+                            Object k = stack.remove(stack.size() - 1);
+                            @SuppressWarnings("unchecked")
+                            Map<Object, Object> dict = (Map<Object, Object>) stack.get(stack.size() - 1);
+                            dict.put(k, v);
+                        }
                         break;
                     }
                     case SETITEMS: {
@@ -618,21 +628,29 @@ public final class TorchPthReader {
                     }
                     case BINPUT: {
                         int i = in.readUnsignedByte();
-                        memo.put(i, stack.get(stack.size() - 1));
+                        if (!stack.isEmpty()) {
+                            memo.put(i, stack.get(stack.size() - 1));
+                        }
                         break;
                     }
                     case LONG_BINPUT: {
                         int i = Integer.reverseBytes(in.readInt());
-                        memo.put(i, stack.get(stack.size() - 1));
+                        if (!stack.isEmpty()) {
+                            memo.put(i, stack.get(stack.size() - 1));
+                        }
                         break;
                     }
                     case MEMOIZE: {
-                        memo.put(memo.size(), stack.get(stack.size() - 1));
+                        if (!stack.isEmpty()) {
+                            memo.put(memo.size(), stack.get(stack.size() - 1));
+                        }
                         break;
                     }
                     case BINGET: {
                         int i = in.readUnsignedByte();
-                        stack.add(memo.get(i));
+                        if (i < memo.size()) {
+                            stack.add(memo.get(i));
+                        }
                         break;
                     }
                     case LONG_BINGET: {
@@ -1338,54 +1356,72 @@ public final class TorchPthReader {
                             stack.add(new Object[0]);
                             break;
                         case TUPLE1: {
-                            Object a = stack.remove(stack.size() - 1);
-                            stack.add(new Object[]{a});
+                            if (stack.size() >= 1) {
+                                Object a = stack.remove(stack.size() - 1);
+                                stack.add(new Object[]{a});
+                            }
                             break;
                         }
                         case TUPLE2: {
-                            Object b = stack.remove(stack.size() - 1);
-                            Object a = stack.remove(stack.size() - 1);
-                            stack.add(new Object[]{a, b});
+                            if (stack.size() >= 2) {
+                                Object b = stack.remove(stack.size() - 1);
+                                Object a = stack.remove(stack.size() - 1);
+                                stack.add(new Object[]{a, b});
+                            }
                             break;
                         }
                         case TUPLE3: {
-                            Object c = stack.remove(stack.size() - 1);
-                            Object b = stack.remove(stack.size() - 1);
-                            Object a = stack.remove(stack.size() - 1);
-                            stack.add(new Object[]{a, b, c});
+                            if (stack.size() >= 3) {
+                                Object c = stack.remove(stack.size() - 1);
+                                Object b = stack.remove(stack.size() - 1);
+                                Object a = stack.remove(stack.size() - 1);
+                                stack.add(new Object[]{a, b, c});
+                            }
                             break;
                         }
                         case TUPLE:
                         case LIST: {
-                            int start = marks.isEmpty() ? 0 : marks.remove(marks.size() - 1);
-                            Object[] arr = stack.subList(start, stack.size()).toArray();
-                            stack.subList(start, stack.size()).clear();
-                            stack.add(arr);
+                            if (!marks.isEmpty()) {
+                                int start = marks.remove(marks.size() - 1);
+                                if (start <= stack.size()) {
+                                    Object[] arr = stack.subList(start, stack.size()).toArray();
+                                    stack.subList(start, stack.size()).clear();
+                                    stack.add(arr);
+                                }
+                            }
                             break;
                         }
                         case DICT: {
-                            int start = marks.isEmpty() ? 0 : marks.remove(marks.size() - 1);
-                            Map<Object, Object> dict = new LinkedHashMap<>();
-                            for (int i = start; i + 1 < stack.size(); i += 2) {
-                                dict.put(stack.get(i), stack.get(i + 1));
+                            if (!marks.isEmpty()) {
+                                int start = marks.remove(marks.size() - 1);
+                                if (start + 1 <= stack.size()) {
+                                    Map<Object, Object> dict = new LinkedHashMap<>();
+                                    for (int i = start; i + 1 < stack.size(); i += 2) {
+                                        dict.put(stack.get(i), stack.get(i + 1));
+                                    }
+                                    stack.subList(start, stack.size()).clear();
+                                    stack.add(dict);
+                                }
                             }
-                            stack.subList(start, stack.size()).clear();
-                            stack.add(dict);
                             break;
                         }
                         case APPEND: {
-                            Object v = stack.remove(stack.size() - 1);
-                            @SuppressWarnings("unchecked")
-                            List<Object> list = (List<Object>) stack.get(stack.size() - 1);
-                            list.add(v);
+                            if (stack.size() >= 2) {
+                                Object v = stack.remove(stack.size() - 1);
+                                @SuppressWarnings("unchecked")
+                                List<Object> list = (List<Object>) stack.get(stack.size() - 1);
+                                list.add(v);
+                            }
                             break;
                         }
                         case SETITEM: {
-                            Object v = stack.remove(stack.size() - 1);
-                            Object k = stack.remove(stack.size() - 1);
-                            @SuppressWarnings("unchecked")
-                            Map<Object, Object> dict = (Map<Object, Object>) stack.get(stack.size() - 1);
-                            dict.put(k, v);
+                            if (stack.size() >= 3) {
+                                Object v = stack.remove(stack.size() - 1);
+                                Object k = stack.remove(stack.size() - 1);
+                                @SuppressWarnings("unchecked")
+                                Map<Object, Object> dict = (Map<Object, Object>) stack.get(stack.size() - 1);
+                                dict.put(k, v);
+                            }
                             break;
                         }
                         case BINGET: {
@@ -1459,10 +1495,14 @@ public final class TorchPthReader {
                                             } else if (a[0] instanceof String) {
                                                 innerBytes = ((String) a[0]).getBytes(java.nio.charset.StandardCharsets.UTF_8);
                                             }
-                                            if (innerBytes != null) {
+                                            if (innerBytes != null && innerBytes.length > 0) {
                                                 // Recursively extract storage from inner bytes
-                                                Map<String, byte[]> innerStorages = extractEmbeddedStorages(innerBytes);
-                                                storages.putAll(innerStorages);
+                                                try {
+                                                    Map<String, byte[]> innerStorages = extractEmbeddedStorages(innerBytes);
+                                                    storages.putAll(innerStorages);
+                                                } catch (Exception ignored) {
+                                                    // Ignore extraction errors
+                                                }
                                             }
                                         }
                                     }
