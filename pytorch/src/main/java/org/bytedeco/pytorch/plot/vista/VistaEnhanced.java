@@ -1,15 +1,8 @@
 package org.bytedeco.pytorch.plot.vista;
 
-import java.io.File;
-import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
+import java.io.*;
+import java.nio.file.*;
 import java.util.*;
-import org.bytedeco.pytorch.Tensor;
-import org.bytedeco.pytorch.data.safetensors.SafeTensors;
-import org.bytedeco.pytorch.data.serialize.*;
-import org.bytedeco.pytorch.inductor.AOTIModelPackageLoader;
-import org.bytedeco.pytorch.nn.Module;
 
 /**
  * Enhanced Vista for model visualization with comprehensive format support
@@ -103,119 +96,13 @@ public final class VistaEnhanced {
         if (file == null || !file.exists()) {
             return ModelFormat.UNKNOWN;
         }
-
-        String name = file.getName().toLowerCase(Locale.ROOT);
-
-        // Extension-based detection
-        if (name.endsWith(".safetensors")) {
-            return ModelFormat.SAFETENSORS;
-        }
-        if (name.endsWith(".structure.json") || (name.endsWith(".json") && name.contains("structure"))) {
-            return ModelFormat.STRUCTURE_JSON;
-        }
-        if (name.endsWith(".aoti")) {
-            return ModelFormat.JAVACPP_AOTI;
-        }
-
-        // ONNX detection
-        if (name.endsWith(".onnx")) {
-            return ModelFormat.ONNX;
-        }
-
-        // PT2 detection
-        if (name.endsWith(".pt2")) {
-            // Try to detect if it's Python or JavaCPP
-            if (isPythonPklZip(file)) {
-                return ModelFormat.PYTHON_PT2;
-            }
-            return ModelFormat.JAVACPP_PT2;
-        }
-
-        // PTE detection
-        if (name.endsWith(".pte")) {
-            return ModelFormat.PYTHON_PTE;
-        }
-
-        // .pt/.pth detection
-        if (name.endsWith(".pt") || name.endsWith(".pth")) {
-            // Check content
-            if (isTorchScript(file)) {
-                return ModelFormat.PYTHON_TORCHSCRIPT;
-            }
-            if (isPythonPklZip(file)) {
-                return ModelFormat.PYTHON_PT;
-            }
-            return ModelFormat.JAVACPP_PT;
-        }
-
-        // Directory detection
-        if (file.isDirectory()) {
-            if (looksLikeAotiPackage(file.toPath())) {
-                return ModelFormat.JAVACPP_AOTI;
-            }
-        }
-
-        return ModelFormat.UNKNOWN;
+        ModelInfoParser.ModelFormat format = ModelInfoParser.detectFormat(file);
+        return convertFormat(format);
     }
 
-    private static boolean isPythonPklZip(File file) throws IOException {
-        try (var fis = Files.newInputStream(file.toPath())) {
-            byte[] header = new byte[8];
-            int read = fis.read(header);
-            if (read < 2) return false;
-
-            // ZIP magic: PK
-            if (header[0] == 0x50 && header[1] == 0x4B) {
-                return true;
-            }
-
-            // Pickle magic: 0x80-0x8F
-            if ((header[0] & 0xFF) >= 0x80 && (header[0] & 0xFF) <= 0x8F) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private static boolean isTorchScript(File file) throws IOException {
-        try (var fis = Files.newInputStream(file.toPath())) {
-            byte[] header = new byte[12];
-            int read = fis.read(header);
-            if (read < 8) return false;
-
-            // TorchScript ZIP has 'scripts' entry
-            if (header[0] == 0x50 && header[1] == 0x4B) { // PK
-                byte[] scripts = "scripts".getBytes();
-                byte[] allBytes = Files.readAllBytes(file.toPath());
-                for (int i = 0; i < allBytes.length - 7; i++) {
-                    if (allBytes[i] == scripts[0]) {
-                        boolean match = true;
-                        for (int j = 1; j < scripts.length && i + j < allBytes.length; j++) {
-                            if (allBytes[i + j] != scripts[j]) {
-                                match = false;
-                                break;
-                            }
-                        }
-                        if (match) return true;
-                    }
-                }
-            }
-        }
-        return false;
-    }
-
-    private static boolean looksLikeAotiPackage(Path dir) {
-        try {
-            if (!Files.isDirectory(dir)) return false;
-            return Files.exists(dir.resolve("data.pt"))
-                    || Files.exists(dir.resolve("data"))
-                    || Files.list(dir).anyMatch(p -> {
-                        String n = p.getFileName().toString().toLowerCase();
-                        return n.endsWith(".so") || n.contains("model") || n.equals("metadata.json");
-                    });
-        } catch (Exception e) {
-            return false;
-        }
+    private static boolean looksLikeAotiPackage(Path dir) throws IOException {
+        return org.bytedeco.pytorch.plot.vista.VistaModelFiles.detect(dir.toFile())
+               == org.bytedeco.pytorch.plot.vista.VistaModelFiles.Kind.AOTI_PACKAGE;
     }
 
     // =========================================================================
@@ -316,151 +203,49 @@ public final class VistaEnhanced {
             throw new IOException("File not found: " + file);
         }
 
-        ModelFormat format = detectFormat(file);
-        String name = extractModelName(file);
-        long fileSize = file.length();
+        // Use ModelInfoParser for comprehensive parsing
+        ModelInfoParser.ModelInfo info = ModelInfoParser.parse(file);
 
-        Map<String, Tensor> weights = new LinkedHashMap<>();
-        StructureSpec spec = null;
-        Module module = null;
+        // Convert to ModelMeta format
+        String name = info.getName();
+        ModelFormat format = convertFormat(info.getFormat());
+        long fileSize = info.getFileSize();
+        long paramCount = info.getTotalParams();
+
         List<LayerInfo> layers = new ArrayList<>();
+        for (ModelInfoParser.LayerInfo li : info.getLayers()) {
+            layers.add(new LayerInfo(
+                li.getName(),
+                li.getType(),
+                li.getParamCount(),
+                li.getOutputShape(),
+                li.getAttrs()
+            ));
+        }
+
         Map<String, Object> extra = new LinkedHashMap<>();
-        long paramCount = 0;
+        extra.putAll(info.getMetadata());
+        extra.put("parseErrors", info.getErrors());
+        extra.put("hasErrors", info.hasErrors());
 
-        // Load based on format
+        return new ModelMeta(name, format, paramCount, layers.size(), layers, extra, fileSize, info.getSourcePath());
+    }
+
+    private static ModelFormat convertFormat(ModelInfoParser.ModelFormat format) {
+        if (format == null) return ModelFormat.UNKNOWN;
         switch (format) {
-            case SAFETENSORS:
-                weights = SafeTensors.loadAsTensors(file, false);
-                break;
-            case PYTHON_PT:
-            case JAVACPP_PT:
-                try {
-                    WeightBagModule bag = WeightBagModule.fromPythonPth(file, false);
-                    module = bag;
-                    for (String key : bag.stateDict().keySet()) {
-                        weights.put(key, bag.stateDict().get(key));
-                    }
-                    try {
-                        spec = StructureSpec.fromModule(bag);
-                    } catch (Exception ignored) {}
-                } catch (Exception e) {
-                    // Try native load
-                    weights = ModelWeights.load(file, false);
-                }
-                break;
-            case JAVACPP_AOTI:
-                // AOTI - load metadata only
-                try {
-                    AOTIModelPackageLoader loader = new AOTIModelPackageLoader(file.getAbsolutePath());
-                    // Extract metadata
-                } catch (Exception ignored) {}
-                break;
-            case ONNX:
-                // ONNX - load model info
-                try {
-                    var onnxSession = org.bytedeco.pytorch.serving.onnxruntime.ONNXSession.load(file.getAbsolutePath());
-                    var onnxInfo = onnxSession.getModelInfo();
-                    // Build layers from input/output tensors
-                    for (var input : onnxInfo.getInputs()) {
-                        long size = input.getNumElements();
-                        layers.add(new LayerInfo(
-                            "input_" + input.getName(),
-                            "Input(" + input.getElementTypeString() + ")",
-                            size,
-                            input.getShapeString(),
-                            Map.of("type", input.getElementTypeString())
-                        ));
-                        paramCount += size;
-                    }
-                    for (var output : onnxInfo.getOutputs()) {
-                        long size = output.getNumElements();
-                        layers.add(new LayerInfo(
-                            "output_" + output.getName(),
-                            "Output(" + output.getElementTypeString() + ")",
-                            size,
-                            output.getShapeString(),
-                            Map.of("type", output.getElementTypeString())
-                        ));
-                    }
-                    extra.put("producerName", onnxInfo.getProducerName());
-                    extra.put("graphName", onnxInfo.getGraphName());
-                    extra.put("irVersion", onnxInfo.getIrVersion());
-                    onnxSession.close();
-                } catch (Exception ignored) {}
-                break;
-            case STRUCTURE_JSON:
-                spec = StructureSpec.load(file);
-                break;
-            default:
-                // Try generic load
-                try {
-                    weights = ModelWeights.load(file, false);
-                } catch (Exception ignored) {}
+            case SAFETENSORS: return ModelFormat.SAFETENSORS;
+            case PYTHON_PKL:
+            case PYTHON_PTH: return ModelFormat.PYTHON_PT;
+            case JAVACPP_PT: return ModelFormat.JAVACPP_PT;
+            case AOTI_PACKAGE: return ModelFormat.JAVACPP_AOTI;
+            case ONNX: return ModelFormat.ONNX;
+            case STRUCTURE_JSON: return ModelFormat.STRUCTURE_JSON;
+            case TORCHSCRIPT: return ModelFormat.PYTHON_TORCHSCRIPT;
+            case PT2_FORMAT: return ModelFormat.PYTHON_PT2;
+            case HUGGINGFACE_BIN: return ModelFormat.PYTHON_PT;
+            default: return ModelFormat.UNKNOWN;
         }
-
-        // Calculate stats (paramCount, layers, extra already initialized above for ONNX branch)
-        for (Tensor t : weights.values()) {
-            paramCount += t.numel();
-        }
-
-        // Build layer info
-        for (Map.Entry<String, Tensor> entry : weights.entrySet()) {
-            String layerName = entry.getKey();
-            Tensor tensor = entry.getValue();
-            String layerType = inferLayerType(layerName);
-            long layerParams = tensor.numel();
-            String shape = formatShape(tensor);
-
-            Map<String, Object> attrs = new LinkedHashMap<>();
-            attrs.put("dtype", tensor.dtype().toString());
-            attrs.put("shape", shape);
-
-            layers.add(new LayerInfo(layerName, layerType, layerParams, shape, attrs));
-        }
-
-        // Extra metadata
-        extra.put("detectedFormat", format.displayName);
-        extra.put("isZip", isPythonPklZip(file));
-        extra.put("hasStructure", spec != null);
-        extra.put("weightCount", weights.size());
-
-        return new ModelMeta(name, format, paramCount, layers.size(), layers, extra, fileSize, file.getAbsolutePath());
-    }
-
-    private static String extractModelName(File file) {
-        String name = file.getName();
-        // Remove extension
-        int dotIdx = name.lastIndexOf('.');
-        if (dotIdx > 0) {
-            name = name.substring(0, dotIdx);
-        }
-        // Clean up
-        name = name.replaceAll("[._-]*(state_dict|weights|model|pytorch|torch)", "");
-        if (name.isEmpty()) {
-            name = file.getName();
-        }
-        return name;
-    }
-
-    private static String inferLayerType(String name) {
-        name = name.toLowerCase();
-        if (name.contains("weight")) {
-            if (name.contains("embed")) return "Embedding";
-            if (name.contains("bias")) return "Bias";
-            return "Linear/Weight";
-        }
-        if (name.contains("bias")) return "Bias";
-        if (name.contains("running_mean") || name.contains("running_var")) return "BatchNorm/Running";
-        if (name.contains("num_batches_tracked")) return "BatchNorm/Tracker";
-        return "Parameter";
-    }
-
-    private static String formatShape(Tensor t) {
-        long[] sizes = new long[(int) t.dim()];
-        for (int i = 0; i < sizes.length; i++) {
-            sizes[i] = t.size(i);
-        }
-        return Arrays.toString(sizes);
     }
 
     // =========================================================================
@@ -526,12 +311,57 @@ public final class VistaEnhanced {
         modelMeta.put("kind", "model");
         modelMeta.put("name", meta.getName());
         modelMeta.put("format", meta.getFormat().displayName);
+        modelMeta.put("formatRaw", meta.getFormat().name());
         modelMeta.put("param_count", meta.getParamCount());
         modelMeta.put("param_count_formatted", meta.getFormattedParamCount());
         modelMeta.put("layer_count", meta.getLayerCount());
         modelMeta.put("file_size", meta.getFileSize());
         modelMeta.put("file_size_formatted", meta.getFormattedFileSize());
         modelMeta.put("source", meta.getSourcePath());
+
+        // Add extra metadata from parser
+        Map<String, Object> extra = meta.getExtra();
+        if (extra != null) {
+            // Add useful extra info
+            if (extra.containsKey("totalBytes")) {
+                modelMeta.put("total_bytes", extra.get("totalBytes"));
+                long bytes = ((Number) extra.get("totalBytes")).longValue();
+                if (bytes >= 1_000_000_000) {
+                    modelMeta.put("total_bytes_formatted", String.format("%.2fGB", bytes / 1_000_000_000.0));
+                } else if (bytes >= 1_000_000) {
+                    modelMeta.put("total_bytes_formatted", String.format("%.2fMB", bytes / 1_000_000.0));
+                } else if (bytes >= 1_000) {
+                    modelMeta.put("total_bytes_formatted", String.format("%.2fKB", bytes / 1_000.0));
+                }
+            }
+            if (extra.containsKey("producerName")) {
+                modelMeta.put("producer_name", extra.get("producerName"));
+            }
+            if (extra.containsKey("graphName")) {
+                modelMeta.put("graph_name", extra.get("graphName"));
+            }
+            if (extra.containsKey("version")) {
+                modelMeta.put("version", extra.get("version"));
+            }
+            if (extra.containsKey("irVersion")) {
+                modelMeta.put("ir_version", extra.get("irVersion"));
+            }
+            if (extra.containsKey("inputs")) {
+                modelMeta.put("inputs", extra.get("inputs"));
+            }
+            if (extra.containsKey("outputs")) {
+                modelMeta.put("outputs", extra.get("outputs"));
+            }
+            if (extra.containsKey("moduleTypes")) {
+                modelMeta.put("module_types", extra.get("moduleTypes"));
+            }
+            if (extra.containsKey("structureVersion")) {
+                modelMeta.put("structure_version", extra.get("structureVersion"));
+            }
+            if (extra.containsKey("hasStructure")) {
+                modelMeta.put("has_structure", extra.get("hasStructure"));
+            }
+        }
 
         // Add layers info
         List<Map<String, Object>> layerList = new ArrayList<>();
@@ -541,9 +371,17 @@ public final class VistaEnhanced {
             layerMap.put("type", layer.getType());
             layerMap.put("params", layer.getParamCount());
             layerMap.put("shape", layer.getOutputShape());
+            if (layer.getAttrs() != null) {
+                layerMap.put("attrs", layer.getAttrs());
+            }
             layerList.add(layerMap);
         }
         modelMeta.put("layers", layerList);
+
+        // Add parse errors if any
+        if (extra != null && extra.containsKey("hasErrors") && Boolean.TRUE.equals(extra.get("hasErrors"))) {
+            modelMeta.put("parse_errors", extra.get("parseErrors"));
+        }
 
         graph.nodeMeta().put("_model_meta_", modelMeta);
     }

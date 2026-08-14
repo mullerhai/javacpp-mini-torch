@@ -20,6 +20,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -129,8 +130,6 @@ public final class TorchPthReader {
     /** True if file looks like a ZIP-based torch.save archive. */
     public static boolean isZipTorch(File file) throws IOException {
         if (file == null || !file.isFile() || file.length() < 4) return false;
-        byte[] mag = Files.readAllBytes(file.toPath().toAbsolutePath());
-        // only need first 4 — avoid reading whole file for large models
         try (InputStream in = Files.newInputStream(file.toPath())) {
             byte[] m = in.readNBytes(4);
             return m.length == 4 && m[0] == 'P' && m[1] == 'K' && m[2] == 3 && m[3] == 4;
@@ -139,6 +138,49 @@ public final class TorchPthReader {
 
     public static boolean isZipTorch(Path path) throws IOException {
         return isZipTorch(path.toFile());
+    }
+
+    /** True if file looks like a legacy Python pickle (any protocol). */
+    public static boolean isStandalonePickle(File file) throws IOException {
+        if (file == null || !file.isFile() || file.length() < 2) return false;
+        try (InputStream in = Files.newInputStream(file.toPath())) {
+            int b0 = in.read();
+            if (b0 < 0) return false;
+            int b1 = in.read();
+            // protocols 0/1/2 use a single opcode; protocols 2+ start with PROTO (0x80)
+            // followed by a version byte 0x02..0x05
+            if (b0 == 0x80 && b1 >= 0x02 && b1 <= 0x05) return true;
+            // legacy protocols start with MARK + opcodes used for dict/tuple of tensors
+            return b0 == '(' || b0 == 'd' || b0 == '}' || b0 == 'l' || b0 == ']';
+        }
+    }
+
+    /**
+     * Load a standalone Python pickle file (e.g. {@code .pkl}) using the same
+     * {@link TorchUnpickler} engine as ZIP .pth/.pt files.
+     *
+     * <p>Handles pickles of a single {@code state_dict} or any nested object;
+     * nested {@code torch._utils._rebuild_tensor_v2} references are resolved
+     * via the {@code BINPERSID} stub that returns synthetic empty storages.
+     * Returns {@code null} if the file is not a pickle.</p>
+     */
+    public static Object loadStandalonePickle(File file) throws IOException {
+        if (file == null || !file.isFile()) {
+            throw new IOException("not a file: " + file);
+        }
+        if (!isStandalonePickle(file)) {
+            throw new IOException("Not a standalone pickle file: " + file);
+        }
+        byte[] pkl = Files.readAllBytes(file.toPath());
+        Map<String, byte[]> storages = Collections.emptyMap();
+        TorchUnpickler unp = new TorchUnpickler(pkl, storages, ByteOrder.LITTLE_ENDIAN);
+        return unp.load();
+    }
+
+    /** Convenience: load a standalone pickle and extract tensor map. */
+    public static Map<String, Tensor> loadPickleStateDict(File file) throws IOException {
+        // Use PickleUtils with our pure-Java unpickler for standalone pickles
+        return PickleUtils.loadPickleStateDict(file);
     }
 
     /**
@@ -672,6 +714,14 @@ public final class TorchPthReader {
             if (m.startsWith("torch") && ("Parameter".equals(n) || n.endsWith("Storage"))) {
                 return new GlobalRef(m, n);
             }
+            // torch.storage._load_from_bytes and _codecs.encode are handled as stubs
+            // that return decoded objects in applyReduce.
+            if ("torch.storage".equals(m) && "_load_from_bytes".equals(n)) {
+                return new GlobalRef("torch.storage", "_load_from_bytes", true);
+            }
+            if ("_codecs".equals(m) && "encode".equals(n)) {
+                return new GlobalRef("_codecs", "encode", true);
+            }
             // Inert stub for optimizer state, custom classes, etc. — no code exec.
             // Allows full training checkpoints (state_dict + optimizer + epoch) to parse.
             return new GlobalRef(m, n, /*stub=*/true);
@@ -686,6 +736,34 @@ public final class TorchPthReader {
             Object[] a = asArray(args);
 
             if (g.stub) {
+                // Handle torch.storage._load_from_bytes(GLOBALREF, pickled_bytes):
+                // In standalone pickles, args[0] can be:
+                //   - byte[] from BINBYTES/SHORT_BINBYTES/BINBYTES8, OR
+                //   - String from BINUNICODE (embedded pickle as UTF-8 string)
+                if ("torch.storage".equals(g.mod) && "_load_from_bytes".equals(g.name)
+                        && a.length >= 1) {
+                    byte[] inner = null;
+                    Object arg0 = a[0];
+                    if (arg0 instanceof byte[]) {
+                        inner = (byte[]) arg0;
+                    } else if (arg0 instanceof String) {
+                        // Embedded pickle as UTF-8 encoded string (BINUNICODE)
+                        inner = ((String) arg0).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                    }
+                    if (inner != null && inner.length > 0) {
+                        // Build a "storages" map by recursively parsing the inner pickle
+                        // to extract all storage bytes keyed by index.
+                        Map<String, byte[]> innerStorages = extractEmbeddedStorages(inner);
+                        TorchUnpickler innerUnp = new TorchUnpickler(inner, innerStorages,
+                                ByteOrder.LITTLE_ENDIAN);
+                        return innerUnp.load();
+                    }
+                }
+                // Handle _codecs.encode('latin1', bytes):
+                if ("_codecs".equals(g.mod) && "encode".equals(g.name)
+                        && a.length >= 2 && a[1] instanceof byte[]) {
+                    return a[1]; // return the raw bytes as-is
+                }
                 return new StubObject(g.mod + "." + g.name, args);
             }
 
@@ -749,8 +827,33 @@ public final class TorchPthReader {
         /**
          * persistent_load for ZIP: pid is typically
          * ("storage", storage_type, key, location, numel) as tuple/list.
+         * For embedded pickles, pid can be a simple integer/memo index.
          */
         private Object persistentLoad(Object pid) throws IOException {
+            // Handle embedded pickle case: pid is a memo index (Integer/Long)
+            if (pid instanceof Number) {
+                int idx = ((Number) pid).intValue();
+                // For embedded pickles, the memo dict is typically at index 0
+                Object memo0 = memo.get(0);
+                if (memo0 instanceof Map) {
+                    @SuppressWarnings("unchecked")
+                    Map<Object, Object> storageDict = (Map<Object, Object>) memo0;
+                    Object storage = storageDict.get(idx);
+                    if (storage instanceof byte[]) {
+                        // For torch storage, the storage type info should be in the args
+                        // passed to _rebuild_tensor_v2. We return a StorageView with
+                        // default FloatStorage type.
+                        return new StorageView("FloatStorage", (byte[]) storage);
+                    }
+                }
+                // Fallback: try direct memo lookup
+                Object direct = memo.get(idx);
+                if (direct instanceof byte[]) {
+                    return new StorageView("FloatStorage", (byte[]) direct);
+                }
+                throw new IOException("persistent_load: memo index " + idx + " not found or not bytes");
+            }
+
             Object[] a = asArray(pid);
             if (a.length < 5) {
                 // sometimes just key string
@@ -988,6 +1091,265 @@ public final class TorchPthReader {
                 for (int i = raw.length; i < 8; i++) v |= 0xFFL << (8 * i);
             }
             return v;
+        }
+
+        /**
+         * Extract storage bytes from an embedded pickle that uses PERSID references.
+         * The embedded pickle has a memo dict at index 0 that contains:
+         *   {0: storage_bytes, 1: storage_bytes, ...}
+         * Returns a map from storage key ("0", "1", ...) to raw byte data.
+         */
+        private static Map<String, byte[]> extractEmbeddedStorages(byte[] inner) {
+            Map<String, byte[]> storages = new HashMap<>();
+            try {
+                ByteArrayInputStream bais = new ByteArrayInputStream(inner);
+                DataInputStream dis = new DataInputStream(bais);
+                List<Object> stack = new ArrayList<>();
+                List<Integer> marks = new ArrayList<>();
+                Map<Integer, Object> memo = new HashMap<>();
+                int storageIdx = 0;
+
+                while (true) {
+                    int op = dis.read();
+                    if (op < 0) break;
+                    switch (op) {
+                        case PROTO:
+                            dis.readUnsignedByte();
+                            break;
+                        case MARK:
+                            marks.add(stack.size());
+                            break;
+                        case STOP:
+                            break;
+                        case NONE:
+                            stack.add(null);
+                            break;
+                        case NEWTRUE:
+                            stack.add(Boolean.TRUE);
+                            break;
+                        case NEWFALSE:
+                            stack.add(Boolean.FALSE);
+                            break;
+                        case BININT:
+                            stack.add(Integer.valueOf(Integer.reverseBytes(dis.readInt())));
+                            break;
+                        case BININT1:
+                            stack.add(Integer.valueOf(dis.readUnsignedByte()));
+                            break;
+                        case INT: {
+                            String s = readLineFrom(dis);
+                            if ("01".equals(s)) stack.add(Boolean.TRUE);
+                            else if ("00".equals(s)) stack.add(Boolean.FALSE);
+                            else stack.add(boxLong(Long.parseLong(s)));
+                            break;
+                        }
+                        case SHORT_BINSTRING: {
+                            int n = dis.readUnsignedByte();
+                            byte[] raw = new byte[n];
+                            dis.readFully(raw);
+                            stack.add(new String(raw, StandardCharsets.ISO_8859_1));
+                            break;
+                        }
+                        case BINSTRING: {
+                            int n = Integer.reverseBytes(dis.readInt());
+                            byte[] raw = new byte[n];
+                            dis.readFully(raw);
+                            stack.add(new String(raw, StandardCharsets.ISO_8859_1));
+                            break;
+                        }
+                        case SHORT_BINBYTES: {
+                            int n = dis.readUnsignedByte();
+                            byte[] raw = new byte[n];
+                            dis.readFully(raw);
+                            String key = String.valueOf(storageIdx++);
+                            storages.put(key, raw);
+                            stack.add(raw);
+                            break;
+                        }
+                        case BINBYTES: {
+                            int n = Integer.reverseBytes(dis.readInt());
+                            byte[] raw = new byte[n];
+                            dis.readFully(raw);
+                            String key = String.valueOf(storageIdx++);
+                            storages.put(key, raw);
+                            stack.add(raw);
+                            break;
+                        }
+                        case BINBYTES8: {
+                            long n = Long.reverseBytes(dis.readLong());
+                            byte[] raw = new byte[(int) n];
+                            dis.readFully(raw);
+                            String key = String.valueOf(storageIdx++);
+                            storages.put(key, raw);
+                            stack.add(raw);
+                            break;
+                        }
+                        case EMPTY_DICT:
+                            stack.add(new LinkedHashMap<>());
+                            break;
+                        case EMPTY_TUPLE:
+                            stack.add(new Object[0]);
+                            break;
+                        case TUPLE1: {
+                            Object a = stack.remove(stack.size() - 1);
+                            stack.add(new Object[]{a});
+                            break;
+                        }
+                        case TUPLE2: {
+                            Object b = stack.remove(stack.size() - 1);
+                            Object a = stack.remove(stack.size() - 1);
+                            stack.add(new Object[]{a, b});
+                            break;
+                        }
+                        case TUPLE3: {
+                            Object c = stack.remove(stack.size() - 1);
+                            Object b = stack.remove(stack.size() - 1);
+                            Object a = stack.remove(stack.size() - 1);
+                            stack.add(new Object[]{a, b, c});
+                            break;
+                        }
+                        case TUPLE:
+                        case LIST: {
+                            int start = marks.isEmpty() ? 0 : marks.remove(marks.size() - 1);
+                            Object[] arr = stack.subList(start, stack.size()).toArray();
+                            stack.subList(start, stack.size()).clear();
+                            stack.add(arr);
+                            break;
+                        }
+                        case DICT: {
+                            int start = marks.isEmpty() ? 0 : marks.remove(marks.size() - 1);
+                            Map<Object, Object> dict = new LinkedHashMap<>();
+                            for (int i = start; i + 1 < stack.size(); i += 2) {
+                                dict.put(stack.get(i), stack.get(i + 1));
+                            }
+                            stack.subList(start, stack.size()).clear();
+                            stack.add(dict);
+                            break;
+                        }
+                        case APPEND: {
+                            Object v = stack.remove(stack.size() - 1);
+                            @SuppressWarnings("unchecked")
+                            List<Object> list = (List<Object>) stack.get(stack.size() - 1);
+                            list.add(v);
+                            break;
+                        }
+                        case SETITEM: {
+                            Object v = stack.remove(stack.size() - 1);
+                            Object k = stack.remove(stack.size() - 1);
+                            @SuppressWarnings("unchecked")
+                            Map<Object, Object> dict = (Map<Object, Object>) stack.get(stack.size() - 1);
+                            dict.put(k, v);
+                            break;
+                        }
+                        case BINGET: {
+                            int idx = dis.readUnsignedByte();
+                            if (idx < memo.size()) {
+                                stack.add(memo.get(idx));
+                            }
+                            break;
+                        }
+                        case BINPERSID: {
+                            // Stack has the persistent ID (usually an Integer key)
+                            Object pid = stack.isEmpty() ? null : stack.remove(stack.size() - 1);
+                            // Get storage from memo dict at index 0
+                            Object memo0 = memo.get(0);
+                            if (memo0 instanceof Map) {
+                                @SuppressWarnings("unchecked")
+                                Map<Object, Object> storageDict = (Map<Object, Object>) memo0;
+                                // pid could be Integer (storage index) or a tuple like (type, key, ...)
+                                Object storage = storageDict.get(pid);
+                                if (storage instanceof byte[]) {
+                                    stack.add(storage);
+                                } else if (pid instanceof Number) {
+                                    // Try numeric index
+                                    storage = storageDict.get(((Number) pid).intValue());
+                                    if (storage instanceof byte[]) {
+                                        stack.add(storage);
+                                    }
+                                }
+                            }
+                            break;
+                        }
+                        case PERSID: {
+                            // String-based PERSID - skip for now
+                            readLineFrom(dis);
+                            break;
+                        }
+                        case BINUNICODE: {
+                            int n = Integer.reverseBytes(dis.readInt());
+                            byte[] raw = new byte[n];
+                            dis.readFully(raw);
+                            stack.add(new String(raw, StandardCharsets.UTF_8));
+                            break;
+                        }
+                        case BINPUT: {
+                            int idx = dis.readUnsignedByte();
+                            memo.put(idx, stack.isEmpty() ? null : stack.get(stack.size() - 1));
+                            break;
+                        }
+                        case GLOBAL: {
+                            String mod = readLineFrom(dis);
+                            String name = readLineFrom(dis);
+                            stack.add(new GlobalRef(mod, name, true));
+                            break;
+                        }
+                        case REDUCE: {
+                            // For _load_from_bytes: stack = [callable, args]
+                            // We need to extract the storage bytes from the embedded pickle
+                            if (stack.size() >= 2) {
+                                Object args = stack.remove(stack.size() - 1);
+                                Object callable = stack.remove(stack.size() - 1);
+                                // Check if this is _load_from_bytes
+                                if (callable instanceof GlobalRef) {
+                                    GlobalRef g = (GlobalRef) callable;
+                                    if ("torch.storage".equals(g.mod) && "_load_from_bytes".equals(g.name)) {
+                                        // args is the embedded pickle bytes
+                                        Object[] a = asArray(args);
+                                        if (a.length >= 1) {
+                                            byte[] innerBytes = null;
+                                            if (a[0] instanceof byte[]) {
+                                                innerBytes = (byte[]) a[0];
+                                            } else if (a[0] instanceof String) {
+                                                innerBytes = ((String) a[0]).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                                            }
+                                            if (innerBytes != null) {
+                                                // Recursively extract storage from inner bytes
+                                                Map<String, byte[]> innerStorages = extractEmbeddedStorages(innerBytes);
+                                                storages.putAll(innerStorages);
+                                            }
+                                        }
+                                    }
+                                }
+                                stack.add(new StubObject("reduce", args));
+                            }
+                            break;
+                        }
+                        case MEMOIZE:
+                            memo.put(memo.size(), stack.isEmpty() ? null : stack.get(stack.size() - 1));
+                            break;
+                        case FRAME:
+                            dis.readLong();
+                            break;
+                        default:
+                            // Skip unknown opcodes
+                            break;
+                    }
+                    if (op == STOP || op < 0) break;
+                }
+            } catch (IOException e) {
+                // Ignore parsing errors, return what we have
+            }
+            return storages;
+        }
+
+        private static String readLineFrom(InputStream in) throws IOException {
+            StringBuilder sb = new StringBuilder();
+            while (true) {
+                int c = in.read();
+                if (c < 0 || c == '\n') break;
+                if (c != '\r') sb.append((char) c);
+            }
+            return sb.toString();
         }
     }
 

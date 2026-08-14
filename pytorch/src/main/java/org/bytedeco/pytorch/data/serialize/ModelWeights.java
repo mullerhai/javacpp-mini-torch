@@ -95,6 +95,14 @@ public final class ModelWeights {
         }
 
         Format fmt = detect(file);
+        if (fmt == Format.UNKNOWN) {
+            // Fallback: standalone Python pickle (.pkl) — delegates to TorchPthReader.
+            try {
+                if (TorchPthReader.isStandalonePickle(file)) {
+                    return TorchPthReader.loadPickleStateDict(file);
+                }
+            } catch (IOException ignored) {}
+        }
         switch (fmt) {
             case SAFETENSORS:
                 return SafeTensors.loadFile(file, opts);

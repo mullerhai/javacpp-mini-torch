@@ -28,6 +28,9 @@ public class IndexFlat extends Index {
     protected transient float[] cachedSqNorms;
     protected transient boolean normsValid;
 
+    /** Use Project Panama SIMD for distance math when supported. */
+    protected transient boolean useVector = VectorDistanceKernel.AVAILABLE;
+
     /** Optional resident GPU tensor (semantic GpuIndexFlat). */
     protected transient Object gpuTensor; // org.bytedeco.pytorch.Tensor, avoid hard fail if missing
 
@@ -170,6 +173,16 @@ public class IndexFlat extends Index {
 
     public int capacity() { return capacity; }
 
+    /** Switch between scalar (legacy) and Project Panama SIMD distance math. */
+    public void setUseVector(boolean on) {
+        this.useVector = on && VectorDistanceKernel.AVAILABLE;
+    }
+
+    /** Whether the current IndexFlat uses the SIMD vector kernel. */
+    public boolean isUseVector() {
+        return useVector;
+    }
+
     // ---- GPU residency ----
 
     @Override
@@ -208,10 +221,11 @@ public class IndexFlat extends Index {
     }
 
     private DistanceBackend selectBackend() {
-        if (onGpu || DeviceSelector.resolve() == DeviceSelector.Device.CUDA) {
-            return CudaDistanceBackend.INSTANCE;
+        DistanceBackend resolved = DeviceSelector.resolveBackend();
+        if (onGpu && resolved == CpuDistanceBackend.INSTANCE) {
+            return CudaDistanceBackend.INSTANCE; // GPU-marked index always uses GPU path
         }
-        return CpuDistanceBackend.INSTANCE;
+        return resolved;
     }
 
     private void ensureCapacity(int need) {

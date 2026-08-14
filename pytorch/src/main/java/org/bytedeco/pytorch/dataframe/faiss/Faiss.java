@@ -164,8 +164,21 @@ public final class Faiss {
         return DeviceSelector.isCudaAvailable();
     }
 
+    public static boolean mps_available() {
+        return DeviceSelector.isMpsAvailable();
+    }
+
     public static void set_device(DeviceSelector.Device device) {
         DeviceSelector.setPreferred(device);
+    }
+
+    /** Switch FAISS backend execution mode. Affects all indexes / future searches. */
+    public static void set_backend_mode(DeviceSelector.BackendMode mode) {
+        DeviceSelector.setBackendMode(mode);
+    }
+
+    public static DeviceSelector.BackendMode backend_mode() {
+        return DeviceSelector.backendMode();
     }
 
     // ---- ID selector factory ----

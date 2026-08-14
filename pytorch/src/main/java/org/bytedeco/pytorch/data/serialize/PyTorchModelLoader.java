@@ -70,8 +70,10 @@ public final class PyTorchModelLoader {
         HDF5,
         /** Custom binary format (MicroLens .bin) */
         BIN_MICROLENS,
-        /** Generic binary format */
+        /** Generic binary format (raw dtype+ndims+dims+data, no names) */
         BIN_GENERIC,
+        /** Named tensor binary format (name_len + name + dtype + ndims + dims + data) */
+        BIN_NAMED,
         /** NumPy array format */
         NUMPY,
         /** Unknown format */
@@ -185,8 +187,73 @@ public final class PyTorchModelLoader {
             return ModelType.PICKLE;
         }
 
+        // Check for common pickle opcodes (TUPLE, etc.) in .bin files
+        // Pickle protocol 2+ starts with opcodes like TUPLE (0x71), DICT (0x64), etc.
+        if (file.getName().endsWith(".bin") && isPickleData(magic)) {
+            return ModelType.PICKLE;
+        }
+
+        // Check for named-tensor binary format: first 4 bytes = name length (small int, ≤ 256)
+        // followed by an ASCII string. The 'MLNS' check above rules out MLNS magic.
+        if (looksLikeNamedBinHeader(file)) {
+            return ModelType.BIN_NAMED;
+        }
+
         // Default: treat as binary state-dict
         return ModelType.BIN_GENERIC;
+    }
+
+    /**
+     * Check if the magic bytes indicate pickle data.
+     * Common pickle opcodes at start of file: TUPLE (0x71), DICT (0x64), etc.
+     */
+    private static boolean isPickleData(byte[] magic) {
+        if (magic == null || magic.length < 1) return false;
+        int b = magic[0] & 0xFF;
+        // Common pickle opcodes
+        // 0x71=TUPLE, 0x7d=SET, 0x75=SETITEM, 0x73=SETSUBSET, 0x7b=FROZENSET
+        // 0x64=DICT, 0x6c=LIST, 0x29=MARK, 0x2e=STOP, 0x94=MEMOIZE
+        return b == 0x71 || b == 0x7d || b == 0x75 || b == 0x73 || b == 0x7b
+            || b == 0x64 || b == 0x6c || b == 0x29 || b == 0x2e || b == 0x94;
+    }
+
+    /**
+     * True if the file starts with a small int32 name length followed by an ASCII
+     * string of that exact length (e.g. {@code 07 00 00 00 'fm_bias'}). This is
+     * the layout of the named-tensor .bin format used by {@code _generic.bin}.
+     */
+    private static boolean looksLikeNamedBinHeader(File file) throws IOException {
+        if (file.length() < 8) return false;
+        int firstInt;
+        try (java.io.InputStream in = java.nio.file.Files.newInputStream(file.toPath())) {
+            byte[] m4 = in.readNBytes(4);
+            if (m4.length < 4) return false;
+            firstInt = ((m4[0] & 0xff))
+                     | ((m4[1] & 0xff) << 8)
+                     | ((m4[2] & 0xff) << 16)
+                     | ((m4[3] & 0xff) << 24);
+            // Reject obvious non-format magic bytes early
+            if (firstInt == 'P' | (firstInt & 0xff) == 'M' || firstInt < 0) return false;
+            int nameLen = firstInt;
+            if (nameLen <= 0 || nameLen > 256) return false;
+            if (nameLen > file.length() - 4) return false;
+            // Read name + 8 trailing bytes (dtype + ndims).
+            byte[] rest = in.readNBytes(nameLen + 8);
+            if (rest.length < nameLen + 8) return false;
+            for (int i = 0; i < nameLen; i++) {
+                int b = rest[i] & 0xff;
+                if (b < 0x20 || b > 0x7e) return false;
+            }
+            int dtype = ((rest[nameLen] & 0xff))
+                      | ((rest[nameLen + 1] & 0xff) << 8)
+                      | ((rest[nameLen + 2] & 0xff) << 16)
+                      | ((rest[nameLen + 3] & 0xff) << 24);
+            int ndims = ((rest[nameLen + 4] & 0xff))
+                      | ((rest[nameLen + 5] & 0xff) << 8)
+                      | ((rest[nameLen + 6] & 0xff) << 16)
+                      | ((rest[nameLen + 7] & 0xff) << 24);
+            return dtype >= 0 && dtype <= 4 && ndims >= 0 && ndims <= 8;
+        }
     }
 
     public static ModelType detectModelType(Path path) throws IOException {
@@ -359,12 +426,15 @@ public final class PyTorchModelLoader {
         switch (type) {
             case BIN_MICROLENS:
                 return loadMicroLensBin(file, opts);
+            case BIN_NAMED:
+                return loadNamedBin(file, opts);
             case HDF5:
                 return loadHdf5Bin(file);
             case NUMPY:
                 return loadNumpyBin(file);
             case PICKLE:
-                return ModelWeights.load(file, opts);
+                // Standalone Python pickle (e.g. legacy .pkl) — dispatch to TorchPthReader
+                return TorchPthReader.loadPickleStateDict(file);
             default:
                 // Try to treat as generic binary tensor format
                 return loadGenericBin(file);
@@ -384,29 +454,30 @@ public final class PyTorchModelLoader {
                 throw new IOException("Not a MicroLens binary file: " + file);
             }
 
-            int version = raf.readInt();
-            int numTensors = raf.readInt();
+            int version = Integer.reverseBytes(raf.readInt());
+            int numTensors = Integer.reverseBytes(raf.readInt());
 
             for (int i = 0; i < numTensors; i++) {
-                int nameLen = raf.readInt();
+                int nameLen = Integer.reverseBytes(raf.readInt());
                 byte[] nameBytes = new byte[nameLen];
                 raf.readFully(nameBytes);
                 String name = new String(nameBytes, StandardCharsets.UTF_8);
 
-                int dtype = raf.readInt();
-                int ndims = raf.readInt();
+                int dtype = Integer.reverseBytes(raf.readInt());
+                int ndims = Integer.reverseBytes(raf.readInt());
                 long[] dims = new long[ndims];
                 for (int d = 0; d < ndims; d++) {
-                    dims[d] = raf.readLong();
+                    // Dimensions are stored as int32, not int64
+                    dims[d] = Integer.reverseBytes(raf.readInt()) & 0xFFFFFFFFL;
                 }
 
-                ScalarType scalarType = ScalarType.values()[dtype];
+                ScalarType scalarType = customBinScalarType(dtype);
                 long numel = 1;
                 for (long d : dims) numel *= d;
+                long dataSize = numel * customBinElementSize(dtype);
 
                 FileChannel channel = raf.getChannel();
                 long pos = channel.position();
-                long dataSize = numel * elementSize(scalarType);
                 java.nio.MappedByteBuffer buf = channel.map(FileChannel.MapMode.READ_ONLY, pos, dataSize);
                 org.bytedeco.javacpp.BytePointer ptr = new org.bytedeco.javacpp.BytePointer(buf);
                 TensorOptions topts = new TensorOptions().dtype(new ScalarTypeOptional(scalarType));
@@ -446,6 +517,60 @@ public final class PyTorchModelLoader {
     }
 
     /**
+     * Load named-tensor binary format.
+     * Layout: {@code name_len(int32) + name(name_len bytes) + dtype(int32) +
+     * ndims(int32) + dims[ndims] of int64 + data(numel * elementSize bytes)},
+     * repeated for every tensor. The first four bytes are the name length of the
+     * first tensor — no magic header, no version, no tensor count. The reader
+     * keeps streaming until EOF.
+     */
+    private static Map<String, Tensor> loadNamedBin(File file, LoadOptions opts) throws IOException {
+        Map<String, Tensor> result = new LinkedHashMap<>();
+        try (RandomAccessFile raf = new RandomAccessFile(file, "r")) {
+            long fileLen = raf.length();
+            FileChannel channel = raf.getChannel();
+            long pos = 0;
+            while (pos < fileLen - 8) {
+                raf.seek(pos);
+                int nameLen = Integer.reverseBytes(raf.readInt());
+                if (nameLen <= 0 || nameLen > 4096) {
+                    break;
+                }
+                byte[] nameBytes = new byte[nameLen];
+                raf.readFully(nameBytes);
+                String name = new String(nameBytes, StandardCharsets.UTF_8);
+
+                int dtype = Integer.reverseBytes(raf.readInt());
+                int ndims = Integer.reverseBytes(raf.readInt());
+                if (ndims < 0 || ndims > 8) break;
+                long[] dims = new long[ndims];
+                for (int d = 0; d < ndims; d++) dims[d] = Long.reverseBytes(raf.readLong());
+
+                ScalarType scalarType = customBinScalarType(dtype);
+                long numel = 1;
+                for (long d : dims) numel *= d;
+                long dataSize = numel * customBinElementSize(dtype);
+                if (dataSize <= 0) {
+                    dataSize = customBinElementSize(dtype);
+                }
+                long dataPos = channel.position();
+                if (dataPos + dataSize > fileLen) break;
+
+                java.nio.MappedByteBuffer buf = channel.map(
+                        FileChannel.MapMode.READ_ONLY, dataPos, dataSize);
+                org.bytedeco.javacpp.BytePointer ptr = new org.bytedeco.javacpp.BytePointer(buf);
+                long[] blobDims = ndims == 0 ? new long[]{1L} : dims;
+                TensorOptions topts = new TensorOptions().dtype(new ScalarTypeOptional(scalarType));
+                Tensor tensor = torch.from_blob(ptr, blobDims, topts);
+
+                result.put(name, tensor);
+                pos = dataPos + dataSize;
+            }
+        }
+        return SafeTensors.applyMapLocation(result, opts);
+    }
+
+    /**
      * Load generic binary tensor format.
      * Assumes: dtype(4) + ndims(4) + dims[n] + data
      */
@@ -457,23 +582,31 @@ public final class PyTorchModelLoader {
 
             while (pos < fileLen - 8) {
                 raf.seek(pos);
-                int dtype = raf.readInt();
-                int ndims = raf.readInt();
+                int dtype = Integer.reverseBytes(raf.readInt());
+                int ndims = Integer.reverseBytes(raf.readInt());
+                // Defensive: skip malformed records instead of crashing the whole file
+                if (ndims < 0 || ndims > 8 || dtype < 0 || dtype > 4) {
+                    break;
+                }
 
                 long[] dims = new long[ndims];
                 for (int d = 0; d < ndims; d++) {
-                    dims[d] = raf.readLong();
+                    dims[d] = Long.reverseBytes(raf.readLong());
                 }
 
-                ScalarType scalarType = dtype < ScalarType.values().length ?
-                    ScalarType.values()[dtype] : ScalarType.Float;
+                ScalarType scalarType = customBinScalarType(dtype);
 
                 long numel = 1;
                 for (long d : dims) numel *= d;
-                long dataSize = numel * elementSize(scalarType);
+                if (numel < 0 || numel > fileLen) {
+                    // Sanity check: tensor data can't exceed file size
+                    break;
+                }
+                long dataSize = numel * customBinElementSize(dtype);
 
                 FileChannel channel = raf.getChannel();
                 long dataPos = channel.position();
+                if (dataPos + dataSize > fileLen) break;
                 java.nio.MappedByteBuffer buf = channel.map(FileChannel.MapMode.READ_ONLY, dataPos, dataSize);
                 org.bytedeco.javacpp.BytePointer ptr = new org.bytedeco.javacpp.BytePointer(buf);
                 TensorOptions topts = new TensorOptions().dtype(new ScalarTypeOptional(scalarType));
@@ -505,6 +638,37 @@ public final class PyTorchModelLoader {
         }
     }
 
+    /**
+     * Map a MicroLens / Generic-bin dtype ordinal to {@link ScalarType}.
+     * The custom .bin writers use a compact table:
+     * <pre>
+     *   0 = Float32, 1 = Float64, 2 = Int32, 3 = Int64, 4 = Float16
+     * </pre>
+     * This is <em>not</em> the c10::ScalarType enum, so do not index
+     * {@code ScalarType.values()} directly.
+     */
+    private static ScalarType customBinScalarType(int code) {
+        switch (code) {
+            case 0:  return ScalarType.Float;
+            case 1:  return ScalarType.Double;
+            case 2:  return ScalarType.Int;
+            case 3:  return ScalarType.Long;
+            case 4:  return ScalarType.Half;
+            default: return ScalarType.Float;
+        }
+    }
+
+    private static long customBinElementSize(int code) {
+        switch (code) {
+            case 0:  return 4;   // Float32
+            case 1:  return 8;   // Float64
+            case 2:  return 4;   // Int32
+            case 3:  return 8;   // Int64
+            case 4:  return 2;   // Float16
+            default: return 4;
+        }
+    }
+
     // ---- Universal Loading ----
 
     /**
@@ -530,6 +694,7 @@ public final class PyTorchModelLoader {
                         return loadHuggingFaceModel(file);
                     case PICKLE:
                     case BIN_MICROLENS:
+                    case BIN_NAMED:
                     case HDF5:
                     case NUMPY:
                     case BIN_GENERIC:

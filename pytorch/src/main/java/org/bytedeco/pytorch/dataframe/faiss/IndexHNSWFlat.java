@@ -43,6 +43,9 @@ public class IndexHNSWFlat extends Index {
     private int entryPoint = -1;
     private int maxLevel = -1;
 
+    /** When true, use {@link VectorDistanceKernel} (Project Panama SIMD) for distance math. */
+    private transient boolean useVector = VectorDistanceKernel.AVAILABLE;
+
     // generation-stamp visited: avoid boolean[] alloc per query
     private transient int[] visitStamp;
     private transient int visitGen = 1;
@@ -83,6 +86,16 @@ public class IndexHNSWFlat extends Index {
     }
 
     public int M() { return hnsw.M; }
+
+    /** Switch between scalar (legacy) and Project Panama SIMD distance math. */
+    public void setUseVector(boolean on) {
+        this.useVector = on && VectorDistanceKernel.AVAILABLE;
+    }
+
+    /** Whether the current HNSW uses the SIMD vector kernel. */
+    public boolean isUseVector() {
+        return useVector;
+    }
 
     @Override
     public synchronized void add(float[] x, int n) {
@@ -490,17 +503,20 @@ public class IndexHNSWFlat extends Index {
     private float distNN(int a, int b) {
         int ba = a * d, bb = b * d;
         if (metric_type == MetricType.METRIC_INNER_PRODUCT) {
-            // FAISS IP: higher better — return raw IP (TopK/heaps use lowerIsBetter flag)
-            return DistanceKernel.ipRow(data, ba, data, bb, d);
+            return useVector ? VectorDistanceKernel.ipRow(data, ba, data, bb, d)
+                             : DistanceKernel.ipRow(data, ba, data, bb, d);
         }
-        return DistanceKernel.l2Row(data, ba, data, bb, d);
+        return useVector ? VectorDistanceKernel.l2Row(data, ba, data, bb, d)
+                         : DistanceKernel.l2Row(data, ba, data, bb, d);
     }
 
     private float distQuery(float[] q, int node) {
         if (metric_type == MetricType.METRIC_INNER_PRODUCT) {
-            return DistanceKernel.ipRow(q, data, node * d, d);
+            return useVector ? VectorDistanceKernel.ipRow(q, data, node * d, d)
+                             : DistanceKernel.ipRow(q, data, node * d, d);
         }
-        return DistanceKernel.l2Row(q, data, node * d, d);
+        return useVector ? VectorDistanceKernel.l2Row(q, data, node * d, d)
+                         : DistanceKernel.l2Row(q, data, node * d, d);
     }
 
     /** true if a is strictly better than b under current metric. */
