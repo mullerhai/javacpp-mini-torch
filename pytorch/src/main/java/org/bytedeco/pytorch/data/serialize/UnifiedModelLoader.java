@@ -294,85 +294,16 @@ public final class UnifiedModelLoader {
 
     private static Map<String, Tensor> loadSafetensors(Path path, Options opts) throws IOException {
         if (Files.isDirectory(path)) {
-            // Check if we have a .bin index (ZIP pickle format) or .safetensors index
-            Path indexFile = path.resolve("model.safetensors.index.json");
-            if (!Files.isRegularFile(indexFile)) {
-                indexFile = path.resolve("pytorch_model.bin.index.json");
-            }
-
-            if (Files.isRegularFile(indexFile)) {
-                // Determine if index points to safetensors or ZIP pickle .bin files
-                boolean hasSafetensorsIndex = indexFile.getFileName().toString().contains("safetensors");
-                boolean indexPointsToBin = ShardedSafeTensors.readWeightMap(indexFile).values().stream()
-                    .anyMatch(v -> v.endsWith(".bin") && !v.contains("safetensors"));
-
-                // If index points to .bin files (ZIP pickle format), use TorchPthReader for each shard
-                if (!hasSafetensorsIndex && indexPointsToBin) {
-                    return loadPickleShards(path, indexFile);
-                }
-            }
-
             // Delegate to ShardedSafeTensors which handles:
-            // 1. pytorch_model.bin.index.json pointing to .safetensors shards
-            // 2. model.safetensors.index.json
-            // 3. model-00001-of-00002.safetensors patterns
-            // 4. Single model.safetensors
+            // 1. pytorch_model.bin.index.json (HF sharding)
+            // 2. model-00001-of-00002.bin patterns
+            // 3. Single model.safetensors
             return ShardedSafeTensors.loadDirectory(path,
                 opts.zeroCopy ? LoadOptions.builder().zeroCopy(true).build() : LoadOptions.defaults());
         } else {
             // Single safetensors file
             return SafeTensors.loadFile(path.toFile());
         }
-    }
-
-    /**
-     * Load sharded ZIP-pickle .bin files via pytorch_model.bin.index.json.
-     * Each shard is a torch.save() ZIP archive containing a state_dict.
-     */
-    private static Map<String, Tensor> loadPickleShards(Path dir, Path indexFile) throws IOException {
-        System.out.println("[UnifiedModelLoader] Loading ZIP-pickle shards via " + indexFile.getFileName());
-        Map<String, String> weightMap = ShardedSafeTensors.readWeightMap(indexFile);
-
-        // Group weights by shard file
-        Map<String, List<String>> shardToKeys = new LinkedHashMap<>();
-        for (Map.Entry<String, String> e : weightMap.entrySet()) {
-            shardToKeys.computeIfAbsent(e.getValue(), k -> new ArrayList<>()).add(e.getKey());
-        }
-
-        Map<String, Tensor> all = new LinkedHashMap<>();
-        int i = 0;
-        for (Map.Entry<String, List<String>> shardEntry : shardToKeys.entrySet()) {
-            String shardFile = shardEntry.getKey();
-            List<String> keys = shardEntry.getValue();
-            Path shardPath = dir.resolve(shardFile);
-            i++;
-            long sz = Files.size(shardPath);
-            System.out.printf("[UnifiedModelLoader] shard %d/%d %s (%.2f GB) loading %d tensors...%n",
-                    i, shardToKeys.size(), shardFile, sz / 1e9, keys.size());
-
-            Map<String, Tensor> stateDict = TorchPthReader.loadStateDict(shardPath.toFile());
-            for (String key : keys) {
-                Tensor t = stateDict.get(key);
-                if (t == null) {
-                    // Try with strip of module prefix
-                    for (Map.Entry<String, Tensor> e2 : stateDict.entrySet()) {
-                        String eKey = e2.getKey();
-                        if (eKey.endsWith("." + key) || eKey.equals(key) ||
-                            eKey.contains("." + key + ".")) {
-                            t = e2.getValue();
-                            break;
-                        }
-                    }
-                }
-                if (t != null) {
-                    all.put(key, t);
-                } else {
-                    System.out.println("[UnifiedModelLoader] WARNING: key not found in shard: " + key);
-                }
-            }
-        }
-        System.out.println("[UnifiedModelLoader] Loaded " + all.size() + " tensors from " + shardToKeys.size() + " pickle shards");
-        return all;
     }
 
     private static Map<String, Tensor> loadTorchPth(Path path, Options opts) throws IOException {
@@ -571,59 +502,109 @@ public final class UnifiedModelLoader {
      * Called when config.tieWordEmbeddings() is true (the common default for Llama/Qwen).
      *
      * <p>The constructor sets the tie, but COPY/ZERO_COPY rebinding breaks it.
-     * We need to call set_() after weights are loaded so both tensors share storage.</p>
+     * When dtype matches we use set_() (share storage), when dtype differs we use copy_()
+     * to avoid as_strided errors from storage size mismatch.</p>
      */
     private static void retieWordEmbeddings(Module model) {
         try {
             if (model instanceof org.bytedeco.pytorch.llm.transformers.CausalLM clm) {
-                clm.retieWordEmbeddings();
-                System.out.println("[UnifiedModelLoader] Re-tied CausalLM lm_head ← embed_tokens");
+                if (clm.retieWordEmbeddings()) {
+                    System.out.println("[UnifiedModelLoader] Re-tied CausalLM lm_head ← embed_tokens");
+                }
                 return;
             }
             if (model instanceof org.bytedeco.pytorch.llm.transformers.modeling.LlamaForCausalLM llama) {
-                llama.lmHead().weight().requires_grad_(false);
-                llama.model().embed_tokens.weight().requires_grad_(false);
-                llama.lmHead().weight().set_(llama.model().embed_tokens.weight());
-                System.out.println("[UnifiedModelLoader] Re-tied LlamaForCausalLM lm_head ← embed_tokens");
+                retieDirect(llama.lmHead(), llama.model(), "LlamaForCausalLM");
                 return;
             }
             if (model instanceof org.bytedeco.pytorch.llm.transformers.modeling.Qwen2ForCausalLM qwen) {
-                qwen.lmHead().weight().requires_grad_(false);
-                qwen.model().embed_tokens.weight().requires_grad_(false);
-                qwen.lmHead().weight().set_(qwen.model().embed_tokens.weight());
-                System.out.println("[UnifiedModelLoader] Re-tied Qwen2ForCausalLM lm_head ← embed_tokens");
+                retieDirect(qwen.lmHead(), qwen.model(), "Qwen2ForCausalLM");
                 return;
             }
             if (model instanceof org.bytedeco.pytorch.llm.transformers.modeling.Qwen3ForCausalLM qwen3) {
-                qwen3.lmHead().weight().requires_grad_(false);
-                qwen3.model().embed_tokens.weight().requires_grad_(false);
-                qwen3.lmHead().weight().set_(qwen3.model().embed_tokens.weight());
-                System.out.println("[UnifiedModelLoader] Re-tied Qwen3ForCausalLM lm_head ← embed_tokens");
+                retieDirect(qwen3.lmHead(), qwen3.model(), "Qwen3ForCausalLM");
+                return;
+            }
+            if (model instanceof org.bytedeco.pytorch.llm.transformers.modeling.GlmForCausalLM glm) {
+                if (glm.retieWordEmbeddings()) {
+                    System.out.println("[UnifiedModelLoader] Re-tied GlmForCausalLM lm_head ← embed_tokens");
+                }
                 return;
             }
             // Fallback: try reflection for generic Module subclasses
-            try {
-                var embedField = model.getClass().getMethod("model");
-                Object subModel = embedField.invoke(model);
-                var embedModule = subModel.getClass().getMethod("embed_tokens");
-                Object embed = embedModule.invoke(subModel);
-                var wte = embed.getClass().getMethod("weight");
-                Tensor wteWeight = (Tensor) wte.invoke(embed);
-
-                var lmHeadField = model.getClass().getMethod("lm_head");
-                Object lmHead = lmHeadField.invoke(model);
-                var lmW = lmHead.getClass().getMethod("weight");
-                Tensor lmHeadWeight = (Tensor) lmW.invoke(lmHead);
-
-                if (wteWeight != null && lmHeadWeight != null) {
-                    lmHeadWeight.set_(wteWeight);
-                    System.out.println("[UnifiedModelLoader] Re-tied via reflection: lm_head ← embed_tokens");
-                }
-            } catch (Throwable ignored) {
-                System.out.println("[UnifiedModelLoader] WARNING: tie_word_embeddings=true but could not re-tie (model type: " + model.getClass().getSimpleName() + ")");
-            }
+            retieViaReflection(model);
         } catch (Exception e) {
             System.out.println("[UnifiedModelLoader] WARNING: re-tie failed: " + e.getMessage());
+        }
+    }
+
+    /** Direct dtype-aware re-tie for models with typed model/lmHead fields. */
+    private static void retieDirect(Object lmHead, Object subModel, String name) {
+        try {
+            var lmW = lmHead.getClass().getMethod("weight");
+            Tensor dest = (Tensor) lmW.invoke(lmHead);
+
+            // embed_tokens may be a field (e.g. LlamaForCausalLM.LlamaModel.embed_tokens)
+            // or a method (e.g. some other model)
+            Tensor src = null;
+            try {
+                // Try as field first
+                var embedF = subModel.getClass().getField("embed_tokens");
+                Object embed = embedF.get(subModel);
+                var wte = embed.getClass().getMethod("weight");
+                src = (Tensor) wte.invoke(embed);
+            } catch (NoSuchFieldException e) {
+                // Try as method
+                var embedM = subModel.getClass().getMethod("embed_tokens");
+                Object embed = embedM.invoke(subModel);
+                var wte = embed.getClass().getMethod("weight");
+                src = (Tensor) wte.invoke(embed);
+            }
+
+            if (dest == null || src == null || !dest.defined() || !src.defined()) return;
+            try { dest.requires_grad_(false); } catch (Throwable ignored) {}
+            try { src.requires_grad_(false); } catch (Throwable ignored) {}
+            if (dest.scalar_type() == src.scalar_type()) {
+                dest.set_(src);
+                System.out.println("[UnifiedModelLoader] Re-tied " + name + " lm_head ← embed_tokens (set_)");
+            } else {
+                dest.copy_(src);
+                System.out.println("[UnifiedModelLoader] Re-tied " + name + " lm_head ← embed_tokens (copy_, dtype mismatch)");
+            }
+        } catch (Throwable t) {
+            System.out.println("[UnifiedModelLoader] WARNING: could not re-tie " + name + ": " + t.getMessage());
+        }
+    }
+
+    /** Reflection-based fallback for unknown Module subclasses. */
+    private static void retieViaReflection(Module model) {
+        try {
+            var embedField = model.getClass().getMethod("model");
+            Object subModel = embedField.invoke(model);
+            var embedModule = subModel.getClass().getMethod("embed_tokens");
+            Object embed = embedModule.invoke(subModel);
+            var wte = embed.getClass().getMethod("weight");
+            Tensor src = (Tensor) wte.invoke(embed);
+
+            var lmHeadField = model.getClass().getMethod("lm_head");
+            Object lmHead = lmHeadField.invoke(model);
+            var lmW = lmHead.getClass().getMethod("weight");
+            Tensor dest = (Tensor) lmW.invoke(lmHead);
+
+            if (dest == null || src == null || !dest.defined() || !src.defined()) {
+                System.out.println("[UnifiedModelLoader] WARNING: tie_word_embeddings=true but could not re-tie (model type: " + model.getClass().getSimpleName() + ")");
+                return;
+            }
+            try { dest.requires_grad_(false); } catch (Throwable ignored) {}
+            try { src.requires_grad_(false); } catch (Throwable ignored) {}
+            if (dest.scalar_type() == src.scalar_type()) {
+                dest.set_(src);
+            } else {
+                dest.copy_(src);
+            }
+            System.out.println("[UnifiedModelLoader] Re-tied via reflection: lm_head ← embed_tokens");
+        } catch (Throwable ignored) {
+            System.out.println("[UnifiedModelLoader] WARNING: tie_word_embeddings=true but could not re-tie (model type: " + model.getClass().getSimpleName() + ")");
         }
     }
 

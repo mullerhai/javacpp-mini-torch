@@ -22,7 +22,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
 import java.util.zip.ZipFile;
-import java.util.zip.ZipEntry;
 
 /**
  * Universal PyTorch model loader supporting all formats.
@@ -293,30 +292,20 @@ public final class PyTorchModelLoader {
 
     private static ModelType detectZipContents(File file) throws IOException {
         try (ZipFile zip = new ZipFile(file)) {
-            List<String> entries = new ArrayList<>();
-            for (ZipEntry e : Collections.list(zip.entries())) entries.add(e.getName());
-
-            // TorchScript saves: contain a code/ directory with Python bytecode (.py, .debug_pkl)
-            // AND a top-level data.pkl. They do NOT have numeric data/0, data/1... tensor entries.
-            // State-dict saves: contain data.pkl + byteorder + numeric data/0, data/1... entries.
-            boolean hasCodePy = entries.stream().anyMatch(e -> e.endsWith(".py") || e.endsWith(".debug_pkl"));
-            boolean hasNumericData = entries.stream().anyMatch(e -> e.matches(".*data/\\d+$"));
-
-            if (hasCodePy) {
+            // Check for TorchScript markers
+            if (zip.getEntry("data/code/__torch__.py") != null ||
+                zip.getEntry("data/torch.jit.JitModule") != null ||
+                zip.getEntry("model.jit") != null) {
                 return ModelType.TORCH_SCRIPT;
             }
-            if (hasNumericData) {
+
+            // Check for state-dict markers
+            if (zip.getEntry("data.pkl") != null && zip.getEntry("byteorder") != null) {
                 return ModelType.STATE_DICT;
             }
 
-            // Fallback: check for data.pkl (both formats have it)
-            boolean hasDataPkl = entries.stream().anyMatch(e -> e.endsWith("data.pkl"));
-            boolean hasByteorder = entries.stream().anyMatch(e -> e.endsWith("byteorder"));
-            if (hasDataPkl && hasByteorder) {
-                return ModelType.STATE_DICT;
-            }
-
-            return ModelType.UNKNOWN;
+            // Default to state-dict for torch.save ZIP
+            return ModelType.STATE_DICT;
         } catch (IOException e) {
             return ModelType.UNKNOWN;
         }

@@ -62,7 +62,14 @@ public class LlamaForCausalLM extends Module {
                 new LinearImpl(new LinearOptions(config.hiddenSize(), config.vocabSize()).bias(false)));
         if (config.tieWordEmbeddings()) {
             try {
-                lm_head.weight().set_(model.embed_tokens.weight());
+                Tensor dest = lm_head.weight();
+                Tensor src = model.embed_tokens.weight();
+                if (dest.scalar_type() == src.scalar_type()) {
+                    lm_head.weight().set_(model.embed_tokens.weight());
+                } else {
+                    // dtype mismatch: copy data instead of sharing storage
+                    lm_head.weight().copy_(model.embed_tokens.weight());
+                }
             } catch (Throwable ignored) {}
         }
     }
@@ -78,29 +85,6 @@ public class LlamaForCausalLM extends Module {
     @Override
     public Tensor forward(Tensor inputIds) {
         return lm_head.forward(model.forward(inputIds));
-    }
-
-    public Tensor loss(Tensor inputIds) {
-        Tensor ids = inputIds.dim() == 1 ? inputIds.unsqueeze(0) : inputIds;
-        Tensor logits = forward(ids);
-        Tensor shiftLogits = logits.slice(1, new LongOptional(0), new LongOptional(logits.size(1) - 1), 1)
-                .contiguous();
-        Tensor shiftLabels = ids.slice(1, new LongOptional(1), new LongOptional(ids.size(1)), 1)
-                .contiguous();
-        long V = logits.size(2);
-        return cross_entropy(shiftLogits.reshape(-1, V), shiftLabels.reshape(-1));
-    }
-
-    public int[] generate(int[] promptIds, int maxNewTokens) {
-        return generate(promptIds, GenerationConfig.builder().maxNewTokens(maxNewTokens).build());
-    }
-
-    public int[] generate(int[] promptIds, GenerationConfig gen) {
-        GenerationConfig g = gen == null ? GenerationConfig.greedy() : gen;
-        if (g.eosTokenIds.isEmpty()) {
-            g = g.toBuilder().eosTokenId(config.eosTokenId()).build();
-        }
-        return Generator.generate(this, promptIds, g, config.maxPositionEmbeddings());
     }
 
     /**
@@ -126,12 +110,55 @@ public class LlamaForCausalLM extends Module {
         return new CachedForwardResult(logits, result.newKs, result.newVs);
     }
 
-    public LlamaModel model() {
-        return model;
+    public Tensor loss(Tensor inputIds) {
+        Tensor ids = inputIds.dim() == 1 ? inputIds.unsqueeze(0) : inputIds;
+        Tensor logits = forward(ids);
+        Tensor shiftLogits = logits.slice(1, new LongOptional(0), new LongOptional(logits.size(1) - 1), 1)
+                .contiguous();
+        Tensor shiftLabels = ids.slice(1, new LongOptional(1), new LongOptional(ids.size(1)), 1)
+                .contiguous();
+        long V = logits.size(2);
+        return cross_entropy(shiftLogits.reshape(-1, V), shiftLabels.reshape(-1));
     }
 
-    public LinearImpl lmHead() {
-        return lm_head;
+    public int[] generate(int[] promptIds, int maxNewTokens) {
+        return generate(promptIds, GenerationConfig.builder().maxNewTokens(maxNewTokens).build());
+    }
+
+    public int[] generate(int[] promptIds, GenerationConfig gen) {
+        GenerationConfig g = gen == null ? GenerationConfig.greedy() : gen;
+        if (g.eosTokenIds.isEmpty()) {
+            g = g.toBuilder().eosTokenId(config.eosTokenId()).build();
+        }
+        return Generator.generate(this, promptIds, g, config.maxPositionEmbeddings());
+    }
+
+    public LlamaModel model() { return model; }
+    public LinearImpl lmHead() { return lm_head; }
+
+    /** Re-tie lm_head ← embed_tokens after weight load (dtype-aware). */
+    public boolean retieWordEmbeddings() {
+        if (!config.tieWordEmbeddings() || lm_head == null || model == null) return false;
+        try {
+            Tensor dest = lm_head.weight();
+            Tensor src = model.embed_tokens.weight();
+            if (dest == null || src == null || !dest.defined() || !src.defined()) return false;
+            try { dest.requires_grad_(false); } catch (Throwable ignored) {}
+            try { src.requires_grad_(false); } catch (Throwable ignored) {}
+            if (dest.scalar_type() == src.scalar_type()) {
+                dest.set_(src);
+            } else {
+                dest.copy_(src);
+            }
+            return true;
+        } catch (Throwable t) {
+            try {
+                lm_head.weight().copy_(model.embed_tokens.weight());
+                return true;
+            } catch (Throwable t2) {
+                return false;
+            }
+        }
     }
 
     @Properties(inherit = org.bytedeco.pytorch.presets.torch.class)

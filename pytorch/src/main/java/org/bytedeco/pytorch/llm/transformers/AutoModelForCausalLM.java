@@ -290,37 +290,28 @@ public final class AutoModelForCausalLM {
             // After weight load, re-apply tie_word_embeddings.
             // ZERO_COPY rebinds wte/embed storage; COPY replaces values — both break a
             // constructor-time set_() share, so always re-tie when requested.
+            // Uses dtype-aware logic: set_() when dtypes match, copy_() when they differ.
             if (cfg.tieWordEmbeddings()) {
                 try {
                     if (model instanceof CausalLM clm) {
-                        clm.retieWordEmbeddings();
-                        System.out.println("[DEBUG] Re-tied CausalLM lm_head ← wte");
+                        if (clm.retieWordEmbeddings()) {
+                            System.out.println("[DEBUG] Re-tied CausalLM lm_head ← wte");
+                        }
+                    } else if (model instanceof LlamaForCausalLM llama) {
+                        if (llama.retieWordEmbeddings()) {
+                            System.out.println("[DEBUG] Re-tied LlamaForCausalLM lm_head ← embed_tokens");
+                        }
                     } else if (model instanceof GlmForCausalLM glm) {
                         if (glm.retieWordEmbeddings()) {
                             System.out.println("[DEBUG] Re-tied Glm lm_head ← embed_tokens");
                         }
                     } else if (model instanceof Qwen2ForCausalLM qwen) {
-                        try {
-                            qwen.lmHead().weight().requires_grad_(false);
-                            qwen.model().embed_tokens.weight().requires_grad_(false);
-                        } catch (Throwable ignored) {}
-                        qwen.lmHead().weight().set_(qwen.model().embed_tokens.weight());
-                        System.out.println("[DEBUG] Re-tied Qwen2 lm_head ← embed_tokens");
+                        if (qwen.retieWordEmbeddings()) {
+                            System.out.println("[DEBUG] Re-tied Qwen2 lm_head ← embed_tokens");
+                        }
                     } else if (model instanceof Qwen3ForCausalLM qwen3) {
-                        try {
-                            qwen3.lmHead().weight().requires_grad_(false);
-                            qwen3.model().embed_tokens.weight().requires_grad_(false);
-                        } catch (Throwable ignored) {}
-                        qwen3.lmHead().weight().set_(qwen3.model().embed_tokens.weight());
-                        System.out.println("[DEBUG] Re-tied Qwen3 lm_head ← embed_tokens");
-                    } else if (model instanceof LlamaForCausalLM llama) {
-                        try {
-                            llama.lmHead().weight().requires_grad_(false);
-                            llama.model().embed_tokens.weight().requires_grad_(false);
-                            llama.lmHead().weight().set_(llama.model().embed_tokens.weight());
-                            System.out.println("[DEBUG] Re-tied Llama lm_head ← embed_tokens");
-                        } catch (Throwable ignore) {
-                            // Llama may already share via constructor
+                        if (qwen3.retieWordEmbeddings()) {
+                            System.out.println("[DEBUG] Re-tied Qwen3 lm_head ← embed_tokens");
                         }
                     }
                 } catch (Throwable t) {

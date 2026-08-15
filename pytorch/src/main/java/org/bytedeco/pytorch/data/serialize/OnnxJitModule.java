@@ -12,6 +12,8 @@
  * (i.e. graphs that were registered with `_self_` as the first input).
  */
 package org.bytedeco.pytorch.data.serialize;
+import org.bytedeco.pytorch.jit.*;
+import org.bytedeco.pytorch.c10.*;
 
 import org.bytedeco.javacpp.Pointer;
 import org.bytedeco.pytorch.IValue;

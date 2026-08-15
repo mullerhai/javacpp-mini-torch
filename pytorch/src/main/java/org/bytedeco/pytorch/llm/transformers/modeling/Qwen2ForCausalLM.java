@@ -68,12 +68,15 @@ public class Qwen2ForCausalLM extends Module {
         this.lm_head = register_module("lm_head",
                 new LinearImpl(new LinearOptions(config.hiddenSize(), config.vocabSize()).bias(false)));
         if (config.tieWordEmbeddings()) {
-            // share storage: lm_head.weight ← embed_tokens.weight (HF tie)
             try {
-                lm_head.weight().set_(model.embed_tokens.weight());
-            } catch (Throwable ignored) {
-                // if set_ fails pre-init, WeightLoader will still load both if present
-            }
+                Tensor dest = lm_head.weight();
+                Tensor src = model.embed_tokens.weight();
+                if (dest.scalar_type() == src.scalar_type()) {
+                    dest.set_(src);
+                } else {
+                    dest.copy_(src);
+                }
+            } catch (Throwable ignored) {}
         }
     }
 
@@ -85,30 +88,39 @@ public class Qwen2ForCausalLM extends Module {
         return config;
     }
 
-    public Qwen2Model model() {
-        return model;
-    }
+    public Qwen2Model model() { return model; }
+    public LinearImpl lmHead() { return lm_head; }
 
-    public LinearImpl lmHead() {
-        return lm_head;
-    }
-
-    /** Forward: input_ids [B,T] or [T] → logits [B,T,V]. */
     @Override
     public Tensor forward(Tensor inputIds) {
-        Tensor hidden = model.forward(inputIds);
-        return lm_head.forward(hidden);
+        return lm_head.forward(model.forward(inputIds));
     }
 
-    public Tensor loss(Tensor inputIds) {
-        Tensor ids = inputIds.dim() == 1 ? inputIds.unsqueeze(0) : inputIds;
-        Tensor logits = forward(ids);
-        Tensor shiftLogits = logits.slice(1, new LongOptional(0), new LongOptional(logits.size(1) - 1), 1)
-                .contiguous();
-        Tensor shiftLabels = ids.slice(1, new LongOptional(1), new LongOptional(ids.size(1)), 1)
-                .contiguous();
-        long V = logits.size(2);
-        return cross_entropy(shiftLogits.reshape(-1, V), shiftLabels.reshape(-1));
+    /** Re-tie lm_head ← embed_tokens after weight load when dtype mismatch occurs. */
+    public boolean retieWordEmbeddings() {
+        if (!config.tieWordEmbeddings() || lm_head == null || model == null) return false;
+        try {
+            Tensor dest = lm_head.weight();
+            Tensor src = model.embed_tokens.weight();
+            if (dest == null || src == null || !dest.defined() || !src.defined()) return false;
+            try { dest.requires_grad_(false); } catch (Throwable ignored) {}
+            try { src.requires_grad_(false); } catch (Throwable ignored) {}
+            if (dest.scalar_type() == src.scalar_type()) {
+                dest.set_(src);
+            } else {
+                dest.copy_(src);
+            }
+            return true;
+        } catch (Throwable t) {
+            try {
+                lm_head.weight().copy_(model.embed_tokens.weight());
+                System.out.println("[DEBUG] Qwen2ForCausalLM retie used copy_ fallback");
+                return true;
+            } catch (Throwable t2) {
+                System.out.println("[DEBUG] Qwen2ForCausalLM.retieWordEmbeddings failed: " + t2.getMessage());
+                return false;
+            }
+        }
     }
 
     public int[] generate(int[] promptIds, int maxNewTokens) {

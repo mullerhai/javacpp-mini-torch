@@ -136,13 +136,19 @@ public class CausalLM extends Module {
             Tensor dest = lmHead.weight();
             Tensor src = tokEmbed.weight();
             if (dest == null || src == null || !dest.defined() || !src.defined()) return false;
-            // leaf params require grad=false before in-place set_
+            // leaf params require grad=false before in-place operations
             try { dest.requires_grad_(false); } catch (Throwable ignored) {}
             try { src.requires_grad_(false); } catch (Throwable ignored) {}
-            dest.set_(src);
+            if (dest.scalar_type() == src.scalar_type()) {
+                dest.set_(src);
+            } else {
+                // dtype mismatch (e.g. model=float16, weights=float32): copy data
+                // set_() cannot share storage between different dtypes
+                dest.copy_(src);
+            }
             return true;
         } catch (Throwable t) {
-            // fallback: value copy (inference-ok, not shared for training)
+            // fallback: value copy
             try {
                 lmHead.weight().copy_(tokEmbed.weight());
                 System.out.println("[DEBUG] CausalLM retie used copy_ fallback: " + t.getMessage());

@@ -78,10 +78,14 @@ public class Qwen3ForCausalLM extends Module {
                 new LinearImpl(new LinearOptions(config.hiddenSize(), config.vocabSize()).bias(false)));
         if (config.tieWordEmbeddings()) {
             try {
-                lm_head.weight().set_(model.embed_tokens.weight());
-            } catch (Throwable ignored) {
-                // WeightLoader will still load both if present
-            }
+                Tensor dest = lm_head.weight();
+                Tensor src = model.embed_tokens.weight();
+                if (dest.scalar_type() == src.scalar_type()) {
+                    dest.set_(src);
+                } else {
+                    dest.copy_(src);
+                }
+            } catch (Throwable ignored) {}
         }
     }
 
@@ -93,6 +97,33 @@ public class Qwen3ForCausalLM extends Module {
         return config;
     }
 
+    /** Re-tie lm_head ← embed_tokens after weight load when dtype mismatch occurs. */
+    public boolean retieWordEmbeddings() {
+        if (!config.tieWordEmbeddings() || lm_head == null || model == null) return false;
+        try {
+            Tensor dest = lm_head.weight();
+            Tensor src = model.embed_tokens.weight();
+            if (dest == null || src == null || !dest.defined() || !src.defined()) return false;
+            try { dest.requires_grad_(false); } catch (Throwable ignored) {}
+            try { src.requires_grad_(false); } catch (Throwable ignored) {}
+            if (dest.scalar_type() == src.scalar_type()) {
+                dest.set_(src);
+            } else {
+                dest.copy_(src);
+            }
+            return true;
+        } catch (Throwable t) {
+            try {
+                lm_head.weight().copy_(model.embed_tokens.weight());
+                System.out.println("[DEBUG] Qwen3ForCausalLM retie used copy_ fallback");
+                return true;
+            } catch (Throwable t2) {
+                System.out.println("[DEBUG] Qwen3ForCausalLM.retieWordEmbeddings failed: " + t2.getMessage());
+                return false;
+            }
+        }
+    }
+
     public Qwen3Model model() {
         return model;
     }
@@ -101,11 +132,9 @@ public class Qwen3ForCausalLM extends Module {
         return lm_head;
     }
 
-    /** Forward: input_ids [B,T] or [T] → logits [B,T,V]. */
     @Override
     public Tensor forward(Tensor inputIds) {
-        Tensor hidden = model.forward(inputIds);
-        return lm_head.forward(hidden);
+        return lm_head.forward(model.forward(inputIds));
     }
 
     public Tensor loss(Tensor inputIds) {

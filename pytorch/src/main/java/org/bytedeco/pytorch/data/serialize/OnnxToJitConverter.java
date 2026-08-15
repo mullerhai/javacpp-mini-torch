@@ -945,21 +945,22 @@ public final class OnnxToJitConverter {
             String src = emitTorchScriptSource(modelName, graphProto);
             System.err.println("[onnx2jit] " + modelName + " source length: " + src.length()
                     + " lines: " + src.split("\n").length);
-            // Debug: print first/last 5000 chars of generated TorchScript
-            String debugSrc;
-            if (src.length() > 10000) {
-                debugSrc = src.substring(0, 5000) + "\n... [TRUNCATED 5000 chars] ...\n" + src.substring(src.length() - 5000);
-            } else {
-                debugSrc = src;
-            }
+            // Debug: print first 5000 chars of generated TorchScript
+            String debugSrc = src.length() > 5000 ? src.substring(0, 5000) + "\n... [TRUNCATED]" : src;
             System.err.println("[onnx2jit] TorchScript source preview:\n" + debugSrc);
-            if (src.length() > 10000) {
+            // Also dump full source to a file for debugging
+            try {
+                java.nio.file.Files.write(java.nio.file.Paths.get("/tmp/onnx2jit_" + modelName + ".py"), src.getBytes());
+            } catch (Exception e) {
+                System.err.println("[onnx2jit] Could not write debug file: " + e);
+            }
+            if (src.length() > 5000) {
                 System.err.println("[onnx2jit] ... searching for Concat in remaining source...");
                 int concatIdx = src.indexOf("torch.cat");
                 if (concatIdx > 0) {
-                    int start = Math.max(0, concatIdx - 500);
-                    int end = Math.min(src.length(), concatIdx + 500);
-                    System.err.println("[onnx2jit] Concat context:\n" + src.substring(start, end));
+                    int start = Math.max(0, concatIdx - 200);
+                    int end = Math.min(src.length(), concatIdx + 300);
+                    System.err.println(src.substring(start, end));
                 }
             }
 
@@ -1250,6 +1251,9 @@ public final class OnnxToJitConverter {
         String op = n.opType;
         List<String> inNames = n.inputs;
         String outName = sanitizeIdent(n.outputs.get(0));
+        if (outName.contains("attn_layers_0_Slice_4")) {
+            System.err.println("[onnx2jit] DEBUG EMITNODE called for attn_layers_0_Slice_4 op=" + op);
+        }
         List<String> sanitizedIn = new ArrayList<>();
         for (String s : inNames) sanitizedIn.add(sanitizeIdent(s));
         if ("Relu".equals(op) || "Relu6".equals(op)) {
@@ -1500,11 +1504,10 @@ public final class OnnxToJitConverter {
         if ("Reshape".equals(op)) {
             // ONNX Reshape: prefer a static int-list literal if the shape input
             // is the output of a Constant op (we know its values). Otherwise
-            // convert the runtime tensor to a typed Python list. torch.reshape
-            // accepts a list of ints; we annotate the .tolist() result so the
-            // TorchScript type-checker can infer List[int].
+            // fall back to building a List[int] via a typed comprehension over
+            // the (flattened) input tensor. Flattening guarantees a 1-D source
+            // even when the runtime tensor is 0-D (a scalar).
             List<Long> shapeVals = constantIntOutputs.get(sanitizedIn.get(1));
-            String shapeArg;
             if (shapeVals != null && !shapeVals.isEmpty()) {
                 StringBuilder sb = new StringBuilder("[");
                 for (int i = 0; i < shapeVals.size(); i++) {
@@ -1512,21 +1515,12 @@ public final class OnnxToJitConverter {
                     sb.append(shapeVals.get(i));
                 }
                 sb.append("]");
-                shapeArg = sb.toString();
-            } else {
-                String tmpName = "_reshape_shape_" + outName;
-                shapeArg = tmpName;
+                return outName + " = torch.reshape(" + sanitizedIn.get(0) + ", " + sb + ")";
             }
-            String body;
-            if (shapeArg.startsWith("_reshape_shape_")) {
-                // Emit a separate typed assignment so tolist() returns List[int].
-                String tmpName = shapeArg;
-                body = tmpName + ": List[int] = " + sanitizedIn.get(1) + ".long().tolist()\n    "
-                        + outName + " = torch.reshape(" + sanitizedIn.get(0) + ", " + tmpName + ")";
-            } else {
-                body = outName + " = torch.reshape(" + sanitizedIn.get(0) + ", " + shapeArg + ")";
-            }
-            return body;
+            String tmpName = "_reshape_shape_" + outName;
+            String src = sanitizedIn.get(1) + ".long().flatten()";
+            return tmpName + ": List[int] = [int(v) for v in " + src + "]\n    "
+                    + outName + " = torch.reshape(" + sanitizedIn.get(0) + ", " + tmpName + ")";
         }
         if ("Flatten".equals(op)) {
             int axis = 1;
@@ -1564,7 +1558,7 @@ public final class OnnxToJitConverter {
                     // explicit annotation (TorchScript refuses
                     // `tensor.long().tolist()` otherwise).
                     String tmp = "_split_sizes_" + outName;
-                    sizesPrefix = tmp + ": List[int] = " + split + ".long().tolist()\n    ";
+                    sizesPrefix = tmp + ": List[int] = [int(v) for v in " + split + ".long().flatten()]\n    ";
                     sizes = tmp;
                 }
             } else {
@@ -1615,7 +1609,7 @@ public final class OnnxToJitConverter {
             // we add 4 more spaces after every embedded newline so the
             // resulting second line stays at one indent level.
             String tmpName = "_tile_list_" + outName;
-            return tmpName + ": List[int] = " + repeats + ".long().tolist()\n    "
+            return tmpName + ": List[int] = [int(v) for v in " + repeats + ".long().flatten()]\n    "
                     + outName + " = " + sanitizedIn.get(0)
                     + ".expand(" + tmpName + ").contiguous()";
         }
@@ -1732,14 +1726,12 @@ public final class OnnxToJitConverter {
             for (Map.Entry<String, OnnxAttribute> e : n.attributes.entrySet()) {
                 if ("axis".equals(e.getKey())) axis = ((Number) e.getValue().value).intValue();
             }
-            // Normalize each input to 1-D before cat. ONNX graphs frequently mix
-            // 0-D scalars (Constant_4 = torch.tensor(4)), 1-D single-element tensors
-            // (Constant_5 = torch.tensor([64])) and 2-D post-Unsqueeze tensors
-            // (unsqueeze([2], 0) = [[2]]). TorchScript strict torch.cat refuses
-            // mixed ranks, so we coerce everything to 1-D via .reshape(-1).
             StringBuilder args = new StringBuilder();
             for (int i = 0; i < sanitizedIn.size(); i++) {
                 if (i > 0) args.append(", ");
+                // Normalize each input to 1-D to avoid "different number of dimensions"
+                // errors that arise when ONNX Unsqueeze promotes one input to 2-D
+                // while siblings stay 1-D scalars.
                 args.append(sanitizedIn.get(i)).append(".reshape(-1)");
             }
             return outName + " = torch.cat([" + args + "], dim=" + axis + ")";
@@ -1749,6 +1741,7 @@ public final class OnnxToJitConverter {
             // Resolve starts/ends/axes/steps to literals whenever we can, and
             // emit a Python slice expression that TorchScript accepts.
             String data = sanitizedIn.get(0);
+            System.err.println("[onnx2jit] DEBUG SLICE handler called for outName=" + outName);
             List<Long> starts = sanitizedIn.size() > 1
                     ? constantIntOutputs.get(sanitizedIn.get(1)) : null;
             List<Long> ends = sanitizedIn.size() > 2
@@ -1757,14 +1750,37 @@ public final class OnnxToJitConverter {
                     ? constantIntOutputs.get(sanitizedIn.get(3)) : null;
             List<Long> steps = sanitizedIn.size() > 4
                     ? constantIntOutputs.get(sanitizedIn.get(4)) : null;
+            if (outName.endsWith("Slice_4_output_0") || outName.contains("Slice_4")) {
+                System.err.println("[onnx2jit] DEBUG Slice_4 HANDLER ENTRY: starts.size=" + (starts == null ? "null" : starts.size())
+                        + " ends.size=" + (ends == null ? "null" : ends.size())
+                        + " ends=" + ends
+                        + " ends.in=" + (sanitizedIn.size() > 2 ? sanitizedIn.get(2) : "n/a")
+                        + " outName=" + outName);
+            }
             // Default: slice all of axis 0.
             long start = 0, end = -1, step = 1;
             if (starts != null && !starts.isEmpty()) start = starts.get(0);
             if (ends != null && !ends.isEmpty()) end = ends.get(0);
+            if (steps != null && !steps.isEmpty()) step = steps.get(0);
             if (axes != null && !axes.isEmpty()) {
                 // Only handle axis 0 for now; other axes would need torch.narrow.
                 long ax = axes.get(0);
                 if (ax == 0) {
+                    // ONNX Slice with start=-1 and end=Long.MIN_VALUE+1 (the ONNX
+                    // INT64_MIN sentinel) is a common idiom. In Python such a
+                    // slice is empty when step > 0 — but ONNX often pairs it
+                    // with step=-1 to walk the axis backwards. Rewrite to the
+                    // canonical Python form so TorchScript handles it.
+                    long onnxEndSentinel = Long.MIN_VALUE + 1; // -9223372036854775807
+                    if (start == -1 && end == onnxEndSentinel && step == -1) {
+                        // TorchScript refuses negative-step slices, so emit an
+                        // explicit flip (which reverses axis 0) and an untaken
+                        // slice for type compatibility.
+                        return outName + " = torch.flip(" + data + ", [0])";
+                    }
+                    if (start == -1 && end == onnxEndSentinel) {
+                        return outName + " = " + data + "[-1:]";
+                    }
                     StringBuilder slice = new StringBuilder();
                     if (start != 0) slice.append(start);
                     slice.append(":");
@@ -1772,33 +1788,71 @@ public final class OnnxToJitConverter {
                     if (step != 1) slice.append(":").append(step);
                     return outName + " = " + data + "[" + slice + "]";
                 }
-                // Other axes — narrow along that axis.
-                // ONNX Slice uses -1 (or any value > INT32_MAX) to mean "to end".
+                // Other axes — narrow along that axis. ONNX uses several negative/INT
+                // sentinel values to mean "slice to end of this axis"
+                // (-1, INT64_MIN, INT64_MIN+1, INT64_MAX). PyTorch's narrow()
+                // rejects these as out-of-range, so we compute the remaining
+                // length from the tensor shape.
                 long length;
-                if (end < 0) {
-                    // Use a very large sentinel; torch.narrow accepts any
-                    // non-negative length. We pre-clamp at runtime via shape
-                    // by emitting `.size(ax) - start` when possible.
-                    length = -1;  // marker for "to end" — replaced below
+                String startExpr;
+                if (starts != null && !starts.isEmpty()) {
+                    startExpr = String.valueOf(start);
                 } else {
+                    // Dynamic start — extract the scalar value at runtime.
+                    // The starts tensor is typically a 0-D or 1-D tensor produced
+                    // by Unsqueeze/Sub. Flatten + int() gives a Python int usable
+                    // by torch.narrow.
+                    String startsInput = sanitizedIn.get(1);
+                    String startTmp = "_slice_start_" + outName;
+                    return startTmp + ": int = int(" + startsInput + ".flatten()[0])\n    "
+                            + outName + " = torch.narrow(" + data + ", " + ax
+                            + ", " + startTmp + ", " + data + ".size(" + ax + ") - " + startTmp + ")";
+                }
+                if (end == -1 || end == Long.MIN_VALUE || end == Long.MIN_VALUE + 1
+                        || end == Long.MAX_VALUE) {
+                    if (outName.endsWith("Slice_4_output_0")) {
+                        System.err.println("[onnx2jit] DEBUG Slice_4 sentinel path: end=" + end + " start=" + start + " ax=" + ax + " ends=" + ends);
+                    }
+                    // end is a sentinel — clamp to remaining length at runtime.
+                    return outName + " = torch.narrow(" + data + ", " + ax
+                            + ", " + startExpr + ", " + data + ".size(" + ax + ") - " + startExpr + ")";
+                } else if (ends == null || ends.isEmpty()) {
+                    if (outName.endsWith("Slice_4_output_0")) {
+                        System.err.println("[onnx2jit] DEBUG Slice_4 dynamic-end path: end=" + end + " start=" + start + " ax=" + ax + " ends=" + ends);
+                    }
+                    // Dynamic end (non-sentinel) — use the runtime tensor value as
+                    // the length. This handles e.g. Slice_4 where end is a Sub/Unsqueeze
+                    // chain that produces a small positive integer (T, not INT64_MAX).
+                    String endsInput = sanitizedIn.get(2);
+                    String endTmp = "_slice_end_" + outName;
+                    return endTmp + ": int = int(" + endsInput + ".flatten()[0])\n    "
+                            + outName + " = torch.narrow(" + data + ", " + ax
+                            + ", " + startExpr + ", " + endTmp + " - " + startExpr + ")";
+                } else {
+                    if (outName.endsWith("Slice_4_output_0")) {
+                        System.err.println("[onnx2jit] DEBUG Slice_4 static-end path: end=" + end + " start=" + start + " ax=" + ax + " ends=" + ends);
+                    }
                     length = (end - start) / Math.max(step, 1);
+                    return outName + " = torch.narrow(" + data + ", " + ax
+                            + ", " + startExpr + ", " + length + ")";
                 }
-                String lengthStr;
-                if (length < 0) {
-                    // Slice to end: compute remaining length from tensor shape.
-                    lengthStr = data + ".size(" + ax + ") - " + start;
-                } else {
-                    lengthStr = String.valueOf(length);
-                }
-                return outName + " = torch.narrow(" + data + ", " + ax
-                        + ", " + start + ", " + lengthStr + ")";
             }
-            StringBuilder slice = new StringBuilder();
-            if (start != 0) slice.append(start);
-            slice.append(":");
-            if (end != -1) slice.append(end);
-            if (step != 1) slice.append(":").append(step);
-            return outName + " = " + data + "[" + slice + "]";
+            // Dynamic axes — fall back to runtime tensor slicing.
+            // We need to know the axis to use, so emit a helper that builds a
+            // list of slice objects and calls torch.narrow along the right axis.
+            if (axes == null || axes.isEmpty()) {
+                // No explicit axes — Slice defaults to the first len(starts) axes.
+                // Most commonly axes=[0]. Emit a Python slice expression.
+                StringBuilder slice = new StringBuilder();
+                if (start != 0) slice.append(start);
+                slice.append(":");
+                if (end != -1) slice.append(end);
+                if (step != 1) slice.append(":").append(step);
+                return outName + " = " + data + "[" + slice + "]";
+            }
+            // Dynamic axes — emit a runtime narrow using the resolved axis.
+            return outName + " = torch.narrow(" + data + ", " + axes.get(0)
+                    + ", " + start + ", " + data + ".size(" + axes.get(0) + ") - " + start + ")";
         }
         if ("Pad".equals(op)) {
             // ONNX Pad (legacy 1D/2D): inputs = [data, pads, constant_value?]
@@ -1857,7 +1911,7 @@ public final class OnnxToJitConverter {
             //     rev.append(src[half-1-i + half])
             String tmpPad = "_pad_arg_" + outName;
             String tmpPadRev = "_pad_arg_rev_" + outName;
-            return tmpPad + ": List[int] = " + sanitizedIn.get(1) + ".long().tolist()\n    "
+            return tmpPad + ": List[int] = [int(v) for v in " + sanitizedIn.get(1) + ".long().flatten()]\n    "
                     + tmpPadRev + ": List[int] = list()\n    "
                     + "for _pi in range(len(" + tmpPad + ") // 2):\n        "
                     + tmpPadRev + ".append(" + tmpPad + "[(len(" + tmpPad + ") // 2) - 1 - _pi])\n        "
@@ -1976,16 +2030,37 @@ public final class OnnxToJitConverter {
                 return outName + " = " + data;
             }
             if (axis == 0) {
+                // Check if idx is a known single-element index (constant with 1 value).
+                boolean idxIsScalar = false;
+                List<Long> idxVals = constantIntOutputs.get(idx);
+                if (idxVals != null && idxVals.size() == 1) {
+                    idxIsScalar = true;
+                }
+                if (idxIsScalar) {
+                    // Single scalar index: emit a 0-D scalar result via [0].
+                    // This avoids rank ambiguity in downstream Concat/Reshape.
+                    String flat = "_gather_flat_" + outName;
+                    String picked = "_gather_pick_" + outName;
+                    StringBuilder sb = new StringBuilder();
+                    sb.append(picked + " = torch.index_select(" + data + ", 0, " + idx + ".long())\n    ");
+                    sb.append(outName + " = " + picked + "[0]");
+                    return sb.toString();
+                }
                 String flat = "_gather_flat_" + outName;
                 String picked = "_gather_pick_" + outName;
                 // Flatten → index_select → reshape to [idx_shape..., data.size(1)].
-                // Treat the index as 1-D: this matches the way Constant values are
-                // emitted (always 1-D) and keeps Gather's output rank predictable.
+                // We use a typed intermediate List[int] for the reshape dims.
+                // Output rank = idx.dim() + (data.dim() - 1) when axis == 0.
                 StringBuilder sb = new StringBuilder();
                 sb.append(flat + " = " + idx + ".long().reshape([-1])\n    ");
                 sb.append(picked + " = torch.index_select(" + data + ", 0, " + flat + ")\n    ");
+                // Reshape target: combine idx.shape with data.shape[1:].
+                // Concatenate as the ONNX spec dictates (idx_dim..., data_dim1, data_dim2, ...).
+                // For axis=0 case the natural shape is
+                //   out.shape = idx.shape ++ data.shape[1:]
+                // Build a list literal via list comprehension (type annotated):
                 String dimsTmp = "_gather_dims_" + outName;
-                sb.append(dimsTmp + ": List[int] = list(" + idx + ".shape) + " + data + ".shape[1:]\n    ");
+                sb.append(dimsTmp + ": List[int] = [int(d) for d in " + idx + ".shape] + [int(d) for d in " + data + ".shape[1:]]\n    ");
                 sb.append(outName + " = " + picked + ".reshape(" + dimsTmp + ")");
                 return sb.toString();
             }
@@ -2039,14 +2114,10 @@ public final class OnnxToJitConverter {
             for (Map.Entry<String, OnnxAttribute> e : n.attributes.entrySet()) {
                 if ("axis".equals(e.getKey())) axis = ((Number) e.getValue().value).intValue();
             }
-            // Normalize each input to 1-D before cat. ONNX graphs frequently mix
-            // 0-D scalars (Constant_4 = torch.tensor(4)), 1-D single-element tensors
-            // (Constant_5 = torch.tensor([64])) and 2-D post-Unsqueeze tensors
-            // (unsqueeze([2], 0) = [[2]]). TorchScript strict torch.cat refuses
-            // mixed ranks, so we coerce everything to 1-D via .reshape(-1).
             StringBuilder args = new StringBuilder();
             for (int i = 0; i < sanitizedIn.size(); i++) {
                 if (i > 0) args.append(", ");
+                // Normalize each input to 1-D (see above comment).
                 args.append(sanitizedIn.get(i)).append(".reshape(-1)");
             }
             return outName + " = torch.cat([" + args + "], dim=" + axis + ")";
@@ -2064,7 +2135,7 @@ public final class OnnxToJitConverter {
                 Object v = e.getValue().value;
                 if ("value".equals(aname) && v instanceof OnnxTensor) {
                     OnnxTensor ot = (OnnxTensor) v;
-                    StringBuilder sb = new StringBuilder("torch.tensor([");
+                    StringBuilder sb = new StringBuilder();
                     int elemSize;
                     if (ot.dtype == null || ot.dtype == ScalarType.Float) {
                         elemSize = 4;
@@ -2080,77 +2151,67 @@ public final class OnnxToJitConverter {
                     }
                     boolean isFloat = (elemSize == 4 && ot.dtype == ScalarType.Float)
                             || (elemSize == 8 && ot.dtype == ScalarType.Double);
-                    // Choose tensor literal style based on shape:
-                    //   shape empty (dims=[]) -> 0-D scalar: torch.tensor(v)
-                    //   shape [1]            -> 1-D [v]: torch.tensor([v])
-                    //   shape [N]            -> 1-D [v1..vN]: torch.tensor([v1..vN])
-                    //   shape [a,b,...]      -> 1-D then reshape(a,b,...)
-                    //
-                    // 0-D scalars are critical for ops like Mul / Reshape, where
-                    // broadcasting with a 1-D [v] tensor would silently turn the
-                    // scalar result into a 1-D tensor and break downstream shape
-                    // inference. We follow the ONNX TensorProto dims exactly.
-                    int nf = 0;
-                    StringBuilder elemBuilder = new StringBuilder();
+                    StringBuilder elems = new StringBuilder();
                     if (ot.rawData != null && ot.rawData.length > 0) {
                         ByteBuffer bb = ByteBuffer.wrap(ot.rawData).order(ByteOrder.LITTLE_ENDIAN);
-                        nf = bb.limit() / elemSize;
+                        int nf = bb.limit() / elemSize;
                         if (isFloat) {
                             for (int i = 0; i < nf; i++) {
-                                if (i > 0) elemBuilder.append(", ");
-                                elemBuilder.append(bb.getFloat(i * 4));
+                                if (i > 0) elems.append(", ");
+                                elems.append(bb.getFloat(i * 4));
                             }
                         } else {
+                            // Treat all non-float as int64 for the TorchScript literal.
                             for (int i = 0; i < nf; i++) {
-                                if (i > 0) elemBuilder.append(", ");
-                                elemBuilder.append(bb.getLong(i * elemSize));
+                                if (i > 0) elems.append(", ");
+                                elems.append(bb.getLong(i * elemSize));
                             }
                         }
                     } else if (isFloat && ot.floatData != null && !ot.floatData.isEmpty()) {
                         for (int i = 0; i < ot.floatData.size(); i++) {
-                            if (i > 0) elemBuilder.append(", ");
-                            elemBuilder.append(ot.floatData.get(i));
+                            if (i > 0) elems.append(", ");
+                            elems.append(ot.floatData.get(i));
                         }
-                        nf = ot.floatData.size();
                     } else if (!isFloat && ot.intData != null && !ot.intData.isEmpty()) {
                         for (int i = 0; i < ot.intData.size(); i++) {
-                            if (i > 0) elemBuilder.append(", ");
-                            elemBuilder.append(ot.intData.get(i));
+                            if (i > 0) elems.append(", ");
+                            elems.append(ot.intData.get(i));
                         }
-                        nf = ot.intData.size();
                     } else if (ot.intData != null && !ot.intData.isEmpty()) {
                         for (int i = 0; i < ot.intData.size(); i++) {
-                            if (i > 0) elemBuilder.append(", ");
-                            elemBuilder.append(ot.intData.get(i));
+                            if (i > 0) elems.append(", ");
+                            elems.append(ot.intData.get(i));
                         }
+                    }
+                    // Determine total elements in source data.
+                    int nf = 0;
+                    if (ot.rawData != null && ot.rawData.length > 0) {
+                        nf = ot.rawData.length / elemSize;
+                    } else if (isFloat && ot.floatData != null && !ot.floatData.isEmpty()) {
+                        nf = ot.floatData.size();
+                    } else if (!isFloat && ot.intData != null && !ot.intData.isEmpty()) {
+                        nf = ot.intData.size();
+                    } else if (ot.intData != null && !ot.intData.isEmpty()) {
                         nf = ot.intData.size();
                     }
-                    String elems = elemBuilder.toString();
-                    int shapeLen = (ot.shape != null) ? ot.shape.length : 0;
-                    int numShapeElems = 1;
-                    if (shapeLen > 0) {
-                        numShapeElems = 1;
-                        for (int i = 0; i < shapeLen; i++) {
-                            numShapeElems *= Math.max(1, ot.shape[i]);
-                        }
+                    // Compute shape length: 0-D for true scalar.
+                    int shapeLen = (ot.shape == null) ? 0 : ot.shape.length;
+                    long numShapeElems = 1;
+                    if (ot.shape != null) {
+                        for (long d : ot.shape) numShapeElems *= d;
                     }
-                    StringBuilder finalSb = new StringBuilder();
                     if (shapeLen == 0 && nf == 1) {
-                        // 0-D scalar.
-                        finalSb.append("torch.tensor(").append(elems).append(")");
-                    } else if (shapeLen == 0 && nf > 1) {
-                        // Defensive: multiple elements with empty shape → emit 1-D.
-                        finalSb.append("torch.tensor([").append(elems).append("])");
-                    } else if (shapeLen == 1 && ot.shape[0] == 1 && nf == 1) {
-                        // 1-D [v].
-                        finalSb.append("torch.tensor([").append(elems).append("])");
+                        // 0-D scalar (e.g., Constant value 4). Emit as torch.tensor(4)
+                        // so downstream Gather/Mul treat it as a scalar, not a 1-D tensor.
+                        sb.append("torch.tensor(").append(elems).append(")");
                     } else {
-                        finalSb.append("torch.tensor([").append(elems).append("])");
+                        // Multi-element or 1-D+: emit as a 1-D list literal then reshape if needed.
+                        sb.append("torch.tensor([").append(elems).append("])");
                         if (shapeLen > 1 || (shapeLen == 1 && numShapeElems != nf)) {
-                            finalSb.append(".reshape(").append(shapeLiteral(ot.shape)).append(")");
+                            sb.append(".reshape(").append(shapeLiteral(ot.shape)).append(")");
                         }
                     }
-                    return outName + " = " + finalSb;
+                    return outName + " = " + sb;
                 }
                 if ("value_float".equals(aname) && v instanceof Number) {
                     return outName + " = torch.tensor(" + v + ")";
@@ -2215,7 +2276,7 @@ public final class OnnxToJitConverter {
             // TorchScript annotation, otherwise TorchScript refuses to
             // type-check the result of `tensor.long().tolist()`.
             String tmpShape = "_cos_shape_" + outName;
-            return tmpShape + ": List[int] = " + shapeInput + ".long().tolist()\n    "
+            return tmpShape + ": List[int] = [int(v) for v in " + shapeInput + ".long().flatten()]\n    "
                     + outName + " = torch.full(" + tmpShape + ", " + fill + ")";
         }
         // ─── Generic ONNX op fallback ───────────────────────────────────────────

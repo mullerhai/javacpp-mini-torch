@@ -192,23 +192,17 @@ public final class TorchPthReader {
         if (root == null) return Map.of();
         if (root instanceof Map) {
             Map<?, ?> m = (Map<?, ?>) root;
-
-            // 1. Try known checkpoint wrappers first (Trainer, Lightning, etc.)
+            // Prefer common checkpoint wrappers
             for (String key : new String[]{"model_state_dict", "state_dict", "model", "module", "net"}) {
                 Object v = m.get(key);
                 if (v instanceof Map && looksLikeStateDict((Map<?, ?>) v)) {
                     return toTensorMap((Map<?, ?>) v);
                 }
             }
-
-            // 2. Direct state_dict (all tensors at top level)
             if (looksLikeStateDict(m)) {
-                Map<String, Tensor> direct = toTensorMap(m);
-                if (!direct.isEmpty()) return direct;
+                return toTensorMap(m);
             }
-
-            // 3. Flatten nested: handles YOLO's _OrderedDict which wraps
-            //    model layers under keys like "model", "backbone", etc.
+            // Flatten nested: collect all tensors under string keys
             Map<String, Tensor> flat = new LinkedHashMap<>();
             flattenTensors("", m, flat);
             if (!flat.isEmpty()) return flat;
@@ -218,23 +212,8 @@ public final class TorchPthReader {
             one.put("tensor", (Tensor) root);
             return one;
         }
-
-        // Give a useful error: explain WHY extraction failed
-        String hint = "";
-        if (root instanceof Map) {
-            Map<?, ?> m = (Map<?, ?>) root;
-            // Check if the map contains known non-tensor keys (model metadata)
-            boolean hasModelKey = m.containsKey("model") || m.containsKey("ema")
-                    || m.containsKey("optimizer") || m.containsKey("train_args");
-            if (hasModelKey) {
-                hint = " (checkpoint contains a Python model object — " +
-                       "use torch.save(model.state_dict()) for Java-compatible weights, " +
-                       "or export to TorchScript first)";
-            }
-        }
         throw new IllegalArgumentException(
-            "Cannot extract state_dict from " + (root == null ? "null" : root.getClass().getName())
-            + hint);
+            "Cannot extract state_dict from " + (root == null ? "null" : root.getClass().getName()));
     }
 
     // ---- helpers ------------------------------------------------------------
@@ -247,7 +226,7 @@ public final class TorchPthReader {
             keys++;
             if (e.getValue() instanceof Tensor) tensors++;
         }
-        return keys > 0 && tensors >= 1; // at least one tensor is enough
+        return keys > 0 && tensors * 2 >= keys; // majority tensors
     }
 
     private static Map<String, Tensor> toTensorMap(Map<?, ?> m) {

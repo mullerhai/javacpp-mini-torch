@@ -72,9 +72,17 @@ public class GlmForCausalLM extends Module {
         // actual share after weight load (see retieWordEmbeddings / AutoModel)
         if (config.tieWordEmbeddings()) {
             try {
-                lm_head.weight().requires_grad_(false);
-                model.embed_tokens.weight().requires_grad_(false);
-                lm_head.weight().set_(model.embed_tokens.weight());
+                Tensor dest = lm_head.weight();
+                Tensor src = model.embed_tokens.weight();
+                if (dest.scalar_type() == src.scalar_type()) {
+                    dest.requires_grad_(false);
+                    src.requires_grad_(false);
+                    dest.set_(src);
+                } else {
+                    dest.requires_grad_(false);
+                    src.requires_grad_(false);
+                    dest.copy_(src);
+                }
             } catch (Throwable ignored) {}
         }
     }
@@ -104,7 +112,11 @@ public class GlmForCausalLM extends Module {
             if (dest == null || src == null || !dest.defined() || !src.defined()) return false;
             try { dest.requires_grad_(false); } catch (Throwable ignored) {}
             try { src.requires_grad_(false); } catch (Throwable ignored) {}
-            dest.set_(src);
+            if (dest.scalar_type() == src.scalar_type()) {
+                dest.set_(src);
+            } else {
+                dest.copy_(src);
+            }
             return true;
         } catch (Throwable t) {
             try {

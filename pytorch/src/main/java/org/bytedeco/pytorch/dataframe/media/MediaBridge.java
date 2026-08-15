@@ -694,7 +694,44 @@ public final class MediaBridge {
         return torch.stack(new org.bytedeco.pytorch.TensorVector(ts.toArray(new Tensor[0])));
     }
 
-    /** Extract frames at approximately {@code fps} samples per second. */
+    /**
+     * Convert NCHW tensor {@code [N,3,H,W]} to VideoData.
+     * Frames are scaled from [0,1] to [0,255] internally if needed.
+     *
+     * @param tensor Shape [N,C,H,W]
+     * @param fps Frames per second
+     * @return VideoData with extracted frames
+     */
+    public static VideoData tensorToVideoData(Tensor tensor, double fps) {
+        Objects.requireNonNull(tensor, "tensor");
+        Tensor cpu = tensor.contiguous().cpu().to(ScalarType.Float);
+        long[] shape = cpu.sizes().stream().mapToLong(Long::longValue).toArray();
+
+        if (shape.length != 4) {
+            throw new IllegalArgumentException("Expected [N,C,H,W], got rank " + shape.length);
+        }
+
+        int n = (int) shape[0];
+        int h = (int) shape[2];
+        int w = (int) shape[3];
+
+        List<ImageData> frames = new ArrayList<>(n);
+        for (int i = 0; i < n; i++) {
+            Tensor frame = cpu.select(0, i);
+            frames.add(tensorToImage(frame));
+        }
+
+        VideoData video = new VideoData(frames, fps);
+        video.setFrameCount(n);
+        video.setWidth(w);
+        video.setHeight(h);
+        video.setDuration(n / fps);
+        return video;
+    }
+
+    /**
+     * Extract frames at approximately {@code fps} samples per second.
+     */
     public static List<ImageData> extractFrames(VideoData video, double fps) {
         Objects.requireNonNull(video, "video");
         List<ImageData> frames = video.getFrames();
