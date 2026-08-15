@@ -136,7 +136,7 @@ public final class VistaRender {
         sb.append("</div></header>");
 
         // ── model metadata panel ───────────────────────────────────────────
-        // (rendered after vx-body so collapsing/reflowing it doesn't disturb stage+drawer layout)
+        // Fixed overlay: floats above the graph so it never pushes content down
         final StringBuilder metaHtml = new StringBuilder();
         metaHtml.append("<div class=\"vx-meta\" id=\"meta-").append(uniqueId).append("\">");
         metaHtml.append("<div class=\"vx-meta-title\"><span>📊 Model Info</span>");
@@ -427,11 +427,12 @@ public final class VistaRender {
         sb.append(".vx-foot a{color:var(--accent);text-decoration:none;font-weight:700}");
 
         // ── model metadata panel ───────────────────────────────────────────
-        sb.append(".vx-meta{margin:12px 14px;padding:14px;border-radius:14px;background:var(--bg2);");
-        sb.append("border:1px solid var(--line);box-shadow:var(--shadow);");
-        sb.append("transition:max-height .22s ease,opacity .18s ease,margin .22s ease,padding .22s ease,border-width .22s ease;");
-        sb.append("max-height:3000px;overflow:hidden}");
-        sb.append(".vx-meta.collapsed{max-height:0;opacity:0;margin:0 14px;padding:0 14px;border-width:0;pointer-events:none}");
+        // Floating overlay (position:fixed): appears ABOVE the SVG, never pushes it
+        sb.append(".vx-meta{margin:12px 14px;padding:14px;border-radius:14px 14px 0 0;background:var(--bg2);");
+        sb.append("border:1px solid var(--line);border-bottom:none;box-shadow:0 -4px 24px rgba(0,0,0,.12);");
+        sb.append("transition:opacity .22s ease;opacity:1;z-index:999;pointer-events:all;");
+        sb.append("position:fixed;bottom:0;left:0;right:0;max-height:calc(100vh - 120px);overflow-y:auto}");
+        sb.append(".vx-meta.collapsed{opacity:0;pointer-events:none}");
         sb.append(".vx-meta-title{display:flex;justify-content:space-between;align-items:center;font-weight:900;font-size:13px;margin-bottom:12px;color:var(--accent)}");
         sb.append(".vx-meta-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px}");
         sb.append(".vx-meta-card{background:color-mix(in srgb,var(--accent) 6%,var(--bg));");
@@ -648,7 +649,7 @@ public final class VistaRender {
         s.append("  if(metaToggleTop) metaToggleTop.style.display='none';\n");
         s.append("}\n");
 
-        s.append("// Model info collapse/expand (visible-by-default; auto-scrolls into view when expanded)\n");
+        s.append("// Model info collapse/expand (fixed overlay; auto-scrolls into view when expanded)\n");
         s.append("const metaEl=document.getElementById('meta-'+ID);\n");
         s.append("const metaToggle=document.getElementById('meta-toggle-'+ID);\n");
         s.append("const metaClose=document.getElementById('meta-close-'+ID);\n");
@@ -656,9 +657,8 @@ public final class VistaRender {
         s.append("let metaVisible=true;\n");
         s.append("function setMetaVisible(v){\n");
         s.append("  metaVisible=v;\n");
-        s.append("  if(metaEl){metaEl.classList.toggle('collapsed',!v);}\n");
+        s.append("  if(metaEl){metaEl.style.opacity=v?'1':'0';metaEl.style.pointerEvents=v?'all':'none';}\n");
         s.append("  if(metaToggle){metaToggle.textContent=v?'👁':'🫣';}\n");
-        s.append("  if(v&&metaEl){metaEl.scrollIntoView({behavior:'smooth',block:'nearest'});}\n");
         s.append("}\n");
         s.append("if(metaToggle){metaToggle.addEventListener('click',function(){setMetaVisible(!metaVisible);});}\n");
         s.append("if(metaClose){metaClose.addEventListener('click',function(){setMetaVisible(false);});}\n");
