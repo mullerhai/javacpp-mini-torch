@@ -58,6 +58,12 @@
       <version>4.13.2</version>
 <!--      <scope>test</scope>-->
     </dependency>
+    <!-- Razorvine pickle for Python pickle protocol parsing -->
+<!--    <dependency>-->
+<!--      <groupId>net.razorvine</groupId>-->
+<!--      <artifactId>pickle</artifactId>-->
+<!--      <version>1.5</version>-->
+<!--    </dependency>-->
     <!-- Own platform jar from local m2 (after mvn install). Needed for IDE runs when
          target/ was cleaned: Make only recompiles .class, not libjnitorch.dylib.
          optional + runtime so it is not a published transitive; consumers use pytorch-platform. -->
@@ -237,6 +243,13 @@
       <artifactId>duckdb_jdbc</artifactId>
       <version>1.5.5.0</version>
     </dependency>
+    <!-- Source: https://mvnrepository.com/artifact/com.microsoft.onnxruntime/onnxruntime -->
+    <dependency>
+      <groupId>com.microsoft.onnxruntime</groupId>
+      <artifactId>onnxruntime</artifactId>
+      <version>1.28.0</version>
+      <scope>compile</scope>
+    </dependency>
     <!-- Official Lance format Java API (multimodal vector lakehouse; Arrow IPC interop) -->
     <!-- Drop Lance Namespace REST client (unused): removes httpclient5 + 4 Jackson jaxrs/openapi pkgs.
          Drop arrow-memory-netty (we use arrow-memory-unsafe above instead of netty).
@@ -370,6 +383,17 @@
           <source>17</source>
           <target>17</target>
           <release>17</release>
+          <!--
+            VectorDistanceKernel pulls in jdk.incubator.vector (Project Panama SIMD).
+            Pre-Java-20 the API ships as an incubating module (opt in via add-modules).
+            On Java 20+ the symbol upgraded but remained accessible through the same module.
+            Maven-compiler 3.11+ forwards add-modules through fork=true; older versions
+            can be configured via the release21 profile or by setting -Drelease=21 locally.
+          -->
+          <compilerArgs>
+            <arg>--add-modules</arg>
+            <arg>jdk.incubator.vector</arg>
+          </compilerArgs>
           <!-- Demo / ad-hoc *Test* and *Benchmark* under main use JUnit or are not part of the library surface. -->
           <excludes>
             <exclude>**/geometric/demo/**/*Test.java</exclude>
