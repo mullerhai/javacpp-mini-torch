@@ -31,6 +31,7 @@ import org.bytedeco.pytorch.nn.modules.EmbeddingImpl;
 import org.bytedeco.pytorch.nn.modules.LinearImpl;
 import org.bytedeco.pytorch.nn.modules.LayerNormImpl;
 import org.bytedeco.pytorch.nn.options.LinearOptions;
+import org.bytedeco.pytorch.global.torch;
 import org.bytedeco.pytorch.global.torch.ScalarType;
 
 import java.util.ArrayList;
@@ -109,7 +110,7 @@ public class CLIPTextEmbeddings extends Module {
             kt = kt.reshape(new long[]{b, k.size(1), numHeads, headDim}).transpose(1, 2);
             vt = vt.reshape(new long[]{b, v.size(1), numHeads, headDim}).transpose(1, 2);
 
-            Tensor scale = tensor(1.0 / Math.sqrt(headDim));
+            Tensor scale = tensor((float) (1.0 / Math.sqrt(headDim)));
             Tensor attn = softmax(matmul(q, kt.transpose(-2, -1)).mul(scale), -1);
             Tensor out = matmul(attn, vt).transpose(1, 2).reshape(new long[]{b, seqLen, hiddenSize});
             return ((LinearImpl) outProj).forward(out);
@@ -119,7 +120,7 @@ public class CLIPTextEmbeddings extends Module {
     public static class QuickGELU extends Module {
         @Override
         public Tensor forward(Tensor x) {
-            return x.mul(tanh(x.add(x.mul(x).mul(x).mul(0.044715)).mul(Math.sqrt(2.0 / Math.PI))).add(1.0)).mul(0.5);
+            return x.mul(tanh(x.add(x.mul(x).mul(x).mul(new Scalar(0.044715))).mul(new Scalar(Math.sqrt(2.0 / Math.PI)))).add(new Scalar(1.0))).mul(new Scalar(0.5));
         }
     }
 
@@ -177,7 +178,7 @@ public class CLIPTextEmbeddings extends Module {
         public CLIPEncoder(CLIPTextConfig config) {
             super("CLIPEncoder");
             for (int i = 0; i < config.numHiddenLayers(); i++) {
-                layers.add(register_module("layers." + i,
+                layers.add(register_module("layers_" + i,
                     new CLIPEncoderLayer(config, i)));
             }
         }
@@ -217,17 +218,33 @@ public class CLIPTextEmbeddings extends Module {
         long seqLen = Math.min(inputIds.size(1), config.maxPositionEmbeddings());
 
         if (inputIds.size(1) > seqLen) {
-            inputIds = inputIds.slice(1, 0, seqLen);
+            inputIds = inputIds.narrow(1, 0, seqLen);
         }
 
+        // Clamp input IDs to the embedding table size to avoid index errors
+        // when used with arbitrary tokenizers (e.g., tiktoken with vocab > 49k).
+        int vocabSize = config.vocabSize();
+        // Build clamp value as a same-dtype Long tensor
+        Tensor clampVal = torch.full(inputIds.sizes(),
+            new Scalar(vocabSize - 1L),
+            new org.bytedeco.pytorch.TensorOptions(ScalarType.Long));
+        inputIds = inputIds.minimum(clampVal);
+        inputIds = inputIds.maximum(torch.zeros_like(inputIds));
+
         Tensor embeddings = ((EmbeddingImpl) tokenEmbedding).forward(inputIds);
+
+        // Ensure float32 (Embedding weight is float32)
+        // Embedding weights are float32; explicitly cast to be safe.
+        embeddings = embeddings.to(torch.ScalarType.Float);
 
         Tensor posIds = arange(new Scalar(seqLen),
             new org.bytedeco.pytorch.TensorOptions(ScalarType.Long));
         if (b > 1) {
             posIds = posIds.unsqueeze(0).expand(new long[]{b, seqLen});
         }
-        embeddings = embeddings.add(((EmbeddingImpl) positionEmbedding).forward(posIds));
+        Tensor posEmb = ((EmbeddingImpl) positionEmbedding).forward(posIds);
+        posEmb = posEmb.to(torch.ScalarType.Float);
+        embeddings = embeddings.add(posEmb);
         embeddings = ((CLIPEncoder) encoder).forward(embeddings);
         return ((LayerNormImpl) finalLayerNorm).forward(embeddings);
     }
@@ -238,7 +255,7 @@ public class CLIPTextEmbeddings extends Module {
             longs[i] = new long[inputIds[i].length];
             for (int j = 0; j < inputIds[i].length; j++) longs[i][j] = inputIds[i][j];
         }
-        return forward(torch.tensor(longs, new org.bytedeco.pytorch.TensorOptions().dtype(ScalarType.Long)));
+        return forward(torch.tensor(longs, new org.bytedeco.pytorch.TensorOptions(ScalarType.Long)));
     }
 
     public CLIPTextConfig config() { return config; }

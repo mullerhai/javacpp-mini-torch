@@ -110,6 +110,196 @@ public final class ChatTemplate {
         return apply(messages, true);
     }
 
+    /**
+     * Apply chat template with multimodal content support.
+     *
+     * <p>Messages can contain nested content with text, images, videos, audio.
+     *
+     * @param messages List of message maps with role and content
+     * @param addGenerationPrompt append assistant header for generation
+     */
+    @SuppressWarnings("unchecked")
+    public String applyMultimodal(List<Map<String, Object>> messages, boolean addGenerationPrompt) {
+        Objects.requireNonNull(messages, "messages");
+        return switch (flavor) {
+            case QWEN -> applyQwenMultimodal(messages, addGenerationPrompt);
+            case LLAMA3 -> applyLlama3Multimodal(messages, addGenerationPrompt);
+            case MISTRAL -> applyMistralMultimodal(messages, addGenerationPrompt);
+            case GLM -> applyGlmMultimodal(messages, addGenerationPrompt);
+            case RAW -> applyRawMultimodal(messages);
+        };
+    }
+
+    public String applyMultimodal(List<Map<String, Object>> messages) {
+        return applyMultimodal(messages, true);
+    }
+
+    private static String roleOfMultimodal(Map<String, Object> m) {
+        Object r = m.get("role");
+        return r == null ? "user" : String.valueOf(r);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static String applyQwenMultimodal(List<Map<String, Object>> messages, boolean addGen) {
+        StringBuilder sb = new StringBuilder();
+        for (Map<String, Object> msg : messages) {
+            sb.append("<|im_start|>").append(roleOfMultimodal(msg)).append('\n');
+
+            Object content = msg.get("content");
+            if (content instanceof List) {
+                List<Map<String, Object>> contentList = (List<Map<String, Object>>) content;
+                for (Map<String, Object> item : contentList) {
+                    String type = String.valueOf(item.get("type"));
+                    switch (type) {
+                        case "text" -> sb.append(item.get("text"));
+                        case "image" -> sb.append("<|image_pad|>");
+                        case "video" -> sb.append("<|video_pad|>");
+                        case "audio" -> sb.append("<|audio_pad|>");
+                    }
+                }
+            } else {
+                sb.append(content);
+            }
+            sb.append("<|im_end|>\n");
+        }
+        if (addGen) {
+            sb.append("<|im_start|>assistant\n");
+        }
+        return sb.toString();
+    }
+
+    @SuppressWarnings("unchecked")
+    private static String applyLlama3Multimodal(List<Map<String, Object>> messages, boolean addGen) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("<|begin_of_text|>");
+        for (Map<String, Object> msg : messages) {
+            String role = roleOfMultimodal(msg);
+            sb.append("<|start_header_id|>").append(role).append("<|end_header_id|>\n\n");
+
+            Object content = msg.get("content");
+            if (content instanceof List) {
+                List<Map<String, Object>> contentList = (List<Map<String, Object>>) content;
+                for (Map<String, Object> item : contentList) {
+                    String type = String.valueOf(item.get("type"));
+                    if ("text".equals(type)) {
+                        sb.append(item.get("text"));
+                    } else if ("image".equals(type)) {
+                        sb.append("<|image|>");
+                    }
+                }
+            } else {
+                sb.append(content);
+            }
+            sb.append("<|eot_id|>");
+        }
+        if (addGen) {
+            sb.append("<|start_header_id|>assistant<|end_header_id|>\n\n");
+        }
+        return sb.toString();
+    }
+
+    @SuppressWarnings("unchecked")
+    private static String applyMistralMultimodal(List<Map<String, Object>> messages, boolean addGen) {
+        StringBuilder sb = new StringBuilder();
+        String system = null;
+        for (Map<String, Object> msg : messages) {
+            String role = roleOfMultimodal(msg);
+            if ("system".equals(role)) {
+                Object content = msg.get("content");
+                system = content instanceof String ? String.valueOf(content) : "";
+                continue;
+            }
+            if ("user".equals(role)) {
+                sb.append("[INST] ");
+                if (system != null) {
+                    sb.append(system).append("\n\n");
+                    system = null;
+                }
+                Object content = msg.get("content");
+                if (content instanceof List) {
+                    List<Map<String, Object>> contentList = (List<Map<String, Object>>) content;
+                    for (Map<String, Object> item : contentList) {
+                        if ("text".equals(String.valueOf(item.get("type")))) {
+                            sb.append(item.get("text"));
+                        }
+                    }
+                } else {
+                    sb.append(content);
+                }
+                sb.append(" [/INST]");
+            } else if ("assistant".equals(role)) {
+                Object content = msg.get("content");
+                if (content instanceof List) {
+                    List<Map<String, Object>> contentList = (List<Map<String, Object>>) content;
+                    for (Map<String, Object> item : contentList) {
+                        if ("text".equals(String.valueOf(item.get("type")))) {
+                            sb.append(' ').append(item.get("text"));
+                        }
+                    }
+                } else {
+                    sb.append(' ').append(content);
+                }
+                sb.append("</s>");
+            }
+        }
+        return sb.toString();
+    }
+
+    @SuppressWarnings("unchecked")
+    private static String applyGlmMultimodal(List<Map<String, Object>> messages, boolean addGen) {
+        StringBuilder sb = new StringBuilder();
+        for (Map<String, Object> msg : messages) {
+            String role = roleOfMultimodal(msg);
+            String tag = switch (role) {
+                case "system" -> "<|system|>";
+                case "assistant" -> "<|assistant|>";
+                case "observation" -> "<|observation|>";
+                default -> "<|user|>";
+            };
+            sb.append(tag).append('\n');
+
+            Object content = msg.get("content");
+            if (content instanceof List) {
+                List<Map<String, Object>> contentList = (List<Map<String, Object>>) content;
+                for (Map<String, Object> item : contentList) {
+                    String type = String.valueOf(item.get("type"));
+                    if ("text".equals(type)) {
+                        sb.append(item.get("text"));
+                    } else if ("image".equals(type)) {
+                        sb.append("<|image|>");
+                    }
+                }
+            } else {
+                sb.append(content);
+            }
+        }
+        if (addGen) {
+            sb.append("<|assistant|>\n");
+        }
+        return sb.toString();
+    }
+
+    @SuppressWarnings("unchecked")
+    private static String applyRawMultimodal(List<Map<String, Object>> messages) {
+        StringBuilder sb = new StringBuilder();
+        for (Map<String, Object> msg : messages) {
+            if (sb.length() > 0) sb.append('\n');
+
+            Object content = msg.get("content");
+            if (content instanceof List) {
+                List<Map<String, Object>> contentList = (List<Map<String, Object>>) content;
+                for (Map<String, Object> item : contentList) {
+                    if ("text".equals(String.valueOf(item.get("type")))) {
+                        sb.append(item.get("text"));
+                    }
+                }
+            } else {
+                sb.append(content);
+            }
+        }
+        return sb.toString();
+    }
+
     private static String roleOf(Map<String, String> m) {
         String r = m.get("role");
         return r == null ? "user" : r;

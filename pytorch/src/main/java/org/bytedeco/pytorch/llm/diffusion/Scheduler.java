@@ -112,7 +112,7 @@ public abstract class Scheduler {
     static long[] extractLongs(Tensor t) {
         long[] result = new long[(int) t.numel()];
         for (int i = 0; i < result.length; i++) {
-            result[i] = (long) t.item(i);
+            result[i] = t.reshape(-1).select(0, i).item().toLong();
         }
         return result;
     }

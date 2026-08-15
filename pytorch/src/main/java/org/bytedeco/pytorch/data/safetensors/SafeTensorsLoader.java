@@ -368,13 +368,16 @@ public class SafeTensorsLoader implements AutoCloseable {
     }
 
     private long getDataOffset(Path file) throws IOException {
-        byte[] headerBytes = Files.readAllBytes(file);
-        if (headerBytes.length < 8) {
-            throw new IOException("File too small");
+        // Only read the first 8 bytes (header length field), not the whole file.
+        try (FileChannel ch = FileChannel.open(file)) {
+            ByteBuffer lenBuf = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN);
+            if (ch.read(lenBuf, 0) != 8) {
+                throw new IOException("Cannot read header length from " + file);
+            }
+            lenBuf.flip();
+            long headerLen = lenBuf.getLong();
+            return 8 + headerLen;
         }
-        long headerLen = ByteBuffer.wrap(headerBytes, 0, 8)
-                .order(ByteOrder.LITTLE_ENDIAN).getLong();
-        return 8 + headerLen;
     }
 
     private Map<String, TensorMeta> parseHeader(String json) {

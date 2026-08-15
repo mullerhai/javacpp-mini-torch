@@ -27,8 +27,8 @@ import org.bytedeco.pytorch.global.torch;
 import org.bytedeco.pytorch.llm.diffusion.modeling.UNet2DConditionModel;
 import org.bytedeco.pytorch.llm.diffusion.modeling.AutoencoderKL;
 import org.bytedeco.pytorch.llm.diffusion.modeling.CLIPTextEmbeddings;
+import org.bytedeco.pytorch.llm.tokenizers.FastTokenizer;
 import org.bytedeco.pytorch.llm.transformers.AutoTokenizer;
-import org.bytedeco.pytorch.llm.transformers.PretrainedConfig;
 import org.bytedeco.pytorch.llm.transformers.loading.SnapshotFiles;
 import org.bytedeco.pytorch.llm.transformers.loading.WeightLoader;
 import org.bytedeco.pytorch.nn.Module;
@@ -286,7 +286,7 @@ public final class AutoImageToImage {
         /** Force a specific scheduler type (null = auto-detect from config) */
         public String forceScheduler = null;
         /** Tokenizer to use (null = auto-detect) */
-        public AutoTokenizer tokenizer = null;
+        public FastTokenizer tokenizer = null;
         /** Whether to load VAE weights (can be skipped for Latent Diffusion only) */
         public boolean loadVae = true;
         /** Whether to load text encoder weights (can be skipped for some models) */
@@ -297,7 +297,7 @@ public final class AutoImageToImage {
         public LoadOptions zeroCopyMmap(boolean v) { this.zeroCopyMmap = v; return this; }
         public LoadOptions loadWeights(boolean v) { this.loadWeights = v; return this; }
         public LoadOptions forceScheduler(String s) { this.forceScheduler = s; return this; }
-        public LoadOptions tokenizer(AutoTokenizer t) { this.tokenizer = t; return this; }
+        public LoadOptions tokenizer(FastTokenizer t) { this.tokenizer = t; return this; }
         public LoadOptions loadVae(boolean v) { this.loadVae = v; return this; }
         public LoadOptions loadTextEncoder(boolean v) { this.loadTextEncoder = v; return this; }
     }
@@ -328,7 +328,7 @@ public final class AutoImageToImage {
         UNet2DConditionModel unet = buildUnet(info);
         AutoencoderKL vae = buildVae(info);
         CLIPTextEmbeddings textEncoder = buildTextEncoder(info);
-        AutoTokenizer tokenizer = opts.tokenizer != null ? opts.tokenizer : buildTokenizer(info);
+        FastTokenizer tokenizer = opts.tokenizer != null ? opts.tokenizer : buildTokenizer(info);
         Scheduler scheduler = buildScheduler(info, opts);
 
         StableDiffusionPipeline pipeline = StableDiffusionPipeline.fromComponents(
@@ -461,20 +461,25 @@ public final class AutoImageToImage {
     static UNet2DConditionModel buildUnet(PipelineInfo info) {
         UNet2DConditionModel.DiffusionUnetConfig c =
             new UNet2DConditionModel.DiffusionUnetConfig();
-        c.inChannels(info.inChannels()).outChannels(info.outChannels());
+        c.inChannels(info.inChannels());
+        c.outChannels(info.outChannels());
         c.blockOutChannels(new int[]{
             info.unetBlockOutChannels0(),
             info.unetBlockOutChannels1(),
             info.unetBlockOutChannels2()
         });
         c.crossAttentionDim(new int[]{info.textEncoderHiddenSize()});
-        c.attentionHeadDim(info.textEncoderHeads());
+        // UNet attention head dim is independent of the text encoder.  Use the
+        // SD 1.5 default of 40 here (320 channels / 40 = 8 heads for the
+        // shallowest block, scaling up proportionally for deeper blocks).
+        c.attentionHeadDim(40);
         return new UNet2DConditionModel(c);
     }
 
     static AutoencoderKL buildVae(PipelineInfo info) {
         AutoencoderKL.VAEConfig c = new AutoencoderKL.VAEConfig();
-        c.inChannels(info.vaeInChannels()).latentChannels(info.latentChannels());
+        c.inChannels(info.vaeInChannels());
+        c.latentChannels(info.latentChannels());
         c.latentFactor(info.latentFactor());
         return new AutoencoderKL(c);
     }
@@ -488,13 +493,13 @@ public final class AutoImageToImage {
         return new CLIPTextEmbeddings(c);
     }
 
-    static AutoTokenizer buildTokenizer(PipelineInfo info) {
+    static FastTokenizer buildTokenizer(PipelineInfo info) {
         switch (info.tokenizerType()) {
             case CLIP:
             default:
                 return AutoTokenizer.cl100kBase();
             case BERT:
-                return AutoTokenizer.tiktoken();
+                return AutoTokenizer.tiktoken("cl100k_base");
         }
     }
 
@@ -535,7 +540,7 @@ public final class AutoImageToImage {
 
         // Also try loading via SnapshotFiles
         try {
-            Map<String, Tensor> snapshotTensors = SnapshotFiles.loadAllWeights(dir);
+            Map<String, Tensor> snapshotTensors = SnapshotFiles.loadAllWeights(dir, true);
             for (Map.Entry<String, Tensor> e : snapshotTensors.entrySet()) {
                 if (!allTensors.containsKey(e.getKey())) {
                     allTensors.put(e.getKey(), e.getValue());
