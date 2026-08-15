@@ -122,7 +122,7 @@ public final class TensorToAudioConverter {
      */
     public static Tensor toMono(Tensor tensor) {
         Tensor cpu = tensor.contiguous().cpu().to(ScalarType.Float);
-        long[] shape = cpu.sizes().stream().mapToLong(Long::longValue).toArray();
+        long[] shape = cpu.sizes().vec().get();//.mapToLong(Long::longValue).toArray();
 
         if (shape.length == 1) {
             return cpu;
@@ -159,7 +159,7 @@ public final class TensorToAudioConverter {
 
         int maxTime = 0;
         for (Tensor t : tensors) {
-            long[] shape = t.sizes().stream().mapToLong(Long::longValue).toArray();
+            long[] shape = t.sizes().vec().get();//.stream().mapToLong(Long::longValue).toArray();
             int time = shape.length == 1 ? (int) shape[0] : (int) shape[1];
             maxTime = Math.max(maxTime, time);
         }
@@ -196,7 +196,7 @@ public final class TensorToAudioConverter {
      */
     public static Tensor applyFade(Tensor tensor, int fadeInSamples, int fadeOutSamples) {
         Tensor cpu = tensor.contiguous().cpu().to(ScalarType.Float);
-        long[] shape = cpu.sizes().stream().mapToLong(Long::longValue).toArray();
+        long[] shape = cpu.sizes().vec().get();//.stream().mapToLong(Long::longValue).toArray();
         int time = shape.length == 1 ? (int) shape[0] : (int) shape[shape.length - 1];
         float[] data = AudioTensors.toFloatArray(cpu);
 
@@ -244,7 +244,7 @@ public final class TensorToAudioConverter {
             }
         }
 
-        long[] shape = cpu.sizes().stream().mapToLong(Long::longValue).toArray();
+        long[] shape = cpu.sizes().vec().get();//.stream().mapToLong(Long::longValue).toArray();
         if (shape.length == 1) {
             return org.bytedeco.pytorch.global.torch.tensor(data);
         } else {

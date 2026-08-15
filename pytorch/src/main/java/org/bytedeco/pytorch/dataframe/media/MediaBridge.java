@@ -705,7 +705,7 @@ public final class MediaBridge {
     public static VideoData tensorToVideoData(Tensor tensor, double fps) {
         Objects.requireNonNull(tensor, "tensor");
         Tensor cpu = tensor.contiguous().cpu().to(ScalarType.Float);
-        long[] shape = cpu.sizes().stream().mapToLong(Long::longValue).toArray();
+        long[] shape = cpu.sizes().vec().get();//.stream().mapToLong(Long::longValue).toArray();
 
         if (shape.length != 4) {
             throw new IllegalArgumentException("Expected [N,C,H,W], got rank " + shape.length);

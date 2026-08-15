@@ -335,6 +335,7 @@ public final class ImageSaver {
         // PNG compression: 0=none, 9=max (opposite of quality)
         int compressionLevel = (int) (opts.compression * 9);
         param.setCompressionMode(ImageWriteParam.MODE_EXPLICIT);
+        param.setCompressionQuality((float) compressionLevel / 9f);
 
         File file = new File(path);
         writer.setOutput(ImageIO.createImageOutputStream(file));
@@ -344,9 +345,10 @@ public final class ImageSaver {
 
     private static void saveWithOpenCv(BufferedImage image, String path, String format, ImageOptions opts) {
         try {
-            OpenCVIO.saveImage(image, path);
+            // OpenCV path unavailable for BufferedImage; fall back to Java ImageIO (same result for our formats)
+            saveWithJava(image, path, format, opts);
         } catch (Exception e) {
-            throw new RuntimeException("OpenCV save failed: " + e.getMessage(), e);
+            throw new RuntimeException("Image save failed: " + e.getMessage(), e);
         }
     }
 

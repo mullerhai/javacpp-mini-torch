@@ -34,6 +34,7 @@ import org.bytedeco.pytorch.vision.utils.ImageTensors;
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
 import java.io.File;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -351,9 +352,23 @@ public final class MediaSaver {
 
     private static void saveImageOpenCv(BufferedImage image, String path, String format, int quality) {
         try {
-            OpenCVIO.saveImage(image, path);
+            if ("jpg".equalsIgnoreCase(format) || "jpeg".equalsIgnoreCase(format)) {
+                // JPEG: honour quality via ImageIO
+                javax.imageio.ImageWriter writer = javax.imageio.ImageIO.getImageWritersByFormatName("jpeg").next();
+                javax.imageio.ImageWriteParam param = writer.getDefaultWriteParam();
+                param.setCompressionMode(javax.imageio.ImageWriteParam.MODE_EXPLICIT);
+                param.setCompressionQuality(Math.max(0f, Math.min(1f, quality / 100.0f)));
+                File file = new File(path);
+                FileOutputStream fos = new FileOutputStream(file);
+                writer.setOutput(javax.imageio.ImageIO.createImageOutputStream(fos));
+                writer.write(null, new javax.imageio.IIOImage(image, null, null), param);
+                writer.dispose();
+                fos.close();
+            } else {
+                javax.imageio.ImageIO.write(image, format, new File(path));
+            }
         } catch (Exception e) {
-            throw new RuntimeException("OpenCV save failed: " + e.getMessage(), e);
+            throw new RuntimeException("Image save failed: " + e.getMessage(), e);
         }
     }
 

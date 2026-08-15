@@ -274,7 +274,7 @@ public final class MultimodalTensorConverter {
     public static List<BufferedImage> batchToBufferedImage(Tensor batchTensors) {
         Objects.requireNonNull(batchTensors, "batchTensors cannot be null");
         Tensor cpu = batchTensors.contiguous().cpu().to(ScalarType.Float);
-        long[] shape = cpu.sizes().stream().mapToLong(Long::longValue).toArray();
+        long[] shape = cpu.sizes().vec().get();//.stream().mapToLong(Long::longValue).toArray();
 
         if (shape.length != 4) {
             throw new IllegalArgumentException("Expected [N,C,H,W], got rank " + shape.length);

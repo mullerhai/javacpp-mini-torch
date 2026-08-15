@@ -22,6 +22,7 @@
 package org.bytedeco.pytorch.dataframe.media;
 
 import org.bytedeco.pytorch.Tensor;
+import org.bytedeco.pytorch.TensorVector;
 import org.bytedeco.pytorch.dataframe.dtype.ImageData;
 import org.bytedeco.pytorch.dataframe.dtype.VideoData;
 import org.bytedeco.pytorch.global.torch.ScalarType;
@@ -109,7 +110,7 @@ public final class TensorToVideoConverter {
             tensors.add(t);
         }
 
-        return org.bytedeco.pytorch.global.torch.stack(tensors.toArray(new Tensor[0]));
+        return org.bytedeco.pytorch.global.torch.stack(new TensorVector(tensors.toArray(new Tensor[0])));
     }
 
     /**
@@ -175,7 +176,7 @@ public final class TensorToVideoConverter {
             selected.add(tensor.select(0, i));
         }
 
-        return org.bytedeco.pytorch.global.torch.stack(selected.toArray(new Tensor[0]));
+        return org.bytedeco.pytorch.global.torch.stack(new TensorVector(selected.toArray(new Tensor[0])));
     }
 
     /**
@@ -200,7 +201,7 @@ public final class TensorToVideoConverter {
             }
         }
 
-        return org.bytedeco.pytorch.global.torch.stack(allFrames.toArray(new Tensor[0]));
+        return org.bytedeco.pytorch.global.torch.stack(new TensorVector(allFrames.toArray(new Tensor[0])));
     }
 
     /**
@@ -218,7 +219,7 @@ public final class TensorToVideoConverter {
             reversed.add(tensor.select(0, i));
         }
 
-        return org.bytedeco.pytorch.global.torch.stack(reversed.toArray(new Tensor[0]));
+        return org.bytedeco.pytorch.global.torch.stack(new TensorVector(reversed.toArray(new Tensor[0])));
     }
 
     /**
@@ -248,7 +249,7 @@ public final class TensorToVideoConverter {
             adjusted.add(tensor.select(0, srcIdx));
         }
 
-        return org.bytedeco.pytorch.global.torch.stack(adjusted.toArray(new Tensor[0]));
+        return org.bytedeco.pytorch.global.torch.stack(new TensorVector(adjusted.toArray(new Tensor[0])));
     }
 
     // ── Frame-level Operations ───────────────────────────────────────────
@@ -275,7 +276,7 @@ public final class TensorToVideoConverter {
             throw new IllegalArgumentException("No valid frame indices");
         }
 
-        return org.bytedeco.pytorch.global.torch.stack(selected.toArray(new Tensor[0]));
+        return org.bytedeco.pytorch.global.torch.stack(new TensorVector(selected.toArray(new Tensor[0])));
     }
 
     /**
@@ -311,7 +312,7 @@ public final class TensorToVideoConverter {
             transformed.add(transformer.apply(frame));
         }
 
-        return org.bytedeco.pytorch.global.torch.stack(transformed.toArray(new Tensor[0]));
+        return org.bytedeco.pytorch.global.torch.stack(new TensorVector(transformed.toArray(new Tensor[0])));
     }
 
     // ── Format Validation ─────────────────────────────────────────────────
@@ -365,7 +366,7 @@ public final class TensorToVideoConverter {
         for (int i = 0; i < numFrames; i++) {
             frames[i] = imageTensor.clone();
         }
-        return org.bytedeco.pytorch.global.torch.stack(frames);
+        return org.bytedeco.pytorch.global.torch.stack(new TensorVector(frames));
     }
 
     /**
@@ -387,7 +388,7 @@ public final class TensorToVideoConverter {
             frames.add(TensorToImageConverter.createTestPattern(width, height, "gradient"));
         }
 
-        return org.bytedeco.pytorch.global.torch.stack(frames.toArray(new Tensor[0]));
+        return org.bytedeco.pytorch.global.torch.stack(new TensorVector(frames.toArray(new Tensor[0])));
     }
 
     /**
