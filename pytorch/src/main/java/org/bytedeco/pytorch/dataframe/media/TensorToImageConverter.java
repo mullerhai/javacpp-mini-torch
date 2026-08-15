@@ -21,13 +21,13 @@
  */
 package org.bytedeco.pytorch.dataframe.media;
 
+import org.bytedeco.pytorch.Scalar;
 import org.bytedeco.pytorch.Tensor;
 import org.bytedeco.pytorch.dataframe.dtype.ImageData;
 import org.bytedeco.pytorch.global.torch.ScalarType;
 import org.bytedeco.pytorch.vision.utils.ImageTensors;
 
-import java.awt.Color;
-import java.awt.Graphics2D;
+import java.awt.*;
 import java.awt.image.BufferedImage;
 import java.util.Arrays;
 import java.util.List;
@@ -216,9 +216,9 @@ public final class TensorToImageConverter {
         float min = minValue(cpu);
         float max = maxValue(cpu);
         if (max - min < 1e-6) {
-            return cpu.sub(min);
+            return cpu.sub(new Scalar(min));
         }
-        return cpu.sub(min).div(max - min);
+        return cpu.sub(new Scalar(min)).div(new Scalar(max - min));
     }
 
     /**
@@ -232,7 +232,7 @@ public final class TensorToImageConverter {
     public static Tensor denormalize(Tensor tensor, float[] mean, float[] std) {
         Tensor t = tensor.clone();
         for (int i = 0; i < mean.length; i++) {
-            t = t.select(0, i).mul(std[i]).add(mean[i]);
+            t = t.select(0, i).mul(new Scalar(std[i])).add(new Scalar(mean[i]));
         }
         return t;
     }
