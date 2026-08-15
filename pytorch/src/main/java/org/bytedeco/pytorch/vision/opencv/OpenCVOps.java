@@ -322,6 +322,159 @@ public final class OpenCVOps {
     }
 
     // ═══════════════════════════════════════════════════════════════════════
+    // Drawing API surface (delegates to org.bytedeco.pytorch.vision.draw.VisionDraw)
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /**
+     * Open a <em>tensor-aware</em> draw context for a {@code [C,H,W]} tensor in
+     * {@code [0,255]}. Drawing through it produces a new tensor of the same
+     * shape (mutations are non-destructive — the original tensor is left
+     * untouched by the builder). This is the recommended entry point for
+     * detection/segmentation pipelines.
+     *
+     * <pre>{@code
+     * Tensor img = OpenCVIO.readImage("photo.jpg"); // [3,H,W] 0-255
+     * try (VisionDraw.DrawContext d = OpenCVOps.draw(img)) {
+     *     d.strokeColor(DColor.of("red")).lineWidth(3).rect(20, 20, 200, 100, false);
+     * }
+     * Tensor drawn = VisionDraw.toTensor(d); // [3,H,W] 0-255
+     * }</pre>
+     */
+    public static org.bytedeco.pytorch.vision.draw.VisionDraw.DrawContext draw(Tensor img255) {
+        return org.bytedeco.pytorch.vision.draw.VisionDraw.onTensor(img255);
+    }
+
+    /**
+     * Open a tensor-aware draw context from a flat {@code float[]} array
+     * (HWC or CHW).
+     */
+    public static org.bytedeco.pytorch.vision.draw.VisionDraw.DrawContext draw(float[] data, int c, int h, int w, boolean hwc) {
+        return org.bytedeco.pytorch.vision.draw.VisionDraw.onFloat(data, c, h, w, hwc);
+    }
+
+    /** Open a tensor-aware draw context from a flat HWC float array. */
+    public static org.bytedeco.pytorch.vision.draw.VisionDraw.DrawContext draw(float[] hwc, int h, int w) {
+        return org.bytedeco.pytorch.vision.draw.VisionDraw.onFloat(hwc, h, w);
+    }
+
+    /**
+     * Open a tensor-aware draw context from an ONNX Runtime {@code OnnxTensor}.
+     * Reflection-based so the ONNX runtime dependency stays soft.
+     */
+    public static org.bytedeco.pytorch.vision.draw.VisionDraw.DrawContext drawOnnx(Object onnxTensor) {
+        return org.bytedeco.pytorch.vision.draw.VisionDraw.onOnnxTensor(onnxTensor);
+    }
+
+    /**
+     * One-shot convenience: bake annotations onto a tensor and return the
+     * drawn tensor. Caller-provided block can chain the draw primitives.
+     */
+    public static Tensor annotate(Tensor img255,
+                                  java.util.function.Consumer<org.bytedeco.pytorch.vision.draw.VisionDraw.DrawContext> block) {
+        try (org.bytedeco.pytorch.vision.draw.VisionDraw.DrawContext d = draw(img255)) {
+            block.accept(d);
+            return org.bytedeco.pytorch.vision.draw.VisionDraw.toTensor(d);
+        }
+    }
+
+    /**
+     * One-shot: annotate detections (Coco/VOC bbox list) onto a tensor.
+     *
+     * @param img255 input tensor {@code [3,H,W]} 0-255
+     * @param boxes  detection boxes, each as {@code [x, y, w, h, score, classIdx]}
+     * @param labels optional class-name lookup (classIdx → name); may be null
+     * @return annotated tensor
+     */
+    public static Tensor annotateDetections(Tensor img255, float[][] boxes, String[] labels) {
+        try (org.bytedeco.pytorch.vision.draw.VisionDraw.DrawContext d = draw(img255)) {
+            org.bytedeco.pytorch.vision.draw.DrawingCanvas c = d.canvas();
+            int n = boxes.length;
+            for (int i = 0; i < n; i++) {
+                float[] b = boxes[i];
+                if (b == null || b.length < 4) continue;
+                int x = Math.round(b[0]);
+                int y = Math.round(b[1]);
+                int w = Math.round(b[2]);
+                int h = Math.round(b[3]);
+                org.bytedeco.pytorch.vision.draw.DColor color = (b.length >= 6)
+                        ? org.bytedeco.pytorch.vision.draw.DAnnotations.colorForClass((int) b[5])
+                        : org.bytedeco.pytorch.vision.draw.DColor.of("red");
+                String label = null;
+                if (labels != null && b.length >= 6 && (int) b[5] >= 0 && (int) b[5] < labels.length) {
+                    label = labels[(int) b[5]];
+                    if (b.length >= 5) label = (label == null ? "" : label) + String.format(" %.2f", b[4]);
+                }
+                c.setStrokeColor(color);
+                c.setPen(org.bytedeco.pytorch.vision.draw.DPen.solid(2f, color));
+                c.drawRect(org.bytedeco.pytorch.vision.draw.DRect.of(x, y, w, h));
+                if (label != null) {
+                    c.setFillColor(color);
+                    c.text(label, x + 2, Math.max(12, y - 4));
+                }
+            }
+            return org.bytedeco.pytorch.vision.draw.VisionDraw.toTensor(d);
+        }
+    }
+
+    /**
+     * One-shot: draw a heatmap overlay onto a tensor.
+     */
+    public static Tensor annotateHeatmap(Tensor img255, float[] data, int h, int w,
+                                          org.bytedeco.pytorch.vision.draw.DHeatmap.Colormap cmap,
+                                          float alpha) {
+        try (org.bytedeco.pytorch.vision.draw.VisionDraw.DrawContext d = draw(img255)) {
+            org.bytedeco.pytorch.vision.draw.DHeatmap.overlay(d.canvas(), data, h, w, cmap, alpha);
+            return org.bytedeco.pytorch.vision.draw.VisionDraw.toTensor(d);
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Scrimage bridge — Pillow/Scrimage-style image ops on Mat or Tensor.
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /**
+     * Apply a scrimage-style operation chain to a tensor {@code [3,H,W]}.
+     * Delegates to the {@link org.bytedeco.pytorch.vision.scrimage.Scrimage}
+     * facade via Pillow. Supported op names: grayscale, invert, sepia, blur,
+     * sharpen, edge, emboss, pixelate, vignette, flip, mirror, rotate, scale,
+     * fit, cover, crop, autoContrast, equalize, posterize, solarize, tint,
+     * levels.
+     *
+     * @param img255 input tensor {@code [3,H,W]} 0-255
+     * @param op operation name
+     * @param args operation arguments
+     * @return transformed tensor
+     */
+    public static Tensor applyScrimage(Tensor img255, String op, Object... args) {
+        java.awt.image.BufferedImage bi = org.bytedeco.pytorch.vision.utils.ImageTensors.toBufferedImage(img255);
+        org.bytedeco.pytorch.vision.scrimage.ImmutableImage src = org.bytedeco.pytorch.vision.scrimage.Scrimage.of(bi);
+        org.bytedeco.pytorch.vision.scrimage.ImmutableImage out = org.bytedeco.pytorch.vision.scrimage.Scrimage.builder(src).with(op, args).get();
+        return org.bytedeco.pytorch.vision.utils.ImageTensors.toTensor(out.image().toBufferedImage());
+    }
+
+    /**
+     * Convert a Mat to a Pillow Image then apply a single scrimage op by name.
+     * @return Pillow Image (caller wraps as needed)
+     */
+    /**
+     * Apply a scrimage op chain to a Pillow Image (Mat → Image via
+     * {@link #matToPillow(Object)} if needed).
+     */
+    public static org.bytedeco.pytorch.vision.pillow.Image applyScrimageToImage(org.bytedeco.pytorch.vision.pillow.Image im, String op, Object... args) {
+        org.bytedeco.pytorch.vision.scrimage.ImmutableImage src = org.bytedeco.pytorch.vision.scrimage.Scrimage.of(im);
+        return org.bytedeco.pytorch.vision.scrimage.Scrimage.builder(src).with(op, args).get().image();
+    }
+
+    /**
+     * Convert a Pillow {@link Image} chain through scrimage and back. The
+     * Mat overload requires the opencv-platform jar on the classpath; the
+     * {@link Image} form works standalone.
+     */
+    public static org.bytedeco.pytorch.vision.pillow.Image matToPillow(org.bytedeco.pytorch.vision.pillow.Image im) {
+        return im;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
     // Capability / recipe catalog (for DataFrame.media / docs)
     // ═══════════════════════════════════════════════════════════════════════
 
@@ -335,7 +488,8 @@ public final class OpenCVOps {
                 "ocrBinarize", "enhanceLowLight", "denoise",
                 "ahash", "isNearDuplicate",
                 "opticalFlow", "frameDiffEnergy", "motionProfile",
-                "augmentBasic", "edges", "stackResized"
+                "augmentBasic", "edges", "stackResized",
+                "draw", "annotate", "annotateDetections", "annotateHeatmap"
         ));
         m.put("opencvIoExtended", List.of(
                 "vflip", "rotate", "gaussianBlur", "medianBlur", "bilateralFilter",

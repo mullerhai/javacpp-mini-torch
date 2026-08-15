@@ -9,6 +9,15 @@ import org.bytedeco.pytorch.vision.pillow.core.PixelAccess;
 import org.bytedeco.pytorch.vision.pillow.core.Resample;
 import org.bytedeco.pytorch.vision.pillow.enums.Resampling;
 import org.bytedeco.pytorch.vision.pillow.enums.Transpose;
+import org.bytedeco.pytorch.vision.draw.DColor;
+import org.bytedeco.pytorch.vision.draw.DFont;
+import org.bytedeco.pytorch.vision.draw.DPath;
+import org.bytedeco.pytorch.vision.draw.DPen;
+import org.bytedeco.pytorch.vision.draw.DBrush;
+import org.bytedeco.pytorch.vision.draw.DPoint;
+import org.bytedeco.pytorch.vision.draw.DRect;
+import org.bytedeco.pytorch.vision.draw.DEllipse;
+import org.bytedeco.pytorch.vision.draw.DrawingCanvas;
 
 import java.awt.image.BufferedImage;
 import java.io.Closeable;
@@ -238,6 +247,10 @@ public class Image implements Closeable, AutoCloseable {
 
     @Override
     public void close() {
+        if (activeDraw != null) {
+            try { activeDraw.close(); } catch (Throwable ignored) {}
+            activeDraw = null;
+        }
         closed = true;
         im = null;
     }
@@ -902,6 +915,173 @@ public class Image implements Closeable, AutoCloseable {
     public BufferedImage toBufferedImage() {
         ensureOpen();
         return im.toBufferedImage();
+    }
+
+    // ── Drawing API (exposes the vision.draw module on the Pillow Image) ──
+    //
+    // Two usage shapes:
+    //  1) Lazy handle: openDraw() returns an org.bytedeco.pytorch.vision.draw.ImageDraw
+    //     which writes into the underlying BufferedImage.  close() on the Image
+    //     closes any open draw handle automatically.
+    //  2) One-shot methods: draw()/line()/rectangle()/text()/... return the
+    //     Image itself for fluent chaining (Pillow Idiom in Python).
+    //
+    // State (pen/brush/font) is stored on the lens of the active draw handle;
+    // the bridge keeps the handle alive across calls until close().
+
+    private transient org.bytedeco.pytorch.vision.draw.ImageDraw activeDraw;
+
+    /** Open (or return the existing) draw handle for this image. */
+    public org.bytedeco.pytorch.vision.draw.ImageDraw getDraw() {
+        ensureOpen();
+        if (activeDraw == null) {
+            activeDraw = new org.bytedeco.pytorch.vision.draw.ImageDraw(this);
+        }
+        return activeDraw;
+    }
+
+    /** Alias commonly used in Pillow docs: {@code ImageDraw.Draw(im)}. */
+    public org.bytedeco.pytorch.vision.draw.ImageDraw ImageDraw() {
+        return getDraw();
+    }
+
+    /**
+     * Backwards-compatible bridge taking a {@link Consumer}-style block
+     * (Java doesn't have `with` blocks, so this mounts a draw handle for the
+     * duration of the call).
+     */
+    public Image draw(java.util.function.Consumer<org.bytedeco.pytorch.vision.draw.ImageDraw> block) {
+        org.bytedeco.pytorch.vision.draw.ImageDraw d = getDraw();
+        block.accept(d);
+        return this;
+    }
+
+    // ---- one-shot primitive wrappers (Pillow-style) -----------------------
+
+    public Image line(int[] xy, DColor color, int widthPx) {
+        getDraw().line(xy, color, widthPx);
+        return this;
+    }
+
+    public Image line(int[] xy, String color, Integer widthPx) {
+        getDraw().line(xy, color == null ? DColor.of("black") : DColor.of(color), widthPx == null ? 1 : widthPx);
+        return this;
+    }
+
+    public Image rectangle(int[] xy, DColor fill, DColor stroke, int strokeWidthPx) {
+        getDraw().rectangle(xy, fill, stroke, strokeWidthPx);
+        return this;
+    }
+
+    public Image rectangle(int[] xy, String fill, String outline, Integer widthPx) {
+        getDraw().rectangle(xy, fill, outline, widthPx);
+        return this;
+    }
+
+    public Image ellipse(int[] xy, DColor fill, DColor stroke, int strokeWidthPx) {
+        getDraw().ellipse(xy, fill, stroke, strokeWidthPx);
+        return this;
+    }
+
+    public Image ellipse(int[] xy, String fill, String outline, Integer widthPx) {
+        getDraw().ellipse(xy, fill, outline, widthPx);
+        return this;
+    }
+
+    public Image polygon(int[] xs, int[] ys, DColor fill, DColor stroke, int strokeWidthPx) {
+        getDraw().polygon(xs, ys, fill, stroke, strokeWidthPx);
+        return this;
+    }
+
+    public Image polygon(int[] xs, int[] ys, String fill, String outline, Integer widthPx) {
+        getDraw().polygon(xs, ys,
+                fill == null ? null : DColor.of(fill),
+                outline == null ? null : DColor.of(outline),
+                widthPx == null ? 1 : widthPx);
+        return this;
+    }
+
+    public Image arc(int[] xy, int startDeg, int endDeg, DColor fill, DColor stroke, int strokeWidthPx) {
+        getDraw().arc(xy, startDeg, endDeg, fill, stroke, strokeWidthPx);
+        return this;
+    }
+
+    public Image arc(int[] xy, int startDeg, int endDeg, String fill, String outline, Integer widthPx) {
+        getDraw().arc(xy, startDeg, endDeg,
+                fill == null ? null : DColor.of(fill),
+                outline == null ? null : DColor.of(outline),
+                widthPx == null ? 1 : widthPx);
+        return this;
+    }
+
+    public Image point(int[] xy, DColor color) {
+        getDraw().point(xy, color);
+        return this;
+    }
+
+    public Image roundedRectangle(int[] xy, float radius, DColor fill, DColor stroke, int strokeWidthPx) {
+        getDraw().roundedRectangle(xy, radius, fill, stroke, strokeWidthPx);
+        return this;
+    }
+
+    public Image text(String text, int[] xy, DColor color) {
+        getDraw().text(text, xy, color);
+        return this;
+    }
+
+    public Image text(String text, int[] xy, DColor color, DFont font) {
+        getDraw().text(text, xy, color, font);
+        return this;
+    }
+
+    public Image text(String text, int[] xy, DFont font, DColor fill, DColor stroke, float strokeWidth) {
+        getDraw().text(text, xy, font, fill, stroke, strokeWidth);
+        return this;
+    }
+
+    public Image text(String text, int[] xy, String color, String fontFamily, float sizePx) {
+        getDraw().text(text, xy,
+                color == null ? DColor.of("black") : DColor.of(color),
+                DFont.builder(fontFamily == null ? "SansSerif" : fontFamily).size(sizePx).build());
+        return this;
+    }
+
+    /** Flush any pending draw state back into the underlying buffer. (No-op for in-memory imaging.) */
+    public Image flushDraw() {
+        if (activeDraw != null) {
+            activeDraw.flush();
+        }
+        return this;
+    }
+
+    /**
+     * Composite an arbitrary {@link java.awt.image.BufferedImage} at the given coords.
+     * Useful for pasting icons, glyph bitmaps, prior renders, etc.
+     */
+    public Image paste(java.awt.image.BufferedImage bimg, int x, int y) {
+        ensureOpen();
+        java.awt.Graphics2D g = im.toBufferedImage().createGraphics();
+        try {
+            g.setComposite(java.awt.AlphaComposite.SrcOver);
+            g.drawImage(bimg, x, y, null);
+        } finally {
+            g.dispose();
+        }
+        return this;
+    }
+
+    /**
+     * Bulk draw any DPath-based figure.  This is the most general entrypoint
+     * (e.g. you have a {@link DPath} built from {@link DPoint}s).
+     */
+    public Image path(DPath path, DPen pen, DBrush brush) {
+        DrawingCanvas c = getDraw().canvas();
+        c.save();
+        if (brush != null) c.setBrush(brush);
+        if (pen != null) c.setPen(pen);
+        c.drawPath(path);
+        c.restore();
+        return this;
     }
 
     public int tell() {

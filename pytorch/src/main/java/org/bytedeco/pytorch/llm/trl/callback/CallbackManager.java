@@ -21,6 +21,7 @@
  * limitations under the License.
  */
 package org.bytedeco.pytorch.llm.trl.callback;
+import org.bytedeco.pytorch.optim.schedulers.*;
 
 import org.bytedeco.pytorch.llm.trl.BaseTrainer;
 import org.bytedeco.pytorch.llm.trl.TrainerCallback;

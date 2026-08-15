@@ -980,4 +980,125 @@ public final class OpenCVIO {
         for (int i = 0; i < ndim; i++) out[i] = t.size(i);
         return out;
     }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Drawing API surface (delegates to org.bytedeco.pytorch.vision.draw.OpenCVDraw)
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /**
+     * Entry point: attach a fluent OpenCV draw builder to an existing Mat.
+     * Drawing through this builder mutates the Mat in place.
+     *
+     * <pre>{@code
+     * Mat img = OpenCVIO.readImageMat("photo.jpg");
+     * OpenCVIO.draw(img).strokeColor(DColor.of("red")).lineWidth(3).rect(20, 20, 200, 100, false);
+     * OpenCVIO.writeImage(img, "out.png");
+     * }</pre>
+     */
+    public static org.bytedeco.pytorch.vision.draw.OpenCVDraw.Builder draw(Mat img) {
+        return org.bytedeco.pytorch.vision.draw.OpenCVDraw.on(img);
+    }
+
+    /**
+     * Allocate a fresh BGR image with the given background colour and return
+     * a draw builder for it. Convenience for annotation scratch-pads.
+     */
+    public static org.bytedeco.pytorch.vision.draw.OpenCVDraw.Builder newDraw(int width, int height, org.bytedeco.pytorch.vision.draw.DColor background) {
+        org.bytedeco.pytorch.vision.draw.OpenCVDraw.Builder b = org.bytedeco.pytorch.vision.draw.OpenCVDraw.create(width, height);
+        if (background != null) b.clear(background);
+        return b;
+    }
+
+    /** Allocate a fresh BGR image filled with transparent/black. */
+    public static org.bytedeco.pytorch.vision.draw.OpenCVDraw.Builder newDraw(int width, int height) {
+        return newDraw(width, height, org.bytedeco.pytorch.vision.draw.DColor.of("black"));
+    }
+
+    // ---- one-shot static primitives (mirror the OpenCVDraw API) -----------
+
+    public static void drawLine(Mat dst, int x1, int y1, int x2, int y2, org.bytedeco.pytorch.vision.draw.DColor color, int thickness) {
+        org.bytedeco.pytorch.vision.draw.OpenCVDraw.drawLine(dst, x1, y1, x2, y2, color, thickness,
+                org.bytedeco.pytorch.vision.draw.OpenCVDraw.LineType.CONNECTED_8);
+    }
+
+    public static void drawRect(Mat dst, int x, int y, int w, int h, org.bytedeco.pytorch.vision.draw.DColor color, int thickness) {
+        org.bytedeco.pytorch.vision.draw.OpenCVDraw.drawRect(dst, x, y, w, h, color, thickness,
+                org.bytedeco.pytorch.vision.draw.OpenCVDraw.LineType.CONNECTED_8);
+    }
+
+    public static void fillRect(Mat dst, int x, int y, int w, int h, org.bytedeco.pytorch.vision.draw.DColor color) {
+        org.bytedeco.pytorch.vision.draw.OpenCVDraw.fillRect(dst, x, y, w, h, color);
+    }
+
+    public static void drawCircle(Mat dst, int cx, int cy, int r, org.bytedeco.pytorch.vision.draw.DColor color, int thickness) {
+        org.bytedeco.pytorch.vision.draw.OpenCVDraw.drawCircle(dst, cx, cy, r, color, thickness,
+                org.bytedeco.pytorch.vision.draw.OpenCVDraw.LineType.CONNECTED_8);
+    }
+
+    public static void fillCircle(Mat dst, int cx, int cy, int r, org.bytedeco.pytorch.vision.draw.DColor color) {
+        org.bytedeco.pytorch.vision.draw.OpenCVDraw.fillCircle(dst, cx, cy, r, color);
+    }
+
+    public static void drawEllipse(Mat dst, int cx, int cy, int rx, int ry,
+                                   double angleDeg, double startDeg, double endDeg,
+                                   org.bytedeco.pytorch.vision.draw.DColor color, int thickness) {
+        org.bytedeco.pytorch.vision.draw.OpenCVDraw.drawEllipse(dst, cx, cy, rx, ry, angleDeg, startDeg, endDeg, color, thickness,
+                org.bytedeco.pytorch.vision.draw.OpenCVDraw.LineType.CONNECTED_8);
+    }
+
+    public static void fillEllipse(Mat dst, int cx, int cy, int rx, int ry,
+                                   double angleDeg, double startDeg, double endDeg,
+                                   org.bytedeco.pytorch.vision.draw.DColor color) {
+        org.bytedeco.pytorch.vision.draw.OpenCVDraw.fillEllipse(dst, cx, cy, rx, ry, angleDeg, startDeg, endDeg, color);
+    }
+
+    public static void drawPolyline(Mat dst, org.bytedeco.opencv.opencv_core.Point[] pts, boolean closed,
+                                    org.bytedeco.pytorch.vision.draw.DColor color, int thickness) {
+        org.bytedeco.pytorch.vision.draw.OpenCVDraw.drawPolyline(dst, pts, closed, color, thickness,
+                org.bytedeco.pytorch.vision.draw.OpenCVDraw.LineType.CONNECTED_8);
+    }
+
+    public static void fillPoly(Mat dst, org.bytedeco.opencv.opencv_core.Point[][] polygons, org.bytedeco.pytorch.vision.draw.DColor color) {
+        org.bytedeco.pytorch.vision.draw.OpenCVDraw.fillPoly(dst, polygons, color);
+    }
+
+    public static void drawText(Mat dst, String text, int x, int y, org.bytedeco.pytorch.vision.draw.DColor color) {
+        drawText(dst, text, x, y, color, 1.0, 2);
+    }
+
+    public static void drawText(Mat dst, String text, int x, int y, org.bytedeco.pytorch.vision.draw.DColor color,
+                                double fontScale, int thickness) {
+        org.bytedeco.pytorch.vision.draw.OpenCVDraw.drawText(dst, text, x, y, color,
+                org.bytedeco.pytorch.vision.draw.OpenCVDraw.HersheyFont.SIMPLEX, fontScale, thickness,
+                org.bytedeco.pytorch.vision.draw.OpenCVDraw.LineType.CONNECTED_8);
+    }
+
+    /**
+     * Convenience: draw a 1-pt bounding box onto a Mat (Coco/VOC style).
+     */
+    public static void drawBox(Mat dst, int x, int y, int w, int h, String label,
+                               org.bytedeco.pytorch.vision.draw.DColor color, int thickness) {
+        drawRect(dst, x, y, w, h, color, thickness);
+        if (label != null && !label.isEmpty()) {
+            drawText(dst, label, x + 2, Math.max(12, y - 4), color, 0.5, 1);
+        }
+    }
+
+    /**
+     * Convenience: draw a keypoint (small circle + crosshair) — useful for pose / landmark visualisation.
+     */
+    public static void drawKeypoint(Mat dst, int x, int y, org.bytedeco.pytorch.vision.draw.DColor color, int radius) {
+        fillCircle(dst, x, y, radius, color);
+        drawLine(dst, x - radius, y, x + radius, y, color, 1);
+        drawLine(dst, x, y - radius, x, y + radius, color, 1);
+    }
+
+    /**
+     * Convenience: render a heatmap onto a Mat (the source must be a flattened
+     * float array of length h*w). Useful for class-activation / attention maps.
+     */
+    public static Mat drawHeatmap(float[] data, int h, int w, org.bytedeco.pytorch.vision.draw.DHeatmap.Colormap cmap) {
+        java.awt.image.BufferedImage hm = org.bytedeco.pytorch.vision.draw.DHeatmap.render(data, h, w, cmap);
+        return MatToTensor.toMat(org.bytedeco.pytorch.vision.utils.ImageTensors.toTensor(hm));
+    }
 }

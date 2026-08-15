@@ -23,7 +23,7 @@ package org.bytedeco.pytorch.llm.evaluation;
 
 import org.bytedeco.pytorch.*;
 import org.bytedeco.pytorch.nn.Module;
-import org.bytedeco.pytorch.saving.LoadOptions;
+import org.bytedeco.pytorch.data.safetensors.LoadOptions;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
@@ -110,15 +110,15 @@ public class RewardModelEvaluator implements AutoCloseable {
         double totalLogProbDiff = 0;
 
         for (PreferencePair pair : dataset) {
-            Tensor chosenReward = score(pair.chosenInputIds(), pair.chosenAttentionMask());
-            Tensor rejectedReward = score(pair.rejectedInputIds(), pair.rejectedAttentionMask());
+            double chosenReward = score(pair.chosenInputIds(), pair.chosenAttentionMask());
+            double rejectedReward = score(pair.rejectedInputIds(), pair.rejectedAttentionMask());
 
             // Check if model correctly identifies preferred response
-            boolean isCorrect = chosenReward.item_double() > rejectedReward.item_double();
+            boolean isCorrect = chosenReward > rejectedReward;
             if (isCorrect) correct++;
 
             // Reward margin
-            double rewardMargin = chosenReward.item_double() - rejectedReward.item_double();
+            double rewardMargin = chosenReward - rejectedReward;
             totalRewardDiff += rewardMargin;
 
             total++;
@@ -147,7 +147,7 @@ public class RewardModelEvaluator implements AutoCloseable {
         try (Tensor ids = torch.tensor(inputIds).reshape(1, -1);
              Tensor mask = attentionMask != null ? torch.tensor(attentionMask).reshape(1, -1) : null) {
 
-            Module.Retriever retriever = rewardModel.named_modules().get("reward_head");
+            Module retriever = rewardModel.named_modules().get("reward_head");
             if (retriever == null) {
                 retriever = rewardModel.named_modules().get("value_head");
             }
@@ -192,7 +192,7 @@ public class RewardModelEvaluator implements AutoCloseable {
     public double evaluateWinRate(
             List<PreferencePair> pairs,
             Module policyModel,
-            Function<long[], double> policyScorer) {
+            Function<long[], Double> policyScorer) {
 
         int wins = 0;
         int ties = 0;

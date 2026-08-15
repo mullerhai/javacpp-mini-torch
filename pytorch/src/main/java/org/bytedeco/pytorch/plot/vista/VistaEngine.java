@@ -189,7 +189,176 @@ public final class VistaEngine {
             GraphTransforms.applyCompressedView(graph);
         }
 
+        // Fill the "Model Info" panel from the live trace: live Module has no
+        // file path or producer, but we can still report parameter / layer /
+        // memory / dtype / FLOPs aggregates by walking the populated
+        // moduleInfo + graph. The Vue/Vista JS frontend reads these out of
+        // nodeMeta['_model_meta_'].
+        try {
+            populateModelMeta(root, inputs);
+        } catch (Throwable t) {
+            System.err.println("[vista] populateModelMeta failed: " + t.getMessage());
+        }
+
         return graph;
+    }
+
+    /**
+     * Build a {@code _model_meta_} entry inside {@link TraceGraph#nodeMeta()}
+     * so the in-page Model Info panel can render summary statistics for a
+     * <b>live Module</b> trace (no file path / producer / Graph IR available).
+     *
+     * <p>Aggregates are computed from the already-populated
+     * {@link TraceGraph#moduleInfo()} — same source {@link ModelStats} uses,
+     * so parameter counts and MACs are consistent with the per-module
+     * pop-ups. Module type counts and a top-30 layer table are also
+     * attached so the panel can list what's actually in the graph.
+     */
+    private void populateModelMeta(Module root, Object inputs) {
+        if (root == null || root.isNull()) return;
+        Map<String, Object> meta = new LinkedHashMap<>();
+
+        String name = ModuleDiscovery.simpleTypeName(root);
+        meta.put("name", name);
+        meta.put("format", "Live PyTorch Module");
+
+        // Source: not a file — show the Java class name as a hint
+        try {
+            String src = root.getClass().getName();
+            meta.put("source", src);
+        } catch (Throwable ignored) {}
+
+        // Aggregates from already-collected moduleInfo
+        ModelStats stats = ModelStats.from(graph);
+        meta.put("param_count_formatted", formatParamCount(stats.totalParams));
+        meta.put("layer_count", stats.moduleStats.size());
+        meta.put("total_bytes_formatted", formatBytes(stats.totalBytes));
+        meta.put("version", "pytorch " + safePyTorchVersion());
+
+        // Inputs / outputs derived from the graph's tagged tensors
+        try {
+            meta.put("inputs", summarizeInputs(inputs));
+        } catch (Throwable ignored) {}
+        try {
+            StringBuilder sb = new StringBuilder();
+            summarizeOutputs(sb);
+            String out = sb.toString();
+            if (!out.isEmpty()) meta.put("outputs", out);
+        } catch (Throwable ignored) {}
+
+        // Module-type histogram (cute badges) — descending by count
+        Map<String, Integer> typeHist = new LinkedHashMap<>();
+        for (Map.Entry<String, ModuleInfo> e : graph.moduleInfo().entrySet()) {
+            String t = e.getValue().type();
+            if (t == null || t.isEmpty()) t = "Module";
+            typeHist.merge(t, 1, Integer::sum);
+        }
+        meta.put("module_types", typeHist);
+
+        // Top-30 layers table — reuse stats ordering (already desc by params)
+        List<Map<String, Object>> layers = new ArrayList<>();
+        for (ModelStats.ModuleStat ms : stats.moduleStats) {
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("name", ms.nodeName);
+            row.put("type", ms.type);
+            row.put("params", ms.paramCount);
+            String shape = "";
+            try {
+                ModuleInfo mi = graph.moduleInfo().get(ms.nodeName);
+                if (mi != null) {
+                    for (Map.Entry<String, ModuleInfo.ParamInfo> pe : mi.parameters().entrySet()) {
+                        long[] s = pe.getValue().shape();
+                        StringBuilder sb = new StringBuilder();
+                        for (long d : s) {
+                            if (sb.length() > 0) sb.append("×");
+                            sb.append(d);
+                        }
+                        if (sb.length() > 0) { shape = sb.toString(); break; }
+                    }
+                }
+            } catch (Throwable ignored) {}
+            row.put("shape", shape);
+            layers.add(row);
+            if (layers.size() >= 30) break;
+        }
+        meta.put("layers", layers);
+
+        graph.nodeMeta().put("_model_meta_", meta);
+    }
+
+    private static String summarizeInputs(Object inputs) {
+        if (inputs == null) return "";
+        if (inputs instanceof Tensor t) {
+            return "Tensor " + TensorUtils.formatDims(t);
+        }
+        if (inputs instanceof Tensor[] arr) {
+            StringBuilder sb = new StringBuilder("Tensor[");
+            for (int i = 0; i < arr.length; i++) {
+                if (i > 0) sb.append(", ");
+                sb.append(TensorUtils.formatDims(arr[i]));
+            }
+            return sb.append("]").toString();
+        }
+        if (inputs instanceof java.util.List<?> list) {
+            StringBuilder sb = new StringBuilder("List[");
+            int n = Math.min(list.size(), 6);
+            for (int i = 0; i < n; i++) {
+                if (i > 0) sb.append(", ");
+                Object o = list.get(i);
+                if (o instanceof Tensor t) sb.append(TensorUtils.formatDims(t));
+                else sb.append(String.valueOf(o));
+            }
+            if (list.size() > 6) sb.append(", +").append(list.size() - 6);
+            return sb.append("]").toString();
+        }
+        if (inputs instanceof java.util.Map<?, ?> map) {
+            StringBuilder sb = new StringBuilder("Map{");
+            int n = 0;
+            for (java.util.Map.Entry<?, ?> e : map.entrySet()) {
+                if (n > 0) sb.append(", ");
+                sb.append(e.getKey()).append("=");
+                Object v = e.getValue();
+                if (v instanceof Tensor t) sb.append(TensorUtils.formatDims(t));
+                else sb.append(String.valueOf(v));
+                if (++n >= 6) { sb.append(", +").append(map.size() - n); break; }
+            }
+            return sb.append("}").toString();
+        }
+        return inputs.getClass().getSimpleName();
+    }
+
+    private void summarizeOutputs(StringBuilder sb) {
+        int n = 0;
+        for (Map.Entry<String, GraphNode> e : graph.adjList().entrySet()) {
+            if (e.getValue().nodeType() == NodeType.OUTPUT) {
+                if (n > 0) sb.append(", ");
+                sb.append(e.getKey());
+                n++;
+                if (n >= 6) { sb.append(", +more"); break; }
+            }
+        }
+    }
+
+    private static String formatParamCount(long n) {
+        if (n >= 1_000_000_000) return String.format("%.1fB", n / 1e9);
+        if (n >= 1_000_000)     return String.format("%.1fM", n / 1e6);
+        if (n >= 1_000)         return String.format("%.1fK", n / 1e3);
+        return String.valueOf(n);
+    }
+
+    private static String formatBytes(long b) {
+        if (b >= (1L << 30)) return String.format("%.2f GB", b / (double)(1L << 30));
+        if (b >= (1L << 20)) return String.format("%.2f MB", b / (double)(1L << 20));
+        if (b >= (1L << 10)) return String.format("%.2f KB", b / (double)(1L << 10));
+        return b + " B";
+    }
+
+    private static String safePyTorchVersion() {
+        Package pkg = org.bytedeco.pytorch.global.torch.class.getPackage();
+        if (pkg != null && pkg.getImplementationVersion() != null) {
+            return pkg.getImplementationVersion();
+        }
+        return "PyTorch";
     }
 
     // =========================================================================

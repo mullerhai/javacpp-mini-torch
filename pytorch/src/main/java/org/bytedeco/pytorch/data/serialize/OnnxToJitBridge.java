@@ -1,4 +1,5 @@
 package org.bytedeco.pytorch.data.serialize;
+import org.bytedeco.pytorch.jit.*;
 
 import org.bytedeco.pytorch.jit.JitModule;
 import org.bytedeco.pytorch.nn.Module;
@@ -65,7 +66,7 @@ public class OnnxToJitBridge {
      * Convert ONNX model bytes to JitModule.
      */
     public static JitModule convertToJitModule(byte[] onnxBytes) throws IOException {
-        return OnnxToJitConverter.convert(onnxBytes);
+        return OnnxToJitConverter.convertFromBytes(onnxBytes, "model_" + System.currentTimeMillis());
     }
 
     /**

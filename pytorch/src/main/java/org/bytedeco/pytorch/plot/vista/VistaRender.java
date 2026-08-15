@@ -120,6 +120,10 @@ public final class VistaRender {
         sb.append("<button type=\"button\" class=\"vx-btn vx-theme\" data-theme=\"dark\" id=\"th-dark-").append(uniqueId).append("\">🌙 Dark</button>");
         sb.append("<button type=\"button\" class=\"vx-btn vx-theme\" data-theme=\"office\" id=\"th-office-").append(uniqueId).append("\">💼 Office</button>");
         sb.append("</div>");
+        // model info toggle (toolbar)
+        sb.append("<div class=\"vx-group\">");
+        sb.append("<button type=\"button\" class=\"vx-btn\" id=\"meta-toggle-top-").append(uniqueId).append("\" title=\"显示/隐藏模型信息\" style=\"font-weight:900\">👁 Model Info</button>");
+        sb.append("</div>");
         // export
         sb.append("<div class=\"vx-group vx-export-wrap\">");
         sb.append("<button type=\"button\" class=\"vx-btn vx-btn-accent\" id=\"export-").append(uniqueId).append("\">⇩ Export ▾</button>");
@@ -132,78 +136,84 @@ public final class VistaRender {
         sb.append("</div></header>");
 
         // ── model metadata panel ───────────────────────────────────────────
-        sb.append("<div class=\"vx-meta\" id=\"meta-").append(uniqueId).append("\">");
-        sb.append("<div class=\"vx-meta-title\">📊 Model Info</div>");
-        sb.append("<div class=\"vx-meta-grid\">");
-        sb.append("<div class=\"vx-meta-card\">");
-        sb.append("<div class=\"vx-meta-label\">Model Name</div>");
-        sb.append("<div class=\"vx-meta-value\" id=\"meta-name-").append(uniqueId).append("\">-</div>");
-        sb.append("</div>");
-        sb.append("<div class=\"vx-meta-card\">");
-        sb.append("<div class=\"vx-meta-label\">Format</div>");
-        sb.append("<div class=\"vx-meta-value\" id=\"meta-format-").append(uniqueId).append("\">-</div>");
-        sb.append("</div>");
-        sb.append("<div class=\"vx-meta-card\">");
-        sb.append("<div class=\"vx-meta-label\">Parameters</div>");
-        sb.append("<div class=\"vx-meta-value\" id=\"meta-params-").append(uniqueId).append("\">-</div>");
-        sb.append("</div>");
-        sb.append("<div class=\"vx-meta-card\">");
-        sb.append("<div class=\"vx-meta-label\">Layers</div>");
-        sb.append("<div class=\"vx-meta-value\" id=\"meta-layers-").append(uniqueId).append("\">-</div>");
-        sb.append("</div>");
-        sb.append("<div class=\"vx-meta-card\">");
-        sb.append("<div class=\"vx-meta-label\">File Size</div>");
-        sb.append("<div class=\"vx-meta-value\" id=\"meta-size-").append(uniqueId).append("\">-</div>");
-        sb.append("</div>");
-        sb.append("<div class=\"vx-meta-card\">");
-        sb.append("<div class=\"vx-meta-label\">Source</div>");
-        sb.append("<div class=\"vx-meta-value vx-meta-path\" id=\"meta-source-").append(uniqueId).append("\">-</div>");
-        sb.append("</div>");
+        // (rendered after vx-body so collapsing/reflowing it doesn't disturb stage+drawer layout)
+        final StringBuilder metaHtml = new StringBuilder();
+        metaHtml.append("<div class=\"vx-meta\" id=\"meta-").append(uniqueId).append("\">");
+        metaHtml.append("<div class=\"vx-meta-title\"><span>📊 Model Info</span>");
+        metaHtml.append("<span style=\"display:flex;gap:6px;align-items:center\">");
+        metaHtml.append("<button type=\"button\" class=\"vx-btn\" id=\"meta-toggle-").append(uniqueId).append("\" title=\"显示/隐藏模型信息\">👁</button>");
+        metaHtml.append("<button type=\"button\" class=\"vx-icon\" id=\"meta-close-").append(uniqueId).append("\" title=\"关闭\">✕</button>");
+        metaHtml.append("</span></div>");
+        metaHtml.append("<div class=\"vx-meta-grid\">");
+        metaHtml.append("<div class=\"vx-meta-card\">");
+        metaHtml.append("<div class=\"vx-meta-label\">Model Name</div>");
+        metaHtml.append("<div class=\"vx-meta-value\" id=\"meta-name-").append(uniqueId).append("\">-</div>");
+        metaHtml.append("</div>");
+        metaHtml.append("<div class=\"vx-meta-card\">");
+        metaHtml.append("<div class=\"vx-meta-label\">Format</div>");
+        metaHtml.append("<div class=\"vx-meta-value\" id=\"meta-format-").append(uniqueId).append("\">-</div>");
+        metaHtml.append("</div>");
+        metaHtml.append("<div class=\"vx-meta-card\">");
+        metaHtml.append("<div class=\"vx-meta-label\">Parameters</div>");
+        metaHtml.append("<div class=\"vx-meta-value\" id=\"meta-params-").append(uniqueId).append("\">-</div>");
+        metaHtml.append("</div>");
+        metaHtml.append("<div class=\"vx-meta-card\">");
+        metaHtml.append("<div class=\"vx-meta-label\">Layers</div>");
+        metaHtml.append("<div class=\"vx-meta-value\" id=\"meta-layers-").append(uniqueId).append("\">-</div>");
+        metaHtml.append("</div>");
+        metaHtml.append("<div class=\"vx-meta-card\">");
+        metaHtml.append("<div class=\"vx-meta-label\">File Size</div>");
+        metaHtml.append("<div class=\"vx-meta-value\" id=\"meta-size-").append(uniqueId).append("\">-</div>");
+        metaHtml.append("</div>");
+        metaHtml.append("<div class=\"vx-meta-card\">");
+        metaHtml.append("<div class=\"vx-meta-label\">Source</div>");
+        metaHtml.append("<div class=\"vx-meta-value vx-meta-path\" id=\"meta-source-").append(uniqueId).append("\">-</div>");
+        metaHtml.append("</div>");
         // Extended metadata
-        sb.append("<div class=\"vx-meta-card\">");
-        sb.append("<div class=\"vx-meta-label\">Producer</div>");
-        sb.append("<div class=\"vx-meta-value\" id=\"meta-producer-").append(uniqueId).append("\">-</div>");
-        sb.append("</div>");
-        sb.append("<div class=\"vx-meta-card\">");
-        sb.append("<div class=\"vx-meta-label\">Graph</div>");
-        sb.append("<div class=\"vx-meta-value\" id=\"meta-graph-").append(uniqueId).append("\">-</div>");
-        sb.append("</div>");
-        sb.append("<div class=\"vx-meta-card\">");
-        sb.append("<div class=\"vx-meta-label\">Total Size</div>");
-        sb.append("<div class=\"vx-meta-value\" id=\"meta-totalsize-").append(uniqueId).append("\">-</div>");
-        sb.append("</div>");
-        sb.append("<div class=\"vx-meta-card\">");
-        sb.append("<div class=\"vx-meta-label\">Version</div>");
-        sb.append("<div class=\"vx-meta-value\" id=\"meta-version-").append(uniqueId).append("\">-</div>");
-        sb.append("</div>");
-        sb.append("</div>");
+        metaHtml.append("<div class=\"vx-meta-card\">");
+        metaHtml.append("<div class=\"vx-meta-label\">Producer</div>");
+        metaHtml.append("<div class=\"vx-meta-value\" id=\"meta-producer-").append(uniqueId).append("\">-</div>");
+        metaHtml.append("</div>");
+        metaHtml.append("<div class=\"vx-meta-card\">");
+        metaHtml.append("<div class=\"vx-meta-label\">Graph</div>");
+        metaHtml.append("<div class=\"vx-meta-value\" id=\"meta-graph-").append(uniqueId).append("\">-</div>");
+        metaHtml.append("</div>");
+        metaHtml.append("<div class=\"vx-meta-card\">");
+        metaHtml.append("<div class=\"vx-meta-label\">Total Size</div>");
+        metaHtml.append("<div class=\"vx-meta-value\" id=\"meta-totalsize-").append(uniqueId).append("\">-</div>");
+        metaHtml.append("</div>");
+        metaHtml.append("<div class=\"vx-meta-card\">");
+        metaHtml.append("<div class=\"vx-meta-label\">Version</div>");
+        metaHtml.append("<div class=\"vx-meta-value\" id=\"meta-version-").append(uniqueId).append("\">-</div>");
+        metaHtml.append("</div>");
+        metaHtml.append("</div>");
         // Inputs/Outputs row
-        sb.append("<div class=\"vx-meta-io\" id=\"meta-io-").append(uniqueId).append("\">");
-        sb.append("<div class=\"vx-meta-io-section\">");
-        sb.append("<div class=\"vx-meta-label\">📥 Inputs</div>");
-        sb.append("<div class=\"vx-meta-value\" id=\"meta-inputs-").append(uniqueId).append("\">-</div>");
-        sb.append("</div>");
-        sb.append("<div class=\"vx-meta-io-section\">");
-        sb.append("<div class=\"vx-meta-label\">📤 Outputs</div>");
-        sb.append("<div class=\"vx-meta-value\" id=\"meta-outputs-").append(uniqueId).append("\">-</div>");
-        sb.append("</div>");
-        sb.append("</div>");
+        metaHtml.append("<div class=\"vx-meta-io\" id=\"meta-io-").append(uniqueId).append("\">");
+        metaHtml.append("<div class=\"vx-meta-io-section\">");
+        metaHtml.append("<div class=\"vx-meta-label\">📥 Inputs</div>");
+        metaHtml.append("<div class=\"vx-meta-value\" id=\"meta-inputs-").append(uniqueId).append("\">-</div>");
+        metaHtml.append("</div>");
+        metaHtml.append("<div class=\"vx-meta-io-section\">");
+        metaHtml.append("<div class=\"vx-meta-label\">📤 Outputs</div>");
+        metaHtml.append("<div class=\"vx-meta-value\" id=\"meta-outputs-").append(uniqueId).append("\">-</div>");
+        metaHtml.append("</div>");
+        metaHtml.append("</div>");
         // Module types
-        sb.append("<div class=\"vx-meta-types\" id=\"meta-types-").append(uniqueId).append("\">");
-        sb.append("<div class=\"vx-meta-label\">Module Types</div>");
-        sb.append("<div class=\"vx-meta-types-grid\" id=\"meta-types-grid-").append(uniqueId).append("\"></div>");
-        sb.append("</div>");
+        metaHtml.append("<div class=\"vx-meta-types\" id=\"meta-types-").append(uniqueId).append("\">");
+        metaHtml.append("<div class=\"vx-meta-label\">Module Types</div>");
+        metaHtml.append("<div class=\"vx-meta-types-grid\" id=\"meta-types-grid-").append(uniqueId).append("\"></div>");
+        metaHtml.append("</div>");
         // Parse errors
-        sb.append("<div class=\"vx-meta-errors\" id=\"meta-errors-").append(uniqueId).append("\" style=\"display:none\">");
-        sb.append("<div class=\"vx-meta-label\">⚠️ Parse Warnings</div>");
-        sb.append("<div class=\"vx-meta-error-list\" id=\"meta-error-list-").append(uniqueId).append("\"></div>");
-        sb.append("</div>");
+        metaHtml.append("<div class=\"vx-meta-errors\" id=\"meta-errors-").append(uniqueId).append("\" style=\"display:none\">");
+        metaHtml.append("<div class=\"vx-meta-label\">⚠️ Parse Warnings</div>");
+        metaHtml.append("<div class=\"vx-meta-error-list\" id=\"meta-error-list-").append(uniqueId).append("\"></div>");
+        metaHtml.append("</div>");
         // Layer breakdown
-        sb.append("<div class=\"vx-meta-layers\" id=\"meta-layers-detail-").append(uniqueId).append("\">");
-        sb.append("<div class=\"vx-meta-label\">Layer Breakdown</div>");
-        sb.append("<div class=\"vx-meta-layer-list\" id=\"meta-layer-list-").append(uniqueId).append("\"></div>");
-        sb.append("</div>");
-        sb.append("</div>");
+        metaHtml.append("<div class=\"vx-meta-layers\" id=\"meta-layers-detail-").append(uniqueId).append("\">");
+        metaHtml.append("<div class=\"vx-meta-label\">Layer Breakdown</div>");
+        metaHtml.append("<div class=\"vx-meta-layer-list\" id=\"meta-layer-list-").append(uniqueId).append("\"></div>");
+        metaHtml.append("</div>");
+        metaHtml.append("</div>");
 
         sb.append("<div id=\"err-").append(uniqueId).append("\" class=\"vx-err\" hidden></div>");
         sb.append("<div class=\"vx-toast\" id=\"toast-").append(uniqueId).append("\" hidden></div>");
@@ -254,6 +264,8 @@ public final class VistaRender {
         sb.append("</div>");
         sb.append("<pre class=\"vx-pre\" id=\"dbody-").append(uniqueId).append("\">点选节点查看特征 / 超参 / shape · 可改颜色与形状</pre>");
         sb.append("</aside></div>");
+
+        sb.append(metaHtml);
 
         sb.append("<footer class=\"vx-foot\">jnitorch <b>utils.vista</b> · non-invasive structure expand · ");
         sb.append("<a href=\"https://github.com/sachinhosmani/torchvista\" target=\"_blank\" rel=\"noopener\">torchvista schema</a></footer>");
@@ -416,8 +428,11 @@ public final class VistaRender {
 
         // ── model metadata panel ───────────────────────────────────────────
         sb.append(".vx-meta{margin:12px 14px;padding:14px;border-radius:14px;background:var(--bg2);");
-        sb.append("border:1px solid var(--line);box-shadow:var(--shadow)}");
-        sb.append(".vx-meta-title{font-weight:900;font-size:13px;margin-bottom:12px;color:var(--accent)}");
+        sb.append("border:1px solid var(--line);box-shadow:var(--shadow);");
+        sb.append("transition:max-height .22s ease,opacity .18s ease,margin .22s ease,padding .22s ease,border-width .22s ease;");
+        sb.append("max-height:3000px;overflow:hidden}");
+        sb.append(".vx-meta.collapsed{max-height:0;opacity:0;margin:0 14px;padding:0 14px;border-width:0;pointer-events:none}");
+        sb.append(".vx-meta-title{display:flex;justify-content:space-between;align-items:center;font-weight:900;font-size:13px;margin-bottom:12px;color:var(--accent)}");
         sb.append(".vx-meta-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px}");
         sb.append(".vx-meta-card{background:color-mix(in srgb,var(--accent) 6%,var(--bg));");
         sb.append("border-radius:10px;padding:8px 10px}");
@@ -628,8 +643,26 @@ public final class VistaRender {
         s.append("  }\n");
         s.append("} else {\n");
         s.append("  const metaPanel=document.getElementById('meta-'+ID);\n");
+        s.append("  const metaToggleTop=document.getElementById('meta-toggle-top-'+ID);\n");
         s.append("  if(metaPanel) metaPanel.style.display='none';\n");
+        s.append("  if(metaToggleTop) metaToggleTop.style.display='none';\n");
         s.append("}\n");
+
+        s.append("// Model info collapse/expand (visible-by-default; auto-scrolls into view when expanded)\n");
+        s.append("const metaEl=document.getElementById('meta-'+ID);\n");
+        s.append("const metaToggle=document.getElementById('meta-toggle-'+ID);\n");
+        s.append("const metaClose=document.getElementById('meta-close-'+ID);\n");
+        s.append("const metaToggleTop=document.getElementById('meta-toggle-top-'+ID);\n");
+        s.append("let metaVisible=true;\n");
+        s.append("function setMetaVisible(v){\n");
+        s.append("  metaVisible=v;\n");
+        s.append("  if(metaEl){metaEl.classList.toggle('collapsed',!v);}\n");
+        s.append("  if(metaToggle){metaToggle.textContent=v?'👁':'🫣';}\n");
+        s.append("  if(v&&metaEl){metaEl.scrollIntoView({behavior:'smooth',block:'nearest'});}\n");
+        s.append("}\n");
+        s.append("if(metaToggle){metaToggle.addEventListener('click',function(){setMetaVisible(!metaVisible);});}\n");
+        s.append("if(metaClose){metaClose.addEventListener('click',function(){setMetaVisible(false);});}\n");
+        s.append("if(metaToggleTop){metaToggleTop.addEventListener('click',function(){setMetaVisible(!metaVisible);});}\n");
 
         s.append("let transform={k:1}, selected=null, selectedName=null;\n");
         s.append("let orient='LR'; // LR | RL | TB | BT\n");
