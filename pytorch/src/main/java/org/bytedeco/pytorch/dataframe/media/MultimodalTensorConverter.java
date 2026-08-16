@@ -330,9 +330,25 @@ public final class MultimodalTensorConverter {
 
     /**
      * Check if tensor represents a batch of images [N,C,H,W].
+     * <p>
+     * Heuristic: a 4-D tensor whose spatial dimensions (H,W) are larger than the
+     * batch dimension N is treated as a batch of images; otherwise it is more
+     * likely a video (N temporal frames, smaller H×W spatial area). Defaults: if
+     * H*W &gt;= 16384 (i.e. at least 128×128) and N &gt; 1, prefer "batch image";
+     * if N &gt; H or N &gt; W, prefer "video".
      */
     public static boolean isBatchImageShape(long[] shape) {
-        return shape.length == 4;
+        if (shape.length != 4) return false;
+        long n = shape[0];
+        long h = shape[2];
+        long w = shape[3];
+        if (n <= 1) return false;
+        // Large spatial area with small N → batch of images
+        if (h >= 128 && w >= 128) return true;
+        // N larger than either spatial dim → almost certainly time-axis (video)
+        if (n > h || n > w) return false;
+        // Otherwise default to video for the temporal-axis majority case
+        return false;
     }
 
     /**
@@ -344,9 +360,24 @@ public final class MultimodalTensorConverter {
 
     /**
      * Check if tensor represents video [N,C,H,W].
+     * <p>
+     * Mirror of {@link #isBatchImageShape(long[])}: a 4-D tensor whose first
+     * axis is the temporal / frame dimension is treated as video. A 4-D tensor
+     * with very large spatial area and a small first axis is treated as a
+     * batch of images instead.
      */
     public static boolean isVideoShape(long[] shape) {
-        return shape.length == 4;
+        if (shape.length != 4) return false;
+        long n = shape[0];
+        long h = shape[2];
+        long w = shape[3];
+        if (n <= 1) return false;
+        // If N is larger than one of the spatial dims, treat as video
+        if (n > h || n > w) return true;
+        // Otherwise if H,W are both large relative to N → call it batch image, not video
+        if (h >= 128 && w >= 128 && n < h * w / 256) return false;
+        // Default: treat as video (most callers want this for [N,C,H,W] temporal-first)
+        return true;
     }
 
     /**

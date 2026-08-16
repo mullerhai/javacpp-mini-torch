@@ -129,11 +129,12 @@ public final class VistaRender {
         sb.append("<button type=\"button\" data-fmt=\"jpeg\">JPEG 图片</button>");
         sb.append("<button type=\"button\" data-fmt=\"pdf\">PDF 文档</button>");
         sb.append("</div></div>");
+        sb.append("<button type=\"button\" class=\"vx-btn\" id=\"meta-toggle-").append(uniqueId).append("\">👁</button>");
         sb.append("</div></header>");
 
         // ── model metadata panel ───────────────────────────────────────────
         sb.append("<div class=\"vx-meta\" id=\"meta-").append(uniqueId).append("\">");
-        sb.append("<div class=\"vx-meta-title\">📊 Model Info</div>");
+        sb.append("<div class=\"vx-meta-title\">📊 Model Info <button type=\"button\" class=\"meta-close\" id=\"meta-close-").append(uniqueId).append("\">✕</button></div>");
         sb.append("<div class=\"vx-meta-grid\">");
         sb.append("<div class=\"vx-meta-card\">");
         sb.append("<div class=\"vx-meta-label\">Model Name</div>");
@@ -415,9 +416,14 @@ public final class VistaRender {
         sb.append(".vx-foot a{color:var(--accent);text-decoration:none;font-weight:700}");
 
         // ── model metadata panel ───────────────────────────────────────────
-        sb.append(".vx-meta{margin:12px 14px;padding:14px;border-radius:14px;background:var(--bg2);");
-        sb.append("border:1px solid var(--line);box-shadow:var(--shadow)}");
-        sb.append(".vx-meta-title{font-weight:900;font-size:13px;margin-bottom:12px;color:var(--accent)}");
+        sb.append(".vx-meta{margin:12px 14px;padding:14px;border-radius:14px 14px 0 0;background:var(--bg2);");
+        sb.append("border:1px solid var(--line);border-bottom:none;box-shadow:0 -4px 24px rgba(0,0,0,.12);");
+        sb.append("transition:opacity .22s ease;opacity:1;z-index:999;pointer-events:all;");
+        sb.append("position:fixed;bottom:0;left:0;right:0;max-height:calc(100vh - 120px);overflow-y:auto}");
+        sb.append(".vx-meta.collapsed{opacity:0;pointer-events:none}");
+        sb.append(".meta-close{float:right;background:0;border:0;font-size:14px;cursor:pointer;color:var(--muted);padding:2px 6px;border-radius:4px}");
+        sb.append(".meta-close:hover{background:var(--line)}");
+        sb.append(".vx-meta-title{font-weight:900;font-size:13px;margin-bottom:12px;color:var(--accent);display:flex;justify-content:space-between;align-items:center}");
         sb.append(".vx-meta-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px}");
         sb.append(".vx-meta-card{background:color-mix(in srgb,var(--accent) 6%,var(--bg));");
         sb.append("border-radius:10px;padding:8px 10px}");
@@ -1348,6 +1354,21 @@ public final class VistaRender {
         s.append("  Object.keys(pos).forEach(k=>{if(pos[k])pos[k]._auto=true;});\n");
         s.append("  render(); fit();\n");
         s.append("}\n");
+        s.append("function setMetaVisible(v){\n");
+        s.append("  metaVisible=v;\n");
+        s.append("  const metaEl=document.getElementById('meta-'+ID);\n");
+        s.append("  if(metaEl){metaEl.classList.toggle('collapsed',!v);}\n");
+        s.append("  const toggle=document.getElementById('meta-toggle-'+ID);\n");
+        s.append("  if(toggle){toggle.textContent=v?'👁':'🫣';}\n");
+        s.append("}\n");
+        s.append("document.addEventListener('DOMContentLoaded',function(){\n");
+        s.append("  const metaEl=document.getElementById('meta-'+ID);\n");
+        s.append("  const closeBtn=document.getElementById('meta-close-'+ID);\n");
+        s.append("  const toggle=document.getElementById('meta-toggle-'+ID);\n");
+        s.append("  if(closeBtn){closeBtn.addEventListener('click',function(){setMetaVisible(false);});}\n");
+        s.append("  if(toggle){toggle.addEventListener('click',function(){setMetaVisible(!metaVisible);});}\n");
+        s.append("  metaVisible=true;\n");
+        s.append("});\n");
         s.append("function refreshFlowGradient(){\n");
         s.append("  const cs=getComputedStyle(document.body);\n");
         s.append("  const g=document.getElementById('flow-'+ID); if(!g) return;\n");
