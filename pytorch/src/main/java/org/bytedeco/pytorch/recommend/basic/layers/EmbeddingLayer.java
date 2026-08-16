@@ -329,10 +329,6 @@ public class EmbeddingLayer extends Module {
         long expectedNumel = (long) batchSize * totalDim;
         int finalTotalDim = (actualNumel % batchSize == 0L)
                 ? (int) (actualNumel / batchSize) : totalDim;
-        if (actualNumel != expectedNumel) {
-            System.err.println("[EmbeddingLayer DEBUG] concatenated.numel()=" + actualNumel
-                    + " expected=" + expectedNumel + "; falling back to per-batch dim=" + finalTotalDim);
-        }
 
         Tensor flattened;
         try {

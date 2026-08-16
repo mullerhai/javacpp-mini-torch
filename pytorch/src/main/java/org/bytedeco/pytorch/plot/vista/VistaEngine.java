@@ -2011,11 +2011,26 @@ public final class VistaEngine {
             }
             if (parts.size() == 1) return parts.get(0);
             if (parts.size() >= 2) {
-                try {
-                    return catAlongDim1(parts, partNames);
-                } catch (Throwable e) {
-                    return parts.get(parts.size() - 1);
+                // Validate all parts share the same first two dims (batch, seq).
+                // Shape mismatch here means individual EmbeddingImpl traces produced
+                // tensors with incompatible shapes — falling back to the last part
+                // avoids RuntimeException from torch.cat(view).
+                long b0 = -1, n0 = -1;
+                boolean allMatch = true;
+                for (Tensor t : parts) {
+                    if (t == null || t.isNull() || t.dim() < 2) { allMatch = false; break; }
+                    long b = t.size(0), n = t.size(1);
+                    if (b0 < 0) { b0 = b; n0 = n; }
+                    else if (b != b0 || n != n0) { allMatch = false; break; }
                 }
+                if (allMatch) {
+                    try {
+                        return catAlongDim1(parts, partNames);
+                    } catch (Throwable e) {
+                        // cat failed — fall through to last-part fallback
+                    }
+                }
+                return parts.get(parts.size() - 1);
             }
             // Structural fallback: real forward failed (e.g. MPS device issue)
             // and no runtime tensors were captured, but we have multiple
