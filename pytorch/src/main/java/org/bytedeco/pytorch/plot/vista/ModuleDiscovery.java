@@ -330,6 +330,17 @@ public final class ModuleDiscovery {
             if (!"forward".equals(method.getName())) continue;
             if (method.getDeclaringClass() == Module.class) continue;
             if (method.getParameterCount() < 1) continue;
+            // Skip JavaCPP-generated native C++ bridges — they are named like
+            // "forwardT_Tensor..." or "forwardT_TensorT..." and the score below
+            // would otherwise prefer them over user-declared forward(...). Worse,
+            // invoking them via reflection triggers a JNIHandles::resolve_impl
+            // crash (#SIGSEGV) when the module's Jacobian box has been GC'd
+            // (knowledge-tracing models like DKT/RKT contain LSTMImpl as a
+            // child and the parent forward(args) is a real Java method, not a
+            // native bridge). Calling *any* native forward via reflection is
+            // unsafe — those bridges expect native pointers and a live Tensor
+            // context, not a Java-side reflective dispatch.
+            if (java.lang.reflect.Modifier.isNative(method.getModifiers())) continue;
             Class<?>[] pts = method.getParameterTypes();
             int score = 10 - pts.length; // prefer fewer args as baseline
 

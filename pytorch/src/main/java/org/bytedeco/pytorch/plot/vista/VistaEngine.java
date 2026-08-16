@@ -30,7 +30,7 @@ import org.bytedeco.pytorch.nn.modules.container.SequentialImpl;
  *       functional ops ({@code F.relu}, {@code x + y}, …) inside a custom
  *       {@code Module.forward} are <em>not</em> individual graph nodes. The
  *       custom module is one black-box leaf (or expanded only via
- *       {@link VistaOptions#forcedModuleTracingDepth}).</li>
+ *       { VistaOptions#forcedModuleTracingDepth}).</li>
  *   <li>No {@code tensor._tensor_source_name} attribute → tensor provenance is
  *       tracked with a {@link HashMap}{@code Long} keyed by
  *       {@link TensorUtils#tensorKey(Tensor)} (native address) for the duration
@@ -487,6 +487,79 @@ public final class VistaEngine {
         // Built-in *Impl or opaque leaf
         return traceLeafModule(m, inputs, stackDepth);
     }
+
+    /**
+     * Direct dispatcher for built-in nn layers whose Java {@code forward(...)}
+     * wrappers have non-standard signatures that reflection cannot reconcile
+     * safely (avoids the JNIHandles::resolve_impl SIGSEGV we hit on
+     * {@code MultiheadAttentionImpl.forward(Tensor, Tensor, Tensor, Tensor,
+     * boolean, Tensor, boolean)} and on LSTM/RNN/GRU with hidden state).
+     *
+     * <p>Returns {@code null} when the module is not one of the recognised
+     * special layers — the caller then falls back to the regular {@code
+     * m.forward(...)} path.
+     */
+    private Tensor callTypedBuiltinForward(Module m, Object inputs) {
+        Tensor[] args = toTensorArgs(inputs);
+        if (args.length == 0) return null;
+        String simple = ModuleDiscovery.simpleTypeName(m);
+        long modDev = moduleDeviceId(m);
+
+        // MultiheadAttention: forward(query, key, value, attn_mask, need_weights,
+        //                            average_attn_weights, ...)
+        if (simple.startsWith("MultiheadAttention") || simple.equals("MultiheadAttentionImpl")) {
+            Tensor q = toDevice(args[0], modDev);
+            Tensor k = toDevice(args[Math.min(1, args.length - 1)], modDev);
+            Tensor v = toDevice(args[Math.min(2, args.length - 1)], modDev);
+            Object ret = m.forward(q, k, v);
+            if (ret instanceof Tensor) return (Tensor) ret;
+            // JavaCPP wrapper returns T_TensorTensor_T
+            if (ret != null) {
+                List<Tensor> parts = TensorUtils.extractTensors(ret);
+                if (!parts.isEmpty()) return parts.get(0);
+            }
+            return null;
+        }
+
+        // LSTM / GRU / RNN: forward(input, hx=null). The Java wrapper exists,
+        // but reflectively preferring it triggers SIGSEGV when the parent
+        // module's reflection-driven forward corrupts the native handle. Call
+        // here directly with hidden state = null.
+        if (simple.startsWith("LSTM") || simple.startsWith("GRU") || simple.startsWith("RNN")) {
+            if (args.length >= 1) {
+                Tensor in = toDevice(args[0], modDev);
+                Object ret = m.forward(in);
+                if (ret instanceof Tensor) return (Tensor) ret;
+                if (ret != null) {
+                    List<Tensor> parts = TensorUtils.extractTensors(ret);
+                    if (!parts.isEmpty()) return parts.get(0);
+                }
+            }
+            return null;
+        }
+
+        // AdaptiveLogSoftmaxWithLoss (AdaptiveLogSoftmax) — high-arity forward
+        if (simple.startsWith("AdaptiveLogSoftmax") || simple.startsWith("AdaptiveLogSoftmaxWithLoss")) {
+            return null;
+        }
+
+        // MultiheadAttention overload with explicit attn_mask / need_weights flags
+        if (simple.contains("Attention") && args.length >= 3) {
+            Tensor q = toDevice(args[0], modDev);
+            Tensor k = toDevice(args[1], modDev);
+            Tensor v = toDevice(args[2], modDev);
+            Object ret = m.forward(q, k, v);
+            if (ret instanceof Tensor) return (Tensor) ret;
+            if (ret != null) {
+                List<Tensor> parts = TensorUtils.extractTensors(ret);
+                if (!parts.isEmpty()) return parts.get(0);
+            }
+            return null;
+        }
+
+        return null;
+    }
+
 
     /**
      * Expand children under a container without inventing a false Sequential
@@ -4460,6 +4533,19 @@ public final class VistaEngine {
         if (inputs instanceof Object[] && !(inputs instanceof Tensor[])) {
             Tensor mapped = invokeReflectiveForward(m, inputs);
             if (mapped != null) return mapped;
+        }
+
+        // Special nn layers (LSTM/RNN/GRU/MultiheadAttention/AdaptiveLogSoftmax):
+        // direct dispatcher. JavaCPP generates a Java wrapper forward(...) whose
+        // boxing of tuples/optional Tensors trips reflection. Calling the
+        // wrapper directly with an empty hidden state is safe and avoids the
+        // JNIHandles::resolve_impl SIGSEGV (#SIGSEGV) on _jobject* dereference.
+        // Runs BEFORE reflective fallback so we never invoke the native C++
+        // bridge reflectively.
+        Tensor[] typedArgs = toTensorArgs(inputs);
+        if (typedArgs.length > 0) {
+            Tensor typed = callTypedBuiltinForward(m, inputs);
+            if (typed != null) return typed;
         }
 
         // Prefer Java-declared forward(Tensor…) on custom modules before C++ shims
