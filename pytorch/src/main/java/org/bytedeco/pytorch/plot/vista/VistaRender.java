@@ -114,6 +114,8 @@ public final class VistaRender {
         sb.append("<button type=\"button\" class=\"vx-btn\" id=\"col-").append(uniqueId).append("\">⊖ Collapse</button>");
         sb.append("<button type=\"button\" class=\"vx-btn\" id=\"rst-").append(uniqueId).append("\">↺ Reset</button>");
         sb.append("</div>");
+        // model info toggle — placed in the middle of the toolbar
+        sb.append("<button type=\"button\" class=\"vx-btn\" id=\"meta-toggle-").append(uniqueId).append("\">👁</button>");
         // theme
         sb.append("<div class=\"vx-group\">");
         sb.append("<button type=\"button\" class=\"vx-btn vx-theme active\" data-theme=\"cute\" id=\"th-cute-").append(uniqueId).append("\">🍡 Cute</button>");
@@ -129,7 +131,6 @@ public final class VistaRender {
         sb.append("<button type=\"button\" data-fmt=\"jpeg\">JPEG 图片</button>");
         sb.append("<button type=\"button\" data-fmt=\"pdf\">PDF 文档</button>");
         sb.append("</div></div>");
-        sb.append("<button type=\"button\" class=\"vx-btn\" id=\"meta-toggle-").append(uniqueId).append("\">👁</button>");
         sb.append("</div></header>");
 
         // ── model metadata panel ───────────────────────────────────────────
@@ -1361,13 +1362,13 @@ public final class VistaRender {
         s.append("  const toggle=document.getElementById('meta-toggle-'+ID);\n");
         s.append("  if(toggle){toggle.textContent=v?'👁':'🫣';}\n");
         s.append("}\n");
+        s.append("var metaVisible=true;\n");
         s.append("document.addEventListener('DOMContentLoaded',function(){\n");
-        s.append("  const metaEl=document.getElementById('meta-'+ID);\n");
         s.append("  const closeBtn=document.getElementById('meta-close-'+ID);\n");
         s.append("  const toggle=document.getElementById('meta-toggle-'+ID);\n");
         s.append("  if(closeBtn){closeBtn.addEventListener('click',function(){setMetaVisible(false);});}\n");
         s.append("  if(toggle){toggle.addEventListener('click',function(){setMetaVisible(!metaVisible);});}\n");
-        s.append("  metaVisible=true;\n");
+        s.append("  setMetaVisible(true);\n");
         s.append("});\n");
         s.append("function refreshFlowGradient(){\n");
         s.append("  const cs=getComputedStyle(document.body);\n");
