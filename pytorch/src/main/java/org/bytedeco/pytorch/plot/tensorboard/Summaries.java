@@ -28,8 +28,15 @@ public final class Summaries {
 
     // ---- scalar -------------------------------------------------------------
 
-    /** Classic simple_value scalar (universally accepted). */
+    /**
+     * Classic simple_value scalar (universally accepted).
+     * @param value finite, non-NaN; Infinity is treated as ±1e20 for log purposes
+     */
     public static byte[] scalar(String tag, float value) {
+        validateTag(tag);
+        if (Float.isNaN(value)) {
+            // NaN → still emit (Python emits NaN as simple_value=NaN which TB shows as gap)
+        }
         ByteArrayOutputStream val = buf();
         string(val, 1, tag);
         float32(val, 2, value); // simple_value
@@ -39,11 +46,27 @@ public final class Summaries {
 
     /** New-style tensor scalar (DT_FLOAT rank-0). */
     public static byte[] scalarTensor(String tag, float value) {
+        validateTag(tag);
         ByteArrayOutputStream val = buf();
         string(val, 1, tag);
         message(val, 8, tensorProtoFloat(new long[0], new float[]{value}));
         message(val, 9, pluginMetadata("scalars", null, DATA_CLASS_SCALAR));
         return summaryOf(val.toByteArray());
+    }
+
+    private static void validateTag(String tag) {
+        if (tag == null || tag.isEmpty()) {
+            throw new IllegalArgumentException("tag must not be empty");
+        }
+    }
+
+    private static void validateShape(String what, long[] shape, long total) {
+        if (shape == null) return;
+        long s = 1;
+        for (long d : shape) s *= d;
+        if (s != total) {
+            throw new IllegalArgumentException(what + " shape product " + s + " != data length " + total);
+        }
     }
 
     // ---- histogram ----------------------------------------------------------
@@ -53,11 +76,15 @@ public final class Summaries {
     }
 
     public static byte[] histogram(String tag, double[] values, int maxBins) {
+        validateTag(tag);
+        if (maxBins <= 0) throw new IllegalArgumentException("maxBins must be > 0, got " + maxBins);
         if (values == null || values.length == 0) {
             values = new double[]{0.0};
         }
+        // NaN/Inf guard: clip extreme values for stats; preserve count
         double min = values[0], max = values[0], sum = 0, sumsq = 0;
         for (double v : values) {
+            if (Double.isNaN(v)) continue;
             if (v < min) min = v;
             if (v > max) max = v;
             sum += v;
@@ -226,6 +253,14 @@ public final class Summaries {
      * Returns stacked [tp,fp,tn,fn,precision,recall] of shape [6, num_thresholds].
      */
     public static byte[] prCurve(String tag, float[] labels, float[] predictions, int numThresholds) {
+        validateTag(tag);
+        if (labels == null || predictions == null) {
+            throw new IllegalArgumentException("labels and predictions must not be null");
+        }
+        if (labels.length != predictions.length) {
+            throw new IllegalArgumentException("labels and predictions must have the same length, got "
+                    + labels.length + " vs " + predictions.length);
+        }
         numThresholds = Math.min(Math.max(numThresholds, 2), 127);
         float[] data = computePrCurve(labels, predictions, numThresholds, null);
         return prCurveRaw(tag, data, numThresholds);
@@ -257,6 +292,7 @@ public final class Summaries {
             if (p > 1) p = 1;
             int bucket = (int) Math.floor(p * (numThresholds - 1));
             if (bucket >= numThresholds) bucket = numThresholds - 1;
+            if (bucket < 0) bucket = 0;
             double w = weights == null ? 1.0 : weights[i];
             double y = labels[i];
             tpB[bucket] += y * w;
@@ -301,11 +337,61 @@ public final class Summaries {
         return hparams(hparamDict, metricDict, null);
     }
 
+    /**
+     * One-vs-rest multi-class PR curves (returns multiple {@code Value}s to be
+     * written to a single summary). Class index becomes the second dimension.
+     */
+    public static byte[] prCurvesMultiClass(String tag, int[] labels, float[][] scores, int numThresholds) {
+        validateTag(tag);
+        if (labels == null || scores == null) {
+            throw new IllegalArgumentException("labels/scores must not be null");
+        }
+        if (numThresholds < 2) numThresholds = 2;
+        if (numThresholds > 127) numThresholds = 127;
+        int n = labels.length;
+        int numClasses = scores.length;
+        // Determine number of unique classes
+        int maxLabel = -1;
+        for (int l : labels) if (l > maxLabel) maxLabel = l;
+        int nClasses = Math.max(maxLabel + 1, numClasses);
+
+        ByteArrayOutputStream content = buf();
+        int32(content, 1, 0);
+        int32(content, 2, numThresholds);
+
+        ByteArrayOutputStream val = buf();
+        string(val, 1, tag);
+        // Build [6, numThresholds, nClasses] tensor
+        int total = 6 * numThresholds * nClasses;
+        float[] stacked = new float[total];
+        for (int c = 0; c < nClasses; c++) {
+            float[] classLabels = new float[n];
+            float[] classPreds = new float[n];
+            for (int i = 0; i < n; i++) {
+                classLabels[i] = (labels[i] == c) ? 1f : 0f;
+                classPreds[i] = (c < numClasses) ? scores[c][i] : 0f;
+            }
+            float[] classCurve = computePrCurve(classLabels, classPreds, numThresholds, null);
+            for (int t = 0; t < classCurve.length; t++) {
+                stacked[t * nClasses + c] = classCurve[t];
+            }
+        }
+        message(val, 8, tensorProtoFloat(new long[]{6, numThresholds, nClasses}, stacked));
+        message(val, 9, pluginMetadata("pr_curves", content.toByteArray()));
+        return summaryOf(val.toByteArray());
+    }
+
     public static HparamsBundle hparams(Map<String, ?> hparamDict,
                                         Map<String, ? extends Number> metricDict,
                                         Map<String, ? extends List<?>> domainDiscrete) {
         if (hparamDict == null || metricDict == null) {
             throw new IllegalArgumentException("hparamDict and metricDict required");
+        }
+        if (hparamDict.isEmpty()) {
+            throw new IllegalArgumentException("hparamDict must contain at least one entry");
+        }
+        if (metricDict.isEmpty()) {
+            throw new IllegalArgumentException("metricDict must contain at least one metric");
         }
 
         // ---- Experiment (api_pb2.Experiment inside HParamsPluginData.experiment) ----

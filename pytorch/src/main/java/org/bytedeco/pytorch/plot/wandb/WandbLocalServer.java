@@ -81,6 +81,8 @@ public final class WandbLocalServer implements AutoCloseable {
         server.createContext("/api/text", ex -> handleIngest(ex, "text"));
         server.createContext("/api/audio", ex -> handleIngest(ex, "audio"));
         server.createContext("/api/summary", ex -> handleIngest(ex, "summary"));
+        server.createContext("/api/artifacts", ex -> handleIngest(ex, "artifacts"));
+        server.createContext("/api/alerts", ex -> handleIngest(ex, "alerts"));
         server.createContext("/", this::handleUi);
     }
 
@@ -149,6 +151,25 @@ public final class WandbLocalServer implements AutoCloseable {
                 case "images" -> run.images.add(body);
                 case "text" -> run.texts.add(body);
                 case "audio" -> run.audios.add(body);
+                case "alerts" -> run.alerts.add(body);
+                case "artifacts" -> {
+                    Object p = body.get("path");
+                    String name = str(body.get("name"), "artifact");
+                    run.artifacts.put(name, body);
+                    // copy file into the run dir so it is available offline
+                    if (p instanceof String path) {
+                        try {
+                            java.io.File src = new java.io.File(path);
+                            if (src.exists()) {
+                                java.io.File dst = new java.io.File(runDirForRun(runId), "artifacts");
+                                dst.mkdirs();
+                                java.nio.file.Files.copy(src.toPath(),
+                                        new java.io.File(dst, name).toPath(),
+                                        java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                            }
+                        } catch (Exception ignored) { /* best-effort */ }
+                    }
+                }
                 case "summary" -> {
                     Object s = body.get("summary");
                     if (s instanceof Map) run.summary.putAll((Map<String, Object>) s);
@@ -159,6 +180,10 @@ public final class WandbLocalServer implements AutoCloseable {
         } catch (Exception e) {
             writeText(ex, 500, e.getMessage() == null ? e.toString() : e.getMessage());
         }
+    }
+
+    private java.io.File runDirForRun(String id) {
+        return new java.io.File(System.getProperty("java.io.tmpdir"), "wandb-local/" + id);
     }
 
     private void handleUi(HttpExchange ex) throws IOException {
@@ -306,6 +331,37 @@ public final class WandbLocalServer implements AutoCloseable {
                 sb.append("var z=").append(Json.encode(c.get("matrix"))).append(";\n");
                 sb.append("Plotly.newPlot('").append(divId).append("',[{z:z,type:'heatmap',colorscale:'Viridis'}],");
                 sb.append("{margin:{t:30},height:420,title:").append(jsStr(name)).append("});\n");
+            } else if ("surface".equals(type) && c.get("matrix") instanceof List) {
+                sb.append("var z=").append(Json.encode(c.get("matrix"))).append(";\n");
+                sb.append("Plotly.newPlot('").append(divId).append("',[{z:z,type:'surface',colorscale:'Viridis'}],");
+                sb.append("{margin:{t:30},height:480,title:").append(jsStr(name)).append("});\n");
+            } else if ("polar".equals(type) && c.get("points") instanceof List) {
+                List<?> pts = (List<?>) c.get("points");
+                sb.append("var thetas=[],r=[];\n");
+                for (Object p : pts) {
+                    if (p instanceof List<?> xy && xy.size() >= 2) {
+                        sb.append("thetas.push(").append(xy.get(0)).append(");r.push(").append(xy.get(1)).append(");\n");
+                    }
+                }
+                sb.append("Plotly.newPlot('").append(divId)
+                        .append("',[{r:r,theta:thetas,mode:'markers',type:'scatterpolar'}],")
+                        .append("{margin:{t:30},height:420,title:").append(jsStr(name)).append("});\n");
+            } else if ("box".equals(type) && c.get("values") instanceof List) {
+                List<?> cols = (List<?>) c.get("values");
+                sb.append("var traces=[];\n");
+                for (Object col : cols) {
+                    if (col instanceof List<?> vs) {
+                        sb.append("traces.push({y:").append(Json.encode(vs)).append(",type:'box'});\n");
+                    }
+                }
+                sb.append("Plotly.newPlot('").append(divId)
+                        .append("',traces,{margin:{t:30},height:380,title:").append(jsStr(name)).append("});\n");
+            } else if ("pie".equals(type) && c.get("values") instanceof List) {
+                sb.append("var v=").append(Json.encode(c.get("values"))).append(";\n");
+                sb.append("var lab=").append(Json.encode(c.getOrDefault("labels", List.of()))).append(";\n");
+                sb.append("Plotly.newPlot('").append(divId)
+                        .append("',[{values:v,labels:lab,type:'pie'}],{margin:{t:30},height:380,title:")
+                        .append(jsStr(name)).append("});\n");
             } else if ("scatter".equals(type) && c.get("points") instanceof List) {
                 List<?> pts = (List<?>) c.get("points");
                 sb.append("var xs=[],ys=[];\n");
@@ -381,6 +437,30 @@ public final class WandbLocalServer implements AutoCloseable {
         for (Map<String, Object> t : run.texts) {
             sb.append("<h2>").append(esc(str(t.get("name"), "text"))).append("</h2>");
             sb.append("<pre>").append(esc(str(t.get("text"), ""))).append("</pre>");
+        }
+
+        // ---- alerts ----
+        if (!run.alerts.isEmpty()) {
+            sb.append("<h2>Alerts</h2><ul>");
+            for (Map<String, Object> a : run.alerts) {
+                String lvl = esc(str(a.get("level"), "INFO"));
+                String title = esc(str(a.get("title"), ""));
+                String text = esc(str(a.get("text"), ""));
+                sb.append("<li><b>[").append(lvl).append("]</b> <b>").append(title).append("</b> — ")
+                        .append(text).append("</li>");
+            }
+            sb.append("</ul>");
+        }
+
+        // ---- artifacts ----
+        if (!run.artifacts.isEmpty()) {
+            sb.append("<h2>Artifacts</h2><ul>");
+            for (Map.Entry<String, Map<String, Object>> e : run.artifacts.entrySet()) {
+                sb.append("<li><b>").append(esc(e.getKey())).append("</b> <span class='muted'>(")
+                        .append(esc(str(e.getValue().get("type"), "model"))).append(", ")
+                        .append(toLong(e.getValue().get("bytes"), 0L)).append(" bytes)</span></li>");
+            }
+            sb.append("</ul>");
         }
 
         // ---- summary ----
@@ -510,6 +590,8 @@ public final class WandbLocalServer implements AutoCloseable {
         public final List<Map<String, Object>> images = new ArrayList<>();
         public final List<Map<String, Object>> texts = new ArrayList<>();
         public final List<Map<String, Object>> audios = new ArrayList<>();
+        public final List<Map<String, Object>> alerts = new ArrayList<>();
+        public final Map<String, Map<String, Object>> artifacts = new LinkedHashMap<>();
         public final Map<String, Object> summary = new LinkedHashMap<>();
 
         RunState(String id, String name, String entity, String project) {
@@ -546,6 +628,8 @@ public final class WandbLocalServer implements AutoCloseable {
             m.put("images", imgs);
             m.put("texts", texts);
             m.put("audios", audios);
+            m.put("alerts", alerts);
+            m.put("artifacts", artifacts);
             m.put("summary", summary);
             m.put("finished_at", finishedAt);
             return m;

@@ -569,7 +569,7 @@ public final class StatisticalTest {
 
     // ---- special functions --------------------------------------------------
 
-    private static double erf(double x) {
+    static double erf(double x) {
         // A&S 7.1.26
         double ax = Math.abs(x);
         double t = 1.0 / (1.0 + 0.3275911 * ax);

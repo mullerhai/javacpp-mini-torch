@@ -1,6 +1,7 @@
 package org.bytedeco.pytorch.plot.visdom;
 
 import org.bytedeco.pytorch.Tensor;
+import org.bytedeco.pytorch.nn.Module;
 
 import java.io.IOException;
 import java.util.LinkedHashMap;
@@ -135,6 +136,61 @@ public final class VisdomTrainingMonitor implements AutoCloseable {
                     VisdomClient.opts("title", runName + " / " + name, "caption", name));
         } catch (IOException | InterruptedException e) {
             rethrow(e);
+        }
+    }
+
+    public void logImages(String name, Tensor batch, int nrow) {
+        try {
+            client.images(batch, nrow, runName + "-imgs-" + name,
+                    VisdomClient.opts("title", runName + " / " + name));
+        } catch (IOException | InterruptedException e) {
+            rethrow(e);
+        }
+    }
+
+    public void logPolar(String name, double[][] polarPoints) {
+        try {
+            client.polar(polarPoints, runName + "-polar-" + name,
+                    VisdomClient.opts("title", runName + " / " + name));
+        } catch (IOException | InterruptedException e) {
+            rethrow(e);
+        }
+    }
+
+    public void logBox(String name, double[][] data) {
+        try {
+            client.boxplot(data, runName + "-box-" + name,
+                    VisdomClient.opts("title", runName + " / " + name));
+        } catch (IOException | InterruptedException e) {
+            rethrow(e);
+        }
+    }
+
+    public void logVideo(String name, Tensor tchw, int fps) {
+        try {
+            java.util.Map<String, Object> o = VisdomClient.opts("title", runName + " / " + name);
+            o.put("fps", fps);
+            client.video(tchw, runName + "-vid-" + name, o);
+        } catch (IOException | InterruptedException e) {
+            rethrow(e);
+        }
+    }
+
+    public void logAudio(String name, Tensor waveform, int sampleRate) {
+        try {
+            client.audio(waveform, sampleRate, runName + "-audio-" + name,
+                    VisdomClient.opts("title", runName + " / " + name));
+        } catch (IOException | InterruptedException e) {
+            rethrow(e);
+        }
+    }
+
+    public int watchModel(Module model, String prefix) {
+        try {
+            return client.watchModel(model, prefix == null ? runName : prefix);
+        } catch (IOException | InterruptedException e) {
+            rethrow(e);
+            return 0;
         }
     }
 

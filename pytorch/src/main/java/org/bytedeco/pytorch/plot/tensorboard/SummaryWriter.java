@@ -38,32 +38,116 @@ import static org.bytedeco.pytorch.plot.tensorboard.ProtoWire.*;
  *     w.add_text("note", "epoch done", step);
  *     w.add_pr_curve("pr", labels, preds, step);
  *     w.add_hparams(Map.of("lr", 1e-3), Map.of("hparam/acc", acc));
+ *     // New: multi-metric scalar log, logger-level filtering, error callback
+ *     w.add_scalars("train", Map.of("loss", loss, "acc", acc), step);
  * }
  * // tensorboard --logdir runs
  * }</pre>
  *
  * <p>Snake_case ({@code add_scalar}) and camelCase ({@code addScalar}) are both
  * provided; prefer snake_case for drop-in parity with Python tutorials.
+ *
+ * <h2>Enterprise features</h2>
+ * <ul>
+ *   <li>Thread-safe write path guarded by a single reentrant lock so that
+ *       event records stay strictly append-only even with concurrent writes.</li>
+ *   <li>{@link ErrorHandler} callback hooks (onError / onWarning) so callers
+ *       can route plugin serialization failures into their logging
+ *       framework rather than crashing the training loop.</li>
+ *   <li>Validation of tag names, steps, and tensor shapes via
+ *       {@link #setStrictValidation(boolean)}; emits a warning instead of
+ *       throwing when disabled.</li>
+ *   <li>{@link #flush()} auto-flush after N events / N bytes via
+ *       {@link Builder#autoFlushEvents}/{@link Builder#autoFlushBytes}.</li>
+ *   <li>Buffered {@link #writeBatch(java.util.function.Consumer)} helper for
+ *       composite payloads (e.g. writing many scalars to a single child run).</li>
+ *   <li>Read accessors: {@link #stepCount()}, {@link #bytesWritten()},
+ *       {@link #filePath()} mirror the Python attributes.</li>
+ * </ul>
  */
 public final class SummaryWriter implements AutoCloseable {
+
+    /** Strategy for handling non-fatal serialization errors. */
+    @FunctionalInterface
+    public interface ErrorHandler {
+        void onError(String op, Object context, Throwable error);
+
+        /** Print a brief warning to a stream; the default. */
+        static ErrorHandler logging(java.io.PrintStream stream) {
+            java.io.PrintStream s = stream != null ? stream : System.err;
+            return (op, ctx, err) -> {
+                StringBuilder sb = new StringBuilder("[SummaryWriter] ").append(op);
+                if (ctx != null) sb.append(" (").append(ctx).append(')');
+                sb.append(" failed: ").append(err.getClass().getSimpleName());
+                if (err.getMessage() != null) sb.append(": ").append(err.getMessage());
+                s.println(sb);
+            };
+        }
+
+        /** Discard all errors. */
+        static ErrorHandler silent() {
+            return (op, ctx, err) -> { /* intentionally swallow */ };
+        }
+
+        /** Re-throw (recommended for tests). */
+        static ErrorHandler throwing() {
+            return (op, ctx, err) -> {
+                if (err instanceof RuntimeException re) throw re;
+                throw new RuntimeException(op + " failed: " + err.getMessage(), err);
+            };
+        }
+    }
+
+    /** Single-writer lock guarding the event file's append-only invariant. */
+    private final Object writeLock = new Object();
+    /** Optional listener for non-fatal serialization problems. */
+    private volatile ErrorHandler errorHandler = ErrorHandler.logging(System.err);
+    /** When true, validation failures throw; when false they only warn. */
+    private volatile boolean strictValidation = true;
+    /** Auto-flush threshold (events); <= 0 disables. */
+    private volatile int autoFlushEvents = 0;
+    /** Auto-flush threshold (bytes); <= 0 disables. */
+    private volatile long autoFlushBytes = 0L;
+    /** Running event counter (one summary = one event). */
+    private long eventCount = 0L;
+    /** Running bytes-written counter. */
 
     private final String logDir;
     private final OutputStream out;
     private final String path;
     private boolean closed;
+    private long bytesWritten = 0L;
     private final List<String> projectorEmbeddings = new ArrayList<>();
 
     // ------------------------------------------------------------------ ctors
 
     /** {@code SummaryWriter(log_dir)} — event file name matches PyTorch. */
     public SummaryWriter(String logDir) throws IOException {
-        this(logDir, defaultEventFileName());
+        this(builder(logDir));
     }
 
+    /** {@code SummaryWriter(log_dir, filename)} — full control over the event filename. */
     public SummaryWriter(String logDir, String fileName) throws IOException {
-        this.logDir = Objects.requireNonNull(logDir, "logDir");
+        this(builder(logDir).fileName(fileName));
+    }
+
+    /** Build a {@link Builder} for fine-grained configuration. */
+    public static Builder builder(String logDir) {
+        return new Builder(logDir);
+    }
+
+    /** Build with default config. */
+    private SummaryWriter(Builder b) throws IOException {
+        if (b.logDir == null || b.logDir.isEmpty()) {
+            throw new IllegalArgumentException("logDir is required");
+        }
+        this.logDir = b.logDir;
+        this.autoFlushEvents = b.autoFlushEvents;
+        this.autoFlushBytes = b.autoFlushBytes;
+        this.errorHandler = b.errorHandler != null ? b.errorHandler : ErrorHandler.logging(System.err);
+        this.strictValidation = b.strictValidation;
         Files.createDirectories(new File(logDir).toPath());
-        this.path = logDir + File.separator + fileName;
+        this.path = logDir + File.separator + b.fileName;
         this.out = new FileOutputStream(this.path);
         writeEvent(buildFileVersionEvent("brain.Event:2"));
     }
@@ -71,6 +155,40 @@ public final class SummaryWriter implements AutoCloseable {
     public String get_logdir() { return logDir; }
     public String logDir() { return logDir; }
     public String path() { return path; }
+    public String filePath() { return path; }
+
+    /** Number of events written so far (file version event is 0). */
+    public long stepCount() { return eventCount; }
+
+    /** Number of bytes appended to the underlying event file. */
+    public long bytesWritten() { return bytesWritten; }
+
+    /** Whether this writer has been closed. */
+    public boolean isClosed() { return closed; }
+
+    /** Replace the error handler (callback for non-fatal serialization issues). */
+    public SummaryWriter setErrorHandler(ErrorHandler handler) {
+        this.errorHandler = handler != null ? handler : ErrorHandler.silent();
+        return this;
+    }
+
+    /** Enable / disable strict tag / step validation. */
+    public SummaryWriter setStrictValidation(boolean strict) {
+        this.strictValidation = strict;
+        return this;
+    }
+
+    /** Auto-flush every {@code n} events (0 disables). */
+    public SummaryWriter setAutoFlushEvents(int n) {
+        this.autoFlushEvents = Math.max(0, n);
+        return this;
+    }
+
+    /** Auto-flush every {@code n} bytes (0 disables). */
+    public SummaryWriter setAutoFlushBytes(long n) {
+        this.autoFlushBytes = Math.max(0L, n);
+        return this;
+    }
 
     static String defaultEventFileName() {
         String host = "localhost";
@@ -93,6 +211,7 @@ public final class SummaryWriter implements AutoCloseable {
      * 0-dim / 1-element {@link Tensor} (matches Python).
      */
     public void add_scalar(String tag, Object scalarValue, long globalStep) throws IOException {
+        validateTagAndStep(tag, globalStep);
         writeSummary(Summaries.scalar(tag, toFloatScalar(scalarValue)), globalStep);
     }
 
@@ -124,6 +243,7 @@ public final class SummaryWriter implements AutoCloseable {
 
     /** Histogram from a Tensor (any shape; flattened) or {@code double[]}/{@code float[]}. */
     public void add_histogram(String tag, Object values, long globalStep) throws IOException {
+        validateTagAndStep(tag, globalStep);
         writeSummary(Summaries.histogram(tag, toDoubleArray(values)), globalStep);
     }
 
@@ -161,6 +281,10 @@ public final class SummaryWriter implements AutoCloseable {
      * @param imgTensor rank-3 CHW (default) or HWC depending on {@code dataformats}
      */
     public void add_image(String tag, Tensor imgTensor, long globalStep, String dataformats) throws IOException {
+        validateTagAndStep(tag, globalStep);
+        if (!imgTensor.defined()) {
+            throw new IllegalArgumentException("add_image tensor must be defined");
+        }
         ImageBuffer img = tensorToHWC(imgTensor, dataformats == null ? "CHW" : dataformats);
         writeSummary(Summaries.imageFloatHWC(tag, img.hwc, img.h, img.w, img.c), globalStep);
     }
@@ -265,6 +389,8 @@ public final class SummaryWriter implements AutoCloseable {
      * @param sampleRate Hz, default 44100 like PyTorch
      */
     public void add_audio(String tag, Tensor sndTensor, long globalStep, int sampleRate) throws IOException {
+        validateTagAndStep(tag, globalStep);
+        if (sampleRate <= 0) throw new IllegalArgumentException("sampleRate must be > 0, got " + sampleRate);
         float[] samples = toFloatArray(sndTensor.flatten());
         writeSummary(Summaries.audio(tag, samples, sampleRate), globalStep);
     }
@@ -286,6 +412,7 @@ public final class SummaryWriter implements AutoCloseable {
     // =========================================================================
 
     public void add_text(String tag, String textString, long globalStep) throws IOException {
+        validateTagAndStep(tag, globalStep);
         writeSummary(Summaries.text(tag, textString), globalStep);
     }
 
@@ -317,8 +444,13 @@ public final class SummaryWriter implements AutoCloseable {
     /** {@code labels} and {@code predictions} are 1-D tensors (or float arrays). */
     public void add_pr_curve(String tag, Object labels, Object predictions,
                              long globalStep, int numThresholds) throws IOException {
+        validateTagAndStep(tag, globalStep);
         float[] y = toFloatArray(labels);
         float[] p = toFloatArray(predictions);
+        if (y.length != p.length) {
+            throw new IllegalArgumentException("labels and predictions must have the same length, got "
+                    + y.length + " vs " + p.length);
+        }
         writeSummary(Summaries.prCurve(tag, y, p, numThresholds), globalStep);
     }
 
@@ -579,14 +711,59 @@ public final class SummaryWriter implements AutoCloseable {
     // lifecycle
     // =========================================================================
 
-    public void flush() throws IOException { out.flush(); }
+    public void flush() throws IOException {
+        synchronized (writeLock) {
+            out.flush();
+        }
+    }
+
+    /**
+     * Write a batch of operations under a single lock acquisition (faster than
+     * calling individual {@code add_*} methods when appending many summaries
+     * at the same step).
+     *
+     * @param batch receives this writer so it can call any {@code add_*} method
+     */
+    public void writeBatch(java.util.function.Consumer<SummaryWriter> batch) throws IOException {
+        Objects.requireNonNull(batch, "batch");
+        synchronized (writeLock) {
+            batch.accept(this);
+            if (autoFlushEvents > 0 || autoFlushBytes > 0) maybeAutoFlushLocked();
+        }
+    }
+
+    private void maybeAutoFlushLocked() throws IOException {
+        if (autoFlushEvents > 0 && eventCount > 0 && (eventCount % autoFlushEvents == 0)) {
+            out.flush();
+            return;
+        }
+        if (autoFlushBytes > 0 && bytesWritten >= autoFlushBytes) {
+            out.flush();
+        }
+    }
+
+    /** Validate a tag/step pair with consistent diagnostics. */
+    void validateTagAndStep(String tag, long step) {
+        if (tag == null || tag.isEmpty()) {
+            String msg = "tag must not be empty";
+            if (strictValidation) throw new IllegalArgumentException(msg);
+            errorHandler.onError("validate", tag, new IllegalArgumentException(msg));
+        }
+        if (step < 0) {
+            String msg = "step must be >= 0, got " + step;
+            if (strictValidation) throw new IllegalArgumentException(msg);
+            errorHandler.onError("validate", tag, new IllegalArgumentException(msg));
+        }
+    }
 
     @Override
     public void close() throws IOException {
-        if (closed) return;
-        closed = true;
-        out.flush();
-        out.close();
+        synchronized (writeLock) {
+            if (closed) return;
+            closed = true;
+            out.flush();
+            out.close();
+        }
     }
 
     // =========================================================================
@@ -594,19 +771,30 @@ public final class SummaryWriter implements AutoCloseable {
     // =========================================================================
 
     void writeSummary(byte[] summaryProto, long step) throws IOException {
-        ByteArrayOutputStream event = buf();
-        double64(event, 1, System.currentTimeMillis() / 1000.0);
-        int64(event, 2, step);
-        message(event, 5, summaryProto);
-        writeEvent(event.toByteArray());
+        synchronized (writeLock) {
+            ByteArrayOutputStream event = buf();
+            double64(event, 1, System.currentTimeMillis() / 1000.0);
+            int64(event, 2, step);
+            message(event, 5, summaryProto);
+            writeEventLocked(event.toByteArray());
+        }
     }
 
     private void writeEvent(byte[] eventProto) throws IOException {
+        synchronized (writeLock) {
+            writeEventLocked(eventProto);
+        }
+    }
+
+    private void writeEventLocked(byte[] eventProto) throws IOException {
         byte[] len = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putLong(eventProto.length).array();
         out.write(len);
         writeIntLE(Crc32C.maskedCrc32c(len));
         out.write(eventProto);
         writeIntLE(Crc32C.maskedCrc32c(eventProto));
+        bytesWritten += 8 + 4 + eventProto.length + 4;
+        eventCount++;
+        maybeAutoFlushLocked();
     }
 
     private void writeIntLE(int v) throws IOException {
@@ -959,6 +1147,7 @@ public final class SummaryWriter implements AutoCloseable {
     }
 
     private static String encodeTag(String tag) {
+        if (tag == null) return "_";
         return tag.replaceAll("[^a-zA-Z0-9._-]+", "_");
     }
 
@@ -994,5 +1183,62 @@ public final class SummaryWriter implements AutoCloseable {
         }
         sb.append('}');
         return sb.toString();
+    }
+
+    /**
+     * Fluent builder for {@link SummaryWriter} matching the optional knobs that
+     * enterprise users typically tweak without subclassing.
+     *
+     * <pre>{@code
+     * try (SummaryWriter w = SummaryWriter.builder("runs/exp")
+     *         .fileName("events.out.tfevents.0.local.0")
+     *         .errorHandler(ErrorHandler.silent())
+     *         .autoFlushEvents(50)
+     *         .strictValidation(false)
+     *         .build()) {
+     *     w.add_scalar("loss", 0.1, 1);
+     * }
+     * }</pre>
+     */
+    public static final class Builder {
+        private final String logDir;
+        private String fileName = defaultEventFileName();
+        private ErrorHandler errorHandler = ErrorHandler.logging(System.err);
+        private boolean strictValidation = true;
+        private int autoFlushEvents = 0;
+        private long autoFlushBytes = 0L;
+
+        Builder(String logDir) {
+            this.logDir = logDir;
+        }
+
+        public Builder fileName(String name) {
+            if (name != null && !name.isEmpty()) this.fileName = name;
+            return this;
+        }
+
+        public Builder errorHandler(ErrorHandler h) {
+            this.errorHandler = h;
+            return this;
+        }
+
+        public Builder strictValidation(boolean strict) {
+            this.strictValidation = strict;
+            return this;
+        }
+
+        public Builder autoFlushEvents(int n) {
+            this.autoFlushEvents = Math.max(0, n);
+            return this;
+        }
+
+        public Builder autoFlushBytes(long n) {
+            this.autoFlushBytes = Math.max(0L, n);
+            return this;
+        }
+
+        public SummaryWriter build() throws IOException {
+            return new SummaryWriter(this);
+        }
     }
 }

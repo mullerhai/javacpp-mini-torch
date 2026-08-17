@@ -1,5 +1,7 @@
 package org.bytedeco.pytorch.deploy.k8s;
 
+import org.bytedeco.pytorch.utils.yaml.Yaml;
+
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Base64;
@@ -439,5 +441,21 @@ public final class Resources {
         rule.put("http", Map.of("paths", List.of(httpPath)));
         root.put("spec", Map.of("rules", List.of(rule)));
         return root;
+    }
+
+    // ========== Serialization ==========
+
+    /**
+     * Convert a K8s resource map to YAML string.
+     */
+    public static String toYaml(Map<String, Object> resource) {
+        return Yaml.dump(resource);
+    }
+
+    /**
+     * Convert a list of K8s resource maps to multi-document YAML string.
+     */
+    public static String toYaml(List<Map<String, Object>> resources) {
+        return Yaml.dumpAll(resources);
     }
 }

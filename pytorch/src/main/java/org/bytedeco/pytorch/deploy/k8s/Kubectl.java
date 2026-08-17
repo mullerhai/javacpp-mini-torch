@@ -689,8 +689,28 @@ public final class Kubectl {
         return requireOk("rollout_status", c.argv(), t.plusSeconds(30), null);
     }
 
+    public String rolloutStatusRaw(String typeName, String namespace) {
+        try {
+            List<String> args = new ArrayList<>();
+            args.add("rollout");
+            args.add("status");
+            args.add(typeName);
+            if (namespace != null) {
+                args.add("-n");
+                args.add(namespace);
+            }
+            return raw(args).stdout();
+        } catch (Exception e) {
+            return "Error: " + e.getMessage();
+        }
+    }
+
     public String rolloutUndo(String typeName, String namespace) {
         return cmd("rollout", "undo", typeName).ns(namespace).runOk();
+    }
+
+    public String rolloutUndo(String typeName, String namespace, int revision) {
+        return cmd("rollout", "undo", typeName).ns(namespace).flag("--to-revision", revision).runOk();
     }
 
     public String rolloutRestart(String typeName, String namespace) {

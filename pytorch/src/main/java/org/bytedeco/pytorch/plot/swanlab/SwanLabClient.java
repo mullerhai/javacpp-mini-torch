@@ -1,6 +1,9 @@
 package org.bytedeco.pytorch.plot.swanlab;
 
+import org.bytedeco.pytorch.StringTensorDictItem;
+import org.bytedeco.pytorch.nn.Module;
 import org.bytedeco.pytorch.Tensor;
+import org.bytedeco.pytorch.plot.wandb.WandbClient;
 import org.bytedeco.pytorch.utils.json.Json;
 import org.bytedeco.pytorch.plot.tensorboard.PngEncoder;
 
@@ -20,6 +23,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -59,6 +67,14 @@ public final class SwanLabClient implements AutoCloseable {
     private String runId;
     private final AtomicLong stepCounter = new AtomicLong(0);
     private boolean finished;
+    // Enterprise enhancements
+    private final int maxRetries;
+    private final long retryBackoffMs;
+    private final int imageGridMaxCols;
+    private final boolean raiseExceptions;
+    private final ExecutorService asyncExecutor;
+    private final boolean ownAsyncExecutor;
+    private final AtomicBoolean closedFlag = new AtomicBoolean(false);
 
     private SwanLabClient(Builder b) {
         this.local = b.localServer;
@@ -67,6 +83,21 @@ public final class SwanLabClient implements AutoCloseable {
         this.project = Objects.requireNonNull(b.project, "project");
         this.experiment = b.experiment == null ? "exp" : b.experiment;
         this.runDir = b.runDir;
+        this.maxRetries = b.maxRetries;
+        this.retryBackoffMs = b.retryBackoffMs;
+        this.imageGridMaxCols = b.imageGridMaxCols;
+        this.raiseExceptions = b.raiseExceptions;
+        if (b.asyncExecutor != null) {
+            this.asyncExecutor = b.asyncExecutor;
+            this.ownAsyncExecutor = false;
+        } else {
+            this.asyncExecutor = Executors.newCachedThreadPool(r -> {
+                Thread t = new Thread(r, "swanlab-async");
+                t.setDaemon(true);
+                return t;
+            });
+            this.ownAsyncExecutor = true;
+        }
         this.http = HttpClient.newBuilder().connectTimeout(b.connectTimeout).build();
         if (local != null) {
             this.baseUri = URI.create(local.apiBase());
@@ -179,6 +210,8 @@ public final class SwanLabClient implements AutoCloseable {
     public void logHistogram(String name, double[] values, int bins, long step)
             throws IOException, InterruptedException {
         requireRun();
+        if (values == null) throw new IllegalArgumentException("values must not be null");
+        if (bins <= 0) bins = Math.min(30, Math.max(1, values.length));
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("experiment_id", runId);
         payload.put("name", name);
@@ -187,6 +220,148 @@ public final class SwanLabClient implements AutoCloseable {
         payload.put("values", values);
         payload.put("bins", bins);
         post("/media/charts", payload);
+    }
+
+    /** Tensor-input convenience. */
+    public void logHistogram(String name, Tensor t, int bins, long step)
+            throws IOException, InterruptedException {
+        logHistogram(name, toFloatArrayDouble(t), bins, step);
+    }
+
+    public void logHistogram(String name, Tensor t, long step)
+            throws IOException, InterruptedException {
+        logHistogram(name, t, 64, step);
+    }
+
+    /** 3D surface chart (height-field Z[x,y]). */
+    public void logSurface(String name, double[][] Z, long step)
+            throws IOException, InterruptedException {
+        logSurface(name, Z, step, null);
+    }
+
+    public void logSurface(String name, double[][] Z, long step, Map<String, Object> opts)
+            throws IOException, InterruptedException {
+        requireRun();
+        if (Z == null || Z.length == 0) throw new IllegalArgumentException("Z must be non-empty");
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("experiment_id", runId);
+        payload.put("name", name);
+        payload.put("type", "surface");
+        payload.put("step", step);
+        payload.put("matrix", Z);
+        if (opts != null) payload.put("opts", opts);
+        post("/media/charts", payload);
+    }
+
+    /** Polar scatter — points expressed as (angle, radius) pairs. */
+    public void logPolar(String name, double[][] points, long step)
+            throws IOException, InterruptedException {
+        logPolar(name, points, step, null);
+    }
+
+    public void logPolar(String name, double[][] points, long step, Map<String, Object> opts)
+            throws IOException, InterruptedException {
+        requireRun();
+        if (points == null || points.length == 0) throw new IllegalArgumentException("points empty");
+        if (points[0].length != 2) throw new IllegalArgumentException("polar points must be Nx2");
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("experiment_id", runId);
+        payload.put("name", name);
+        payload.put("type", "polar");
+        payload.put("step", step);
+        payload.put("points", points);
+        if (opts != null) payload.put("opts", opts);
+        post("/media/charts", payload);
+    }
+
+    /** Box plot — each column of {@code data} is one box. */
+    public void logBox(String name, double[][] data, long step)
+            throws IOException, InterruptedException {
+        logBox(name, data, step, null);
+    }
+
+    public void logBox(String name, double[][] data, long step, Map<String, Object> opts)
+            throws IOException, InterruptedException {
+        requireRun();
+        if (data == null || data.length == 0) throw new IllegalArgumentException("data empty");
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("experiment_id", runId);
+        payload.put("name", name);
+        payload.put("type", "box");
+        payload.put("step", step);
+        payload.put("values", data);
+        if (opts != null) payload.put("opts", opts);
+        post("/media/charts", payload);
+    }
+
+    /** Image grid from NCHW batch (similar to wandb's grid). */
+    public void logImages(String name, Tensor batchNchw, long step)
+            throws IOException, InterruptedException {
+        requireRun();
+        if (batchNchw.dim() != 4) {
+            logImage(name, batchNchw, step);
+            return;
+        }
+        byte[] png = WandbClient.tensorBatchToGridPng(batchNchw, imageGridMaxCols);
+        if (png == null) {
+            logImage(name, batchNchw.select(0, 0), step);
+            return;
+        }
+        logImage(name, png, step, Map.of("kind", "image_grid", "n", batchNchw.size(0)));
+    }
+
+    /** Upload an artifact (model / dataset / file). */
+    public void logArtifact(String name, Path file, String type)
+            throws IOException, InterruptedException {
+        requireRun();
+        Objects.requireNonNull(file, "file");
+        if (!Files.exists(file)) throw new IOException("artifact file does not exist: " + file);
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("experiment_id", runId);
+        payload.put("name", name);
+        payload.put("type", type == null ? "model" : type);
+        payload.put("path", file.toString());
+        payload.put("bytes", Files.size(file));
+        post("/artifacts", payload);
+        if (runDir != null) {
+            Path dst = runDir.resolve(runId).resolve("artifacts");
+            Files.createDirectories(dst);
+            Files.copy(file, dst.resolve(file.getFileName()), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+        }
+    }
+
+    /**
+     * Watch a model — capture histograms of all named parameters.
+     * Returns the number of parameters captured.
+     */
+    public int watchModel(String prefix, Module model, long step)
+            throws IOException, InterruptedException {
+        requireRun();
+        Objects.requireNonNull(model, "model");
+        int captured = 0;
+        try {
+            for (int i = 0; i < model.named_parameters().size(); i++) {
+                StringTensorDictItem item = model.named_parameters().get(i);
+                Tensor p = item.value();
+                if (p == null || !p.defined() || p.numel() == 0) continue;
+                String fullTag = (prefix == null || prefix.isEmpty() ? "" : prefix + "/") + item.key().toString();
+                logHistogram(fullTag, p, 64, step);
+                captured++;
+            }
+        } catch (Exception e) {
+            if (raiseExceptions) throw new IOException("swanlab.watchModel failed: " + e.getMessage(), e);
+        }
+        return captured;
+    }
+
+    private static double[] toFloatArrayDouble(Tensor t) {
+        if (t == null || !t.defined()) return new double[0];
+        Tensor c = t.contiguous().cpu().to(org.bytedeco.pytorch.global.torch.kFloat()).flatten();
+        long n = c.numel();
+        double[] out = new double[(int) Math.min(n, Integer.MAX_VALUE)];
+        org.bytedeco.javacpp.FloatPointer p = c.data_ptr_float();
+        for (int i = 0; i < out.length; i++) out[i] = p.get(i);
+        return out;
     }
 
     public void logScatter(String name, double[][] points, long step)
@@ -316,6 +491,7 @@ public final class SwanLabClient implements AutoCloseable {
 
     private void requireRun() {
         if (runId == null) throw new IllegalStateException("call init() first");
+        if (closedFlag.get()) throw new IllegalStateException("client is closed");
     }
 
     @SuppressWarnings("unchecked")
@@ -329,22 +505,74 @@ public final class SwanLabClient implements AutoCloseable {
                 .header("Authorization", "Bearer " + apiKey)
                 .POST(HttpRequest.BodyPublishers.ofString(json, StandardCharsets.UTF_8))
                 .build();
-        HttpResponse<String> resp = http.send(req, HttpResponse.BodyHandlers.ofString());
-        if (resp.statusCode() >= 400) {
-            throw new IOException("SwanLab " + path + " failed HTTP " + resp.statusCode()
-                    + ": " + resp.body());
+        IOException lastIo = null;
+        InterruptedException lastInterrupt = null;
+        int attempts = Math.max(1, maxRetries + 1);
+        for (int i = 0; i < attempts; i++) {
+            try {
+                HttpResponse<String> resp = http.send(req, HttpResponse.BodyHandlers.ofString());
+                if (resp.statusCode() >= 400) {
+                    String body = resp.body();
+                    if (resp.statusCode() < 500 || i == attempts - 1) {
+                        throw new IOException("SwanLab " + path + " failed HTTP " + resp.statusCode()
+                                + ": " + body);
+                    }
+                    if (retryBackoffMs > 0) Thread.sleep(retryBackoffMs * (1L << i));
+                    continue;
+                }
+                if (resp.body() == null || resp.body().isBlank()) return new LinkedHashMap<>();
+                Object decoded = Json.decode(resp.body());
+                if (decoded instanceof Map) return (Map<String, Object>) decoded;
+                Map<String, Object> wrap = new LinkedHashMap<>();
+                wrap.put("value", decoded);
+                return wrap;
+            } catch (IOException e) {
+                lastIo = e;
+                if (i == attempts - 1) break;
+                if (retryBackoffMs > 0) Thread.sleep(retryBackoffMs * (1L << i));
+            } catch (InterruptedException e) {
+                lastInterrupt = e;
+                if (i == attempts - 1) break;
+                if (retryBackoffMs > 0) Thread.sleep(retryBackoffMs * (1L << i));
+            }
         }
-        if (resp.body() == null || resp.body().isBlank()) return new LinkedHashMap<>();
-        Object decoded = Json.decode(resp.body());
-        if (decoded instanceof Map) return (Map<String, Object>) decoded;
-        Map<String, Object> wrap = new LinkedHashMap<>();
-        wrap.put("value", decoded);
-        return wrap;
+        if (lastInterrupt != null) throw lastInterrupt;
+        throw lastIo != null ? lastIo : new IOException("SwanLab " + path + " failed (unknown)");
+    }
+
+    public CompletableFuture<Void> postAsync(String path, Map<String, Object> payload) {
+        requireRun();
+        return CompletableFuture.runAsync(() -> {
+            try {
+                post(path, payload);
+            } catch (Exception e) {
+                if (raiseExceptions) throw new RuntimeException(e);
+            }
+        }, asyncExecutor);
+    }
+
+    public CompletableFuture<Void> logAsync(Map<String, ? extends Number> metrics, long step) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("experiment_id", runId);
+        payload.put("step", step);
+        payload.put("metrics", metrics);
+        payload.put("timestamp", Instant.now().toString());
+        return postAsync("/logs", payload);
     }
 
     @Override
     public void close() {
+        if (!closedFlag.compareAndSet(false, true)) return;
         try { finish(); } catch (Exception ignored) { /* best-effort */ }
+        if (ownAsyncExecutor) {
+            asyncExecutor.shutdown();
+            try {
+                if (!asyncExecutor.awaitTermination(2, TimeUnit.SECONDS)) asyncExecutor.shutdownNow();
+            } catch (InterruptedException ie) {
+                asyncExecutor.shutdownNow();
+                Thread.currentThread().interrupt();
+            }
+        }
     }
 
     // =========================================================================
@@ -433,6 +661,12 @@ public final class SwanLabClient implements AutoCloseable {
         private String experiment = "exp";
         private SwanLabLocalServer localServer;
         private Path runDir;
+        // Enterprise enhancements
+        private int maxRetries = 3;
+        private long retryBackoffMs = 200L;
+        private int imageGridMaxCols = 8;
+        private boolean raiseExceptions = false;
+        private ExecutorService asyncExecutor;
 
         public Builder host(String host) { this.host = host; return this; }
         public Builder port(int port) { this.port = port; return this; }
@@ -457,6 +691,16 @@ public final class SwanLabClient implements AutoCloseable {
             if (p != null && !p.isBlank()) this.project = p;
             return this;
         }
+        /** Max number of retries on transient (5xx, IOException) HTTP failures. Default 3. */
+        public Builder maxRetries(int n) { this.maxRetries = Math.max(0, n); return this; }
+        /** Base backoff between retries (exponential). Default 200ms. */
+        public Builder retryBackoffMs(long ms) { this.retryBackoffMs = Math.max(0L, ms); return this; }
+        /** Maximum columns when auto-building NCHW image grids. Default 8. */
+        public Builder imageGridMaxCols(int n) { this.imageGridMaxCols = Math.max(1, n); return this; }
+        /** When true, async failures are surfaced as RuntimeExceptions instead of swallowed. */
+        public Builder raiseExceptions(boolean v) { this.raiseExceptions = v; return this; }
+        /** Inject a custom executor for {@link #logAsync}/{@link #postAsync}. */
+        public Builder asyncExecutor(ExecutorService ex) { this.asyncExecutor = ex; return this; }
 
         public SwanLabClient build() { return new SwanLabClient(this); }
     }

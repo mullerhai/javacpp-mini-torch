@@ -1,9 +1,10 @@
 package org.bytedeco.pytorch.plot.visdom;
 
+import org.bytedeco.pytorch.StringTensorDictItem;
 import org.bytedeco.pytorch.Tensor;
 import org.bytedeco.pytorch.utils.json.Json;
 import org.bytedeco.pytorch.plot.tensorboard.PngEncoder;
-
+import org.bytedeco.pytorch.nn.Module;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.net.URI;
@@ -53,6 +54,9 @@ public final class VisdomClient implements AutoCloseable {
     private final ExecutorService executor;
     private final boolean raiseExceptions;
     private final boolean ownExecutor;
+    // Enterprise enhancements
+    private final int maxRetries;
+    private final long retryBackoffMs;
 
     private VisdomClient(Builder b) {
         this.ownExecutor = b.executor == null;
@@ -61,6 +65,8 @@ public final class VisdomClient implements AutoCloseable {
                 .connectTimeout(b.connectTimeout)
                 .executor(this.executor)
                 .build();
+        this.maxRetries = Math.max(0, b.maxRetries);
+        this.retryBackoffMs = Math.max(0L, b.retryBackoffMs);
         String scheme = b.useHttps ? "https" : "http";
         String path = b.basePath == null || b.basePath.isEmpty() ? "" :
                 (b.basePath.startsWith("/") ? b.basePath : "/" + b.basePath);
@@ -646,6 +652,63 @@ public final class VisdomClient implements AutoCloseable {
         return send(msg, "events");
     }
 
+    /**
+     * Polar scatter — points expressed as (angle, radius) pairs.
+     */
+    public VisdomResponse polar(double[][] points, String win, Map<String, Object> opts)
+            throws IOException, InterruptedException {
+        if (points == null || points.length == 0) throw new IllegalArgumentException("points empty");
+        if (points[0].length != 2) throw new IllegalArgumentException("polar points must be Nx2");
+        Map<String, Object> o = opts == null ? new LinkedHashMap<>() : new LinkedHashMap<>(opts);
+        double[] theta = new double[points.length];
+        double[] r = new double[points.length];
+        for (int i = 0; i < points.length; i++) {
+            theta[i] = points[i][0];
+            r[i] = points[i][1];
+        }
+        Map<String, Object> trace = new LinkedHashMap<>();
+        trace.put("theta", theta);
+        trace.put("r", r);
+        trace.put("type", "scatterpolar");
+        trace.put("mode", o.getOrDefault("mode", "markers"));
+        Map<String, Object> msg = base(win);
+        msg.put("data", List.of(trace));
+        msg.put("layout", opts2layout(o, false));
+        msg.put("opts", cleanOpts(o));
+        return send(msg, "events");
+    }
+
+    /** Log a sequence of frames (TCHW float tensor) as a series of windows with FPS metadata. */
+    public VisdomResponse video(Tensor tchw, String win, Map<String, Object> opts)
+            throws IOException, InterruptedException {
+        Objects.requireNonNull(tchw, "video tensor");
+        Tensor v = tchw.contiguous().cpu();
+        if (v.dim() == 5 && v.size(0) == 1) v = v.squeeze(0);
+        if (v.dim() != 4) throw new IllegalArgumentException("video tensor must be TCHW or 1xTCHW");
+        Map<String, Object> o = opts == null ? new LinkedHashMap<>() : new LinkedHashMap<>(opts);
+        o.putIfAbsent("fps", 4);
+        int T = (int) v.size(0);
+        VisdomResponse last = null;
+        for (int t = 0; t < T; t++) {
+            last = image(v.select(0, t), win + "/f" + t, o);
+        }
+        return last == null ? new VisdomResponse(204, "", "video") : last;
+    }
+
+    /** Image grid from NCHW batch. */
+    public VisdomResponse images(Tensor batchNchw, int nrow, String win, Map<String, Object> opts)
+            throws IOException, InterruptedException {
+        Objects.requireNonNull(batchNchw, "batch");
+        if (batchNchw.dim() != 4) throw new IllegalArgumentException("batch must be NCHW");
+        int n = (int) batchNchw.size(0);
+        int c = (int) batchNchw.size(1);
+        int h = (int) batchNchw.size(2);
+        int w = (int) batchNchw.size(3);
+        if (nrow <= 0) nrow = Math.min(8, n);
+        float[] flat = tensorToFloat(batchNchw);
+        return images(flat, n, c, h, w, nrow, win, opts);
+    }
+
     // =========================================================================
     // Stem / quiver / mesh
     // =========================================================================
@@ -914,6 +977,34 @@ public final class VisdomClient implements AutoCloseable {
         return audio(tensorToFloat(waveform), sampleRate, win, opts);
     }
 
+    /**
+     * Visdom equivalent of {@code wandb.watch} — log histograms of every
+     * named parameter into the {@code <prefix>/<paramName>} slot. Returns the
+     * number of parameters captured.
+     */
+    public int watchModel(Module model, String prefix)
+            throws IOException, InterruptedException {
+        Objects.requireNonNull(model, "model");
+        int captured = 0;
+        try {
+            for (int i = 0; i < model.named_parameters().size(); i++) {
+                StringTensorDictItem item = model.named_parameters().get(i);
+                Tensor p = item.value();
+                if (p == null || !p.defined() || p.numel() == 0) continue;
+                float[] flat = tensorToFloat(p);
+                double[] d = new double[flat.length];
+                for (int ik = 0; ik < flat.length; ik++) d[ik] = flat[ik];
+                String tag = (prefix == null || prefix.isEmpty() ? "" : prefix + "/") + item.key().toString();
+                histogram(d, 30, tag,
+                        opts("title", tag, "numbins", 30));
+                captured++;
+            }
+        } catch (Exception e) {
+            if (raiseExceptions) throw new IOException("visdom.watchModel failed: " + e.getMessage(), e);
+        }
+        return captured;
+    }
+
     // =========================================================================
     // Dual-axis lines helper
     // =========================================================================
@@ -971,18 +1062,39 @@ public final class VisdomClient implements AutoCloseable {
     private VisdomResponse send(Map<String, Object> payload, String endpoint)
             throws IOException, InterruptedException {
         HttpRequest req = buildRequest(payload, endpoint);
-        try {
-            HttpResponse<String> resp = httpClient.send(req, HttpResponse.BodyHandlers.ofString());
-            VisdomResponse vr = new VisdomResponse(resp.statusCode(), resp.body(), endpoint);
-            if (raiseExceptions && !vr.ok()) {
-                throw new IOException("Visdom " + endpoint + " failed: HTTP " + vr.statusCode()
-                        + " body=" + vr.body());
+        IOException lastIo = null;
+        InterruptedException lastInterrupt = null;
+        int attempts = Math.max(1, maxRetries + 1);
+        for (int i = 0; i < attempts; i++) {
+            try {
+                HttpResponse<String> resp = httpClient.send(req, HttpResponse.BodyHandlers.ofString());
+                VisdomResponse vr = new VisdomResponse(resp.statusCode(), resp.body(), endpoint);
+                if (raiseExceptions && !vr.ok()) {
+                    // retry on 5xx; fail on 4xx
+                    if (resp.statusCode() < 500 || i == attempts - 1) {
+                        throw new IOException("Visdom " + endpoint + " failed: HTTP " + vr.statusCode()
+                                + " body=" + vr.body());
+                    }
+                    if (retryBackoffMs > 0) Thread.sleep(retryBackoffMs * (1L << i));
+                    continue;
+                }
+                return vr;
+            } catch (IOException e) {
+                lastIo = e;
+                if (i == attempts - 1) break;
+                if (retryBackoffMs > 0) Thread.sleep(retryBackoffMs * (1L << i));
+            } catch (InterruptedException e) {
+                lastInterrupt = e;
+                if (i == attempts - 1) break;
+                if (retryBackoffMs > 0) Thread.sleep(retryBackoffMs * (1L << i));
             }
-            return vr;
-        } catch (IOException e) {
-            if (raiseExceptions) throw e;
-            return new VisdomResponse(0, "ERROR: " + e.getMessage(), endpoint);
         }
+        if (!raiseExceptions) {
+            return new VisdomResponse(0, "ERROR: " + (lastIo != null ? lastIo.getMessage()
+                    : lastInterrupt != null ? lastInterrupt.getMessage() : "unknown"), endpoint);
+        }
+        if (lastInterrupt != null) throw lastInterrupt;
+        throw lastIo != null ? lastIo : new IOException("Visdom " + endpoint + " failed (unknown)");
     }
 
     private HttpRequest buildRequest(Map<String, Object> payload, String endpoint) throws IOException {
@@ -1197,6 +1309,9 @@ public final class VisdomClient implements AutoCloseable {
         private int executorThreads = 4;
         private ExecutorService executor;
         private boolean raiseExceptions = true;
+        // Enterprise enhancements
+        private int maxRetries = 3;
+        private long retryBackoffMs = 200L;
 
         public Builder host(String host) { this.host = Objects.requireNonNull(host); return this; }
         public Builder port(int port) { this.port = port; return this; }
@@ -1208,6 +1323,10 @@ public final class VisdomClient implements AutoCloseable {
         public Builder executorThreads(int n) { this.executorThreads = n; return this; }
         public Builder executor(ExecutorService ex) { this.executor = ex; return this; }
         public Builder raiseExceptions(boolean v) { this.raiseExceptions = v; return this; }
+        /** Max retries on transient (5xx, IOException) failures. Default 3. */
+        public Builder maxRetries(int n) { this.maxRetries = Math.max(0, n); return this; }
+        /** Base backoff (exponential) between retries. Default 200ms. */
+        public Builder retryBackoffMs(long ms) { this.retryBackoffMs = Math.max(0L, ms); return this; }
 
         public VisdomClient build() { return new VisdomClient(this); }
     }

@@ -61,6 +61,12 @@ public final class TqdmBar<T> implements Iterable<T>, Iterator<T>, AutoCloseable
     private int ncols = 80;
     private int position = 0;
     private ProgressBarColor colour = ProgressBarColor.NONE;
+    private double smoothing = 0.3; // EMA smoothing factor (0=no smoothing, 1=full)
+    private boolean dynamicNcols = false;
+    private boolean notebook = false;
+    private boolean writeThrough = false; // already-newline (notebook-style)
+    private double smoothedRate = 0.0;
+    private final Object renderLock = new Object();
 
     TqdmBar(Iterator<T> source, int total, String unit) {
         this.source = Objects.requireNonNull(source, "source");
@@ -74,6 +80,27 @@ public final class TqdmBar<T> implements Iterable<T>, Iterator<T>, AutoCloseable
         this.n = 0L;
         this.closed = false;
         this.started = false;
+    }
+
+    /** Pre-built bar with full config — internal use only. */
+    TqdmBar(Iterator<T> source, int total, String unit, String desc, String unit2,
+            String postfix, boolean leave, boolean disable, boolean ascii,
+            int barWidth, int ncols, int position, ProgressBarColor colour,
+            PrintStream out, double minInterval, double smoothing) {
+        this(source, total, unit);
+        if (desc != null) this.desc = desc;
+        if (unit2 != null) this.unit = unit2;
+        if (postfix != null) this.postfix = postfix;
+        this.leave = leave;
+        this.disable = disable;
+        this.ascii = ascii;
+        if (barWidth > 0) this.barWidth = barWidth;
+        if (ncols > 0) this.ncols = ncols;
+        if (position >= 0) this.position = position;
+        if (colour != null) this.colour = colour;
+        if (out != null) this.out = out;
+        this.minIntervalSec = Math.max(0.0, minInterval);
+        this.smoothing = Math.max(0.0, Math.min(1.0, smoothing));
     }
 
     // ---- fluent configuration ----
@@ -90,6 +117,25 @@ public final class TqdmBar<T> implements Iterable<T>, Iterator<T>, AutoCloseable
 
     public TqdmBar<T> setUnit(String unit) {
         this.unit = unit != null ? unit : "it";
+        return this;
+    }
+
+    /** Python {@code smoothing} parameter — EMA factor for displayed rate. */
+    public TqdmBar<T> setSmoothing(double s) {
+        this.smoothing = Math.max(0.0, Math.min(1.0, s));
+        return this;
+    }
+
+    /** Python {@code dynamic_ncols} — auto-resize to terminal width on each render. */
+    public TqdmBar<T> setDynamicNcols(boolean enable) {
+        this.dynamicNcols = enable;
+        return this;
+    }
+
+    /** Python {@code notebook} — emit full-line updates instead of CR-replaced lines. */
+    public TqdmBar<T> setNotebook(boolean enable) {
+        this.notebook = enable;
+        if (enable) this.writeThrough = true;
         return this;
     }
 
@@ -360,9 +406,17 @@ public final class TqdmBar<T> implements Iterable<T>, Iterator<T>, AutoCloseable
 
     private void printLine(boolean finalLine) {
         double elapsed = elapsedSeconds();
-        double rate = elapsed > 0.0 ? n / elapsed : 0.0;
-        StringBuilder sb = new StringBuilder(ncols + 16);
-        sb.append('\r');
+        double instantRate = elapsed > 0.0 ? n / elapsed : 0.0;
+        if (smoothing > 0.0 && n > 0) {
+            if (smoothedRate == 0.0) smoothedRate = instantRate;
+            else smoothedRate = smoothing * smoothedRate + (1.0 - smoothing) * instantRate;
+        } else {
+            smoothedRate = instantRate;
+        }
+        double displayRate = smoothedRate;
+        int renderNcols = dynamicNcols ? Math.max(40, currentTerminalWidth()) : ncols;
+        StringBuilder sb = new StringBuilder(renderNcols + 16);
+        if (!notebook) sb.append('\r');
         if (position > 0) {
             // move down/up is terminal-specific; keep simple prefix
             sb.append('[').append(position).append("] ");
@@ -393,22 +447,67 @@ public final class TqdmBar<T> implements Iterable<T>, Iterator<T>, AutoCloseable
         sb.append(" [");
         sb.append(formatTime(elapsed));
         if (total > 0 && n > 0 && n < total) {
-            double remain = (total - n) / Math.max(rate, 1e-12);
+            double remain = (total - n) / Math.max(displayRate, 1e-12);
             sb.append('<').append(formatTime(remain));
         }
         sb.append(", ");
-        sb.append(String.format(Locale.ROOT, "%.2f", rate)).append(unit).append("/s");
+        sb.append(String.format(Locale.ROOT, "%.2f", displayRate)).append(unit).append("/s");
         sb.append(']');
         if (!postfix.isEmpty()) {
             sb.append(", ").append(postfix);
         }
-        while (sb.length() < ncols) {
+        while (sb.length() < renderNcols) {
             sb.append(' ');
         }
-        out.print(sb);
-        if (finalLine) {
-            out.flush();
+        if (notebook) {
+            sb.append('\n');
         }
+        synchronized (renderLock) {
+            out.print(sb);
+            if (finalLine || notebook) {
+                out.flush();
+            }
+        }
+    }
+
+    private static int currentTerminalWidth() {
+        try {
+            String os = System.getProperty("os.name", "").toLowerCase();
+            ProcessBuilder pb;
+            if (os.contains("win")) {
+                pb = new ProcessBuilder("cmd", "/c", "mode con");
+            } else {
+                pb = new ProcessBuilder("/bin/sh", "-c", "stty -a 2>/dev/null | head -n1 || tput cols 2>/dev/null");
+            }
+            pb.redirectErrorStream(true);
+            Process p = pb.start();
+            byte[] out;
+            try (java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream()) {
+                java.io.InputStream is = p.getInputStream();
+                byte[] buf = new byte[4096];
+                int n;
+                while ((n = is.read(buf)) >= 0) baos.write(buf, 0, n);
+                out = baos.toByteArray();
+            }
+            p.waitFor();
+            String s = new String(out, java.nio.charset.StandardCharsets.UTF_8);
+            java.util.regex.Matcher m = java.util.regex.Pattern.compile("(?i)(?:columns|cols)\\s*=?\\s*(\\d{1,4})").matcher(s);
+            if (m.find()) {
+                int w = Integer.parseInt(m.group(1));
+                if (w >= 20 && w <= 1000) return w;
+            }
+        } catch (Throwable ignored) {
+        }
+        // Fall back to COLUMNS env var (common on Unix shells).
+        String env = System.getenv("COLUMNS");
+        if (env != null && !env.isEmpty()) {
+            try {
+                int w = Integer.parseInt(env.trim());
+                if (w >= 20 && w <= 1000) return w;
+            } catch (NumberFormatException ignored) {
+            }
+        }
+        return 80;
     }
 
     private static String formatTime(double seconds) {

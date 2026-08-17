@@ -1,8 +1,10 @@
 package org.bytedeco.pytorch.plot.wandb;
 
+import org.bytedeco.pytorch.StringTensorDictItem;
 import org.bytedeco.pytorch.Tensor;
 import org.bytedeco.pytorch.utils.json.Json;
 import org.bytedeco.pytorch.plot.tensorboard.PngEncoder;
+import org.bytedeco.pytorch.nn.Module;
 
 import java.io.IOException;
 import java.net.URI;
@@ -20,6 +22,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -64,6 +71,14 @@ public final class WandbClient implements AutoCloseable {
     private String runName;
     private final AtomicLong stepCounter = new AtomicLong(0);
     private boolean finished;
+    // Enterprise enhancements
+    private final int maxRetries;
+    private final long retryBackoffMs;
+    private final int imageGridMaxCols;
+    private final boolean raiseExceptions;
+    private final ExecutorService asyncExecutor;
+    private final boolean ownAsyncExecutor;
+    private final AtomicBoolean closedFlag = new AtomicBoolean(false);
 
     private WandbClient(Builder b) {
         this.local = b.localServer;
@@ -71,6 +86,21 @@ public final class WandbClient implements AutoCloseable {
         this.entity = Objects.requireNonNull(b.entity, "entity");
         this.project = Objects.requireNonNull(b.project, "project");
         this.runDir = b.runDir;
+        this.maxRetries = b.maxRetries;
+        this.retryBackoffMs = b.retryBackoffMs;
+        this.imageGridMaxCols = b.imageGridMaxCols;
+        this.raiseExceptions = b.raiseExceptions;
+        if (b.asyncExecutor != null) {
+            this.asyncExecutor = b.asyncExecutor;
+            this.ownAsyncExecutor = false;
+        } else {
+            this.asyncExecutor = Executors.newCachedThreadPool(r -> {
+                Thread t = new Thread(r, "wandb-async");
+                t.setDaemon(true);
+                return t;
+            });
+            this.ownAsyncExecutor = true;
+        }
         this.http = HttpClient.newBuilder().connectTimeout(b.connectTimeout).build();
         if (local != null) {
             this.baseUri = URI.create(local.apiBase());
@@ -205,6 +235,8 @@ public final class WandbClient implements AutoCloseable {
     public void logHistogram(String name, double[] values, int bins, long step)
             throws IOException, InterruptedException {
         requireRun();
+        if (values == null) throw new IllegalArgumentException("values must not be null");
+        if (bins <= 0) bins = Math.min(30, Math.max(1, values.length));
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("run_id", runId);
         payload.put("name", name);
@@ -213,6 +245,18 @@ public final class WandbClient implements AutoCloseable {
         payload.put("values", values);
         payload.put("bins", bins);
         post("/charts", payload);
+    }
+
+    /** Tensor-input convenience. */
+    public void logHistogram(String name, Tensor t, int bins, long step)
+            throws IOException, InterruptedException {
+        logHistogram(name, tensorToFloatArray(t), bins, step);
+    }
+
+    /** Tensor-input convenience, default bin count. */
+    public void logHistogram(String name, Tensor t, long step)
+            throws IOException, InterruptedException {
+        logHistogram(name, t, 64, step);
     }
 
     public void logScatter(String name, double[][] points, long step)
@@ -225,6 +269,157 @@ public final class WandbClient implements AutoCloseable {
         payload.put("step", step);
         payload.put("points", points);
         post("/charts", payload);
+    }
+
+    /** 3D surface chart (height-field Z[x,y]) — Plotly type=surface. */
+    public void logSurface(String name, double[][] Z, long step)
+            throws IOException, InterruptedException {
+        logSurface(name, Z, step, null);
+    }
+
+    public void logSurface(String name, double[][] Z, long step, Map<String, Object> opts)
+            throws IOException, InterruptedException {
+        requireRun();
+        if (Z == null || Z.length == 0) throw new IllegalArgumentException("Z must be non-empty");
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("run_id", runId);
+        payload.put("name", name);
+        payload.put("type", "surface");
+        payload.put("step", step);
+        payload.put("matrix", Z);
+        if (opts != null) payload.put("opts", opts);
+        post("/charts", payload);
+    }
+
+    /** Polar scatter — points expressed as (angle, radius) pairs. */
+    public void logPolar(String name, double[][] points, long step)
+            throws IOException, InterruptedException {
+        logPolar(name, points, step, null);
+    }
+
+    public void logPolar(String name, double[][] points, long step, Map<String, Object> opts)
+            throws IOException, InterruptedException {
+        requireRun();
+        if (points == null || points.length == 0) throw new IllegalArgumentException("points empty");
+        if (points[0].length != 2) throw new IllegalArgumentException("polar points must be Nx2");
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("run_id", runId);
+        payload.put("name", name);
+        payload.put("type", "polar");
+        payload.put("step", step);
+        payload.put("points", points);
+        if (opts != null) payload.put("opts", opts);
+        post("/charts", payload);
+    }
+
+    /** Box plot — each column of {@code data} is one box. */
+    public void logBox(String name, double[][] data, long step)
+            throws IOException, InterruptedException {
+        logBox(name, data, step, null);
+    }
+
+    public void logBox(String name, double[][] data, long step, Map<String, Object> opts)
+            throws IOException, InterruptedException {
+        requireRun();
+        if (data == null || data.length == 0) throw new IllegalArgumentException("data empty");
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("run_id", runId);
+        payload.put("name", name);
+        payload.put("type", "box");
+        payload.put("step", step);
+        payload.put("values", data);
+        if (opts != null) payload.put("opts", opts);
+        post("/charts", payload);
+    }
+
+    /** Pie chart — values + labels. */
+    public void logPie(String name, double[] values, String[] labels, long step)
+            throws IOException, InterruptedException {
+        requireRun();
+        if (values == null) throw new IllegalArgumentException("values must not be null");
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("run_id", runId);
+        payload.put("name", name);
+        payload.put("type", "pie");
+        payload.put("step", step);
+        payload.put("values", values);
+        if (labels != null) payload.put("labels", labels);
+        post("/charts", payload);
+    }
+
+    /**
+     * Upload an artifact (model / dataset / file) to the run. Recorded as both
+     * a summary entry (path/bytes/type) and stored under {@link #runDir} when
+     * an offline server is configured.
+     */
+    public void logArtifact(String name, Path file, String type)
+            throws IOException, InterruptedException {
+        requireRun();
+        Objects.requireNonNull(file, "file");
+        if (!Files.exists(file)) throw new IOException("artifact file does not exist: " + file);
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("run_id", runId);
+        payload.put("name", name);
+        payload.put("type", type == null ? "model" : type);
+        payload.put("path", file.toString());
+        payload.put("bytes", Files.size(file));
+        post("/artifacts", payload);
+        // Always record into run dir under offline mode.
+        if (runDir != null) {
+            Path dst = runDir.resolve(runId).resolve("artifacts");
+            Files.createDirectories(dst);
+            Files.copy(file, dst.resolve(file.getFileName()), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+        }
+    }
+
+    /**
+     * Watch a model by periodically recording its parameter histogram. The
+     * caller is responsible for invoking this once per training step. Returns
+     * the number of parameters captured.
+     */
+    public int watchModel(String prefix, Module model, long step)
+            throws IOException, InterruptedException {
+        requireRun();
+        Objects.requireNonNull(model, "model");
+        int captured = 0;
+        try {
+            for (int i = 0; i < model.named_parameters().size(); i++) {
+                StringTensorDictItem item = model.named_parameters().get(i);
+                Tensor p = item.value();
+//                Tensor p = model.named_parameters().get(name);
+                if (p == null || !p.defined() || p.numel() == 0) continue;
+                String fullTag = (prefix == null || prefix.isEmpty() ? "" : prefix + "/") + item.key().toString();
+                logHistogram(fullTag, tensorToFloatArray(p), 64, step);
+                captured++;
+            }
+        } catch (Exception e) {
+            // best-effort; do not interrupt training
+            if (raiseExceptions) throw new IOException("wandb.watchModel failed: " + e.getMessage(), e);
+        }
+        return captured;
+    }
+
+    /**
+     * Send an alert (no-op for the embedded LocalServer which just records it).
+     */
+    public void alert(String title, String text, String level) throws IOException, InterruptedException {
+        requireRun();
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("run_id", runId);
+        payload.put("title", title);
+        payload.put("text", text);
+        payload.put("level", level == null ? "INFO" : level);
+        post("/alerts", payload);
+    }
+
+    private static double[] tensorToFloatArray(Tensor t) {
+        if (t == null || !t.defined()) return new double[0];
+        Tensor c = t.contiguous().cpu().to(org.bytedeco.pytorch.global.torch.kFloat()).flatten();
+        long n = c.numel();
+        double[] out = new double[(int) Math.min(n, Integer.MAX_VALUE)];
+        org.bytedeco.javacpp.FloatPointer p = c.data_ptr_float();
+        for (int i = 0; i < out.length; i++) out[i] = p.get(i);
+        return out;
     }
 
     // =========================================================================
@@ -272,12 +467,60 @@ public final class WandbClient implements AutoCloseable {
 
     public void logImages(String name, Tensor batchNchw, long step)
             throws IOException, InterruptedException {
-        // Take first image of batch for simplicity; full grid optional
-        if (batchNchw.dim() == 4) {
-            logImage(name, batchNchw.select(0, 0), step);
-        } else {
+        // Build a real image grid instead of dropping images.
+        if (batchNchw.dim() != 4) {
             logImage(name, batchNchw, step);
+            return;
         }
+        byte[] png = tensorBatchToGridPng(batchNchw, imageGridMaxCols);
+        logImage(name, png, step, Map.of("kind", "image_grid", "n", batchNchw.size(0)));
+    }
+
+    /** Full NCHW → N-panel image grid. Returns the PNG bytes (or null on bad input). */
+    public static byte[] tensorBatchToGridPng(Tensor batch, int maxCols) {
+        if (batch.dim() != 4 || !batch.defined()) return null;
+        int n = (int) batch.size(0);
+        int c = (int) batch.size(1);
+        int h = (int) batch.size(2);
+        int w = (int) batch.size(3);
+        if (n <= 0 || c <= 0 || h <= 0 || w <= 0) return null;
+        int cols = Math.max(1, Math.min(maxCols, n));
+        int rows = (n + cols - 1) / cols;
+        int padding = 2;
+        int outC = (c == 1) ? 3 : (c >= 3 ? 3 : c);
+        int gh = h + 2 * padding;
+        int gw = w + 2 * padding;
+        int outH = rows * gh;
+        int outW = cols * gw;
+        float[] grid = new float[outC * outH * outW];
+        // fill black background
+        // (default-zero is fine)
+        float[] chw = toFloatArray(batch.contiguous().cpu().to(org.bytedeco.pytorch.global.torch.kFloat()));
+        for (int i = 0; i < n; i++) {
+            int row = i / cols;
+            int col = i % cols;
+            int top = row * gh + padding;
+            int left = col * gw + padding;
+            for (int ci = 0; ci < outC; ci++) {
+                int srcC = (outC == 3 && c >= 3) ? ci : 0;
+                for (int y = 0; y < h; y++) {
+                    for (int x = 0; x < w; x++) {
+                        float v = chw[i * c * h * w + srcC * h * w + y * w + x];
+                        grid[ci * outH * outW + (top + y) * outW + (left + x)] = v;
+                    }
+                }
+            }
+        }
+        return PngEncoder.encodeFloatHWC(toHwc(grid, outC, outH, outW), outH, outW, outC);
+    }
+
+    private static float[] toHwc(float[] chw, int c, int h, int w) {
+        float[] hwc = new float[c * h * w];
+        for (int ci = 0; ci < c; ci++)
+            for (int y = 0; y < h; y++)
+                for (int x = 0; x < w; x++)
+                    hwc[(y * w + x) * c + ci] = chw[ci * h * w + y * w + x];
+        return hwc;
     }
 
     public void logText(String name, String text, long step)
@@ -327,6 +570,7 @@ public final class WandbClient implements AutoCloseable {
 
     private void requireRun() {
         if (runId == null) throw new IllegalStateException("call initRun() first");
+        if (closedFlag.get()) throw new IllegalStateException("client is closed");
     }
 
     @SuppressWarnings("unchecked")
@@ -341,22 +585,77 @@ public final class WandbClient implements AutoCloseable {
                 .header("Authorization", "Bearer " + apiKey)
                 .POST(HttpRequest.BodyPublishers.ofString(json, StandardCharsets.UTF_8))
                 .build();
-        HttpResponse<String> resp = http.send(req, HttpResponse.BodyHandlers.ofString());
-        if (resp.statusCode() >= 400) {
-            throw new IOException("WandB " + path + " failed HTTP " + resp.statusCode()
-                    + ": " + resp.body());
+        IOException lastIo = null;
+        InterruptedException lastInterrupt = null;
+        int attempts = Math.max(1, maxRetries + 1);
+        for (int i = 0; i < attempts; i++) {
+            try {
+                HttpResponse<String> resp = http.send(req, HttpResponse.BodyHandlers.ofString());
+                if (resp.statusCode() >= 400) {
+                    String body = resp.body();
+                    // Retry on 5xx (transient); fail on 4xx
+                    if (resp.statusCode() < 500 || i == attempts - 1) {
+                        throw new IOException("WandB " + path + " failed HTTP " + resp.statusCode()
+                                + ": " + body);
+                    }
+                    if (retryBackoffMs > 0) Thread.sleep(retryBackoffMs * (1L << i));
+                    continue;
+                }
+                if (resp.body() == null || resp.body().isBlank()) return new LinkedHashMap<>();
+                Object decoded = Json.decode(resp.body());
+                if (decoded instanceof Map) return (Map<String, Object>) decoded;
+                Map<String, Object> wrap = new LinkedHashMap<>();
+                wrap.put("value", decoded);
+                return wrap;
+            } catch (IOException e) {
+                lastIo = e;
+                if (i == attempts - 1) break;
+                if (retryBackoffMs > 0) Thread.sleep(retryBackoffMs * (1L << i));
+            } catch (InterruptedException e) {
+                lastInterrupt = e;
+                if (i == attempts - 1) break;
+                if (retryBackoffMs > 0) Thread.sleep(retryBackoffMs * (1L << i));
+            }
         }
-        if (resp.body() == null || resp.body().isBlank()) return new LinkedHashMap<>();
-        Object decoded = Json.decode(resp.body());
-        if (decoded instanceof Map) return (Map<String, Object>) decoded;
-        Map<String, Object> wrap = new LinkedHashMap<>();
-        wrap.put("value", decoded);
-        return wrap;
+        if (lastInterrupt != null) throw lastInterrupt;
+        throw lastIo != null ? lastIo : new IOException("WandB " + path + " failed (unknown)");
+    }
+
+    /** Async variant that returns immediately and posts in the background. */
+    public CompletableFuture<Void> postAsync(String path, Map<String, Object> payload) {
+        requireRun();
+        return CompletableFuture.runAsync(() -> {
+            try {
+                post(path, payload);
+            } catch (Exception e) {
+                if (raiseExceptions) throw new RuntimeException(e);
+            }
+        }, asyncExecutor);
+    }
+
+    /** Send a single log() call asynchronously (best-effort). */
+    public CompletableFuture<Void> logAsync(Map<String, ? extends Number> metrics, long step) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("run_id", runId);
+        payload.put("step", step);
+        payload.put("metrics", metrics);
+        payload.put("timestamp", Instant.now().toString());
+        return postAsync("/metrics", payload);
     }
 
     @Override
     public void close() {
+        if (!closedFlag.compareAndSet(false, true)) return;
         try { finish(); } catch (Exception ignored) { /* best-effort */ }
+        if (ownAsyncExecutor) {
+            asyncExecutor.shutdown();
+            try {
+                if (!asyncExecutor.awaitTermination(2, TimeUnit.SECONDS)) asyncExecutor.shutdownNow();
+            } catch (InterruptedException ie) {
+                asyncExecutor.shutdownNow();
+                Thread.currentThread().interrupt();
+            }
+        }
     }
 
     // =========================================================================
@@ -444,6 +743,12 @@ public final class WandbClient implements AutoCloseable {
         private String project = "pytorch";
         private WandbLocalServer localServer;
         private Path runDir;
+        // Enterprise enhancements
+        private int maxRetries = 3;
+        private long retryBackoffMs = 200L;
+        private int imageGridMaxCols = 8;
+        private boolean raiseExceptions = false;
+        private ExecutorService asyncExecutor;
 
         public Builder host(String host) { this.host = host; return this; }
         public Builder port(int port) { this.port = port; return this; }
@@ -465,6 +770,16 @@ public final class WandbClient implements AutoCloseable {
             if (p != null && !p.isBlank()) this.project = p;
             return this;
         }
+        /** Max number of retries on transient (5xx, IOException) HTTP failures. Default 3. */
+        public Builder maxRetries(int n) { this.maxRetries = Math.max(0, n); return this; }
+        /** Base backoff between retries (exponential). Default 200ms. */
+        public Builder retryBackoffMs(long ms) { this.retryBackoffMs = Math.max(0L, ms); return this; }
+        /** Maximum columns when auto-building NCHW image grids. Default 8. */
+        public Builder imageGridMaxCols(int n) { this.imageGridMaxCols = Math.max(1, n); return this; }
+        /** When true, async failures are surfaced as RuntimeExceptions instead of swallowed. */
+        public Builder raiseExceptions(boolean v) { this.raiseExceptions = v; return this; }
+        /** Inject a custom executor for {@link #logAsync}/{@link #postAsync}. */
+        public Builder asyncExecutor(ExecutorService ex) { this.asyncExecutor = ex; return this; }
 
         public WandbClient build() { return new WandbClient(this); }
     }

@@ -166,4 +166,60 @@ public final class Tqdm {
     static Object writeLock() {
         return WRITE_LOCK;
     }
+
+    /**
+     * Build a configured bar for an iterable — Python {@code tqdm} kw-arg style.
+     *
+     * <pre>{@code
+     * for (Sample s : Tqdm.options(iterable).desc("train").smoothing(0.3).notebook(true).bar()) {
+     *     ...
+     * }
+     * }</pre>
+     */
+    public static <T> Options<T> options(Iterable<T> iterable) {
+        return new Options<>(of(iterable));
+    }
+
+    /** Same as {@link #options(Iterable)} but with a manual bar (no iterator). */
+    public static Options<Void> optionsManual(int total) {
+        return new Options<>(manual(total));
+    }
+
+    /** Fluent configurator for {@link TqdmBar}. All setters mirror Python tqdm kwargs. */
+    public static final class Options<T> {
+        private final TqdmBar<T> bar;
+
+        Options(TqdmBar<T> bar) {
+            this.bar = bar;
+        }
+
+        public Options<T> desc(String d) { bar.setDescription(d); return this; }
+        public Options<T> unit(String u) { bar.setUnit(u); return this; }
+        public Options<T> postfix(String p) { bar.setPostfix(p); return this; }
+        public Options<T> postfix(java.util.Map<String, ?> m) { bar.setPostfix(m); return this; }
+        public Options<T> ascii(boolean a) { bar.setAscii(a); return this; }
+        public Options<T> leave(boolean l) { bar.setLeave(l); return this; }
+        public Options<T> disable(boolean d) { bar.setDisable(d); return this; }
+        public Options<T> minInterval(double sec) { bar.setMinInterval(sec); return this; }
+        public Options<T> barWidth(int w) { bar.setBarWidth(w); return this; }
+        public Options<T> ncols(int w) { bar.setNcols(w); return this; }
+        public Options<T> dynamicNcols(boolean v) { bar.setDynamicNcols(v); return this; }
+        public Options<T> smoothing(double s) { bar.setSmoothing(s); return this; }
+        public Options<T> notebook(boolean v) { bar.setNotebook(v); return this; }
+        public Options<T> colour(ProgressBarColor c) { bar.setColour(c); return this; }
+        public Options<T> colour(String name) { bar.setColour(name); return this; }
+
+        /** Build the configured bar. */
+        public TqdmBar<T> bar() {
+            return bar;
+        }
+
+        /** Convenience: iterate directly. */
+        public void forEach(java.util.function.Consumer<? super T> action) {
+            java.util.Objects.requireNonNull(action, "action");
+            try (TqdmBar<T> b = bar) {
+                while (b.hasNext()) action.accept(b.next());
+            }
+        }
+    }
 }
