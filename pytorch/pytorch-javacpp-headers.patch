@@ -28,6 +28,8 @@ diff --git a/torch/csrc/api/include/torch/nn/module.h b/torch/csrc/api/include/t
 +  Tensor forward(const Tensor& input1, const Tensor& input2, const Tensor& input3, const Tensor& input4, const Tensor& input5, const Tensor& input6, const Tensor& input7, const Tensor& input8) { return forward_tensor8(input1, input2, input3, input4, input5, input6, input7, input8); }
 +  Tensor forward(const Tensor& input, std::optional<at::IntArrayRef> output_size) { return forward_tensor_output_size(input, output_size); }
 +  Tensor forward(const Tensor& input, const Tensor& indices, std::optional<std::vector<int64_t>> output_size) { return forward_tensor_indices_output_size(input, indices, output_size); }
++  std::vector<Tensor> forward_varargs(const std::vector<Tensor>& inputs);
++  std::vector<Tensor> forward(const torch::OrderedDict<std::string, Tensor>& inputs);
 +  size_t javacpp_module_object_id() const noexcept { return reinterpret_cast<size_t>(this); }
 +
    void apply(const ModuleApplyFunction& function);
@@ -57,6 +59,8 @@ diff --git a/torch/csrc/api/include/torch/nn/module.h b/torch/csrc/api/include/t
 +  virtual std::tuple<Tensor, Tensor> forward_tuple_tensor_tensor3(const Tensor& input1, const Tensor& input2, const Tensor& input3) { TORCH_CHECK(false, "Module::forward_tuple_tensor_tensor3(input1, input2, input3) is not implemented for ", name()); }
 +  virtual std::tuple<Tensor, Tensor> forward_tuple_tensor_tensor_opt(const Tensor& input, std::optional<std::tuple<Tensor, Tensor>> hx_opt) { TORCH_CHECK(false, "Module::forward_tuple_tensor_tensor_opt(input, hx_opt) is not implemented for ", name()); }
 +  virtual std::tuple<Tensor, Tensor> forward_tuple_tensor_tensor_attn(const Tensor& query, const Tensor& key, const Tensor& value, const Tensor& key_padding_mask, bool need_weights, const Tensor& attn_mask, bool average_attn_weights) { TORCH_CHECK(false, "Module::forward_tuple_tensor_tensor_attn(query, key, value, ...) is not implemented for ", name()); }
++  virtual std::vector<Tensor> forward_varargs(const std::vector<Tensor>& inputs) { TORCH_CHECK(false, "Module::forward_varargs(inputs) is not implemented for ", name()); }
++  virtual std::vector<Tensor> forward(const torch::OrderedDict<std::string, Tensor>& inputs) { TORCH_CHECK(false, "Module::forward(inputs) with map is not implemented for ", name()); }
  
 +
    /// The implementation of the various `to()` methods.
