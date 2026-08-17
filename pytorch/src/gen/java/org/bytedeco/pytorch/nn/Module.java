@@ -162,6 +162,10 @@ public class Module extends Pointer {
   public native @ByVal @Name("forward_tuple_tensor_tensor3") @Virtual(subclasses=false, method="forwardT_TensorTensor_T") T_TensorTensor_T forwardT_TensorTensor_T(@Const @ByRef Tensor input1, @Const @ByRef Tensor input2, @Const @ByRef Tensor input3);
   public native @ByVal @Name("forward_tuple_tensor_tensor_opt") @Virtual(subclasses=false, method="forwardT_TensorTensor_T") T_TensorTensor_T forwardT_TensorTensor_T(@Const @ByRef Tensor input, @ByVal T_TensorTensor_TOptional hx_opt);
   public native @ByVal @Name("forward_tuple_tensor_tensor_attn") @Virtual(subclasses=false, method="forwardT_TensorTensor_T") T_TensorTensor_T forwardT_TensorTensor_T(@Const @ByRef Tensor query, @Const @ByRef Tensor key, @Const @ByRef Tensor value, @Const @ByRef Tensor key_padding_mask, @Cast("bool") boolean need_weights, @Const @ByRef Tensor attn_mask, @Cast("bool") boolean average_attn_weights);
+  private native @ByVal @Name("forward") @Virtual(subclasses=false, method="forward") TensorVector _forward_tensorvector(@Const @ByRef TensorVector inputs);
+  public @ByVal TensorVector forward(@Const @ByRef TensorVector inputs) { Module m = org.bytedeco.pytorch.nn.ModuleAsHelper.recover(this); return org.bytedeco.pytorch.nn.ModuleAsHelper.hasForwardOverride(m, TensorVector.class) ? m.forward(inputs) : _forward_tensorvector(inputs); }
+  private native @ByVal @Name("forward") @Virtual(subclasses=false, method="forward") TensorVector _forward_stringtensor(@Const @ByRef StringTensorDict inputs);
+  public @ByVal TensorVector forward(@Const @ByRef StringTensorDict inputs) { Module m = org.bytedeco.pytorch.nn.ModuleAsHelper.recover(this); return org.bytedeco.pytorch.nn.ModuleAsHelper.hasForwardOverride(m, StringTensorDict.class) ? m.forward(inputs) : _forward_stringtensor(inputs); }
   public native @Cast("size_t") @NoException(true) long javacpp_module_object_id();
 
   

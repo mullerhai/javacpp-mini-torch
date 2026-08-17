@@ -20,6 +20,8 @@
  * limitations under the License.
  */
 package org.bytedeco.pytorch.distributed.trainer;
+import org.bytedeco.pytorch.optim.*;
+import org.bytedeco.pytorch.distributed.*;
 import org.bytedeco.pytorch.distributed.ModuleForward;
 import org.bytedeco.pytorch.distributed.ProcessGroupWrapper;
 import org.bytedeco.pytorch.distributed.ReduceOp;

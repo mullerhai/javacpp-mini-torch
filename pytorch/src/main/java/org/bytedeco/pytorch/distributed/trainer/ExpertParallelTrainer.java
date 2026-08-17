@@ -20,6 +20,8 @@
  * limitations under the License.
  */
 package org.bytedeco.pytorch.distributed.trainer;
+import org.bytedeco.pytorch.jit.*;
+import org.bytedeco.pytorch.optim.*;
 import org.bytedeco.pytorch.TensorVector;
 import org.bytedeco.pytorch.distributed.*;
 

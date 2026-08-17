@@ -37,6 +37,49 @@ public abstract class BaseChart {
     protected String xScale = "linear";
     protected String yScale = "linear";
 
+    /** Reference lines (axhline / axvline) drawn across the plot area. */
+    protected final List<ReferenceLine> referenceLines = new ArrayList<>();
+    /** Annotations: data (x, y, text, withArrow, textOffset). */
+    protected final List<Annotation> annotations = new ArrayList<>();
+    /** Axis x limits (NaN = auto). */
+    protected double xMin = Double.NaN, xMax = Double.NaN;
+    /** Axis y limits (NaN = auto). */
+    protected double yMin = Double.NaN, yMax = Double.NaN;
+    /** Margins: left, right, top, bottom (matplotlib subplots_adjust). */
+    protected double marginLeft = 0.10, marginRight = 0.05, marginTop = 0.10, marginBottom = 0.12;
+    /** Legend location ("upper right", "best", ...). */
+    protected String legendLocation = "best";
+    /** Grid line color. */
+    protected Color gridColor = new Color(0xdddddd);
+    /** Custom background color. */
+    protected Color customBackground = null;
+
+    /** Reference line record. */
+    public static final class ReferenceLine {
+        public enum Orientation { HORIZONTAL, VERTICAL }
+        public final Orientation orientation;
+        public final double value;
+        public final Color color;
+        public final float width;
+        public final String label;
+        public ReferenceLine(Orientation o, double v, Color c, float w, String l) {
+            this.orientation = o; this.value = v; this.color = c; this.width = w; this.label = l;
+        }
+    }
+
+    /** Annotation record. */
+    public static final class Annotation {
+        public final double x, y;
+        public final String text;
+        public final boolean withArrow;
+        public final double[] textOffset;
+        public final java.util.Map<String, Object> arrowProps;
+        public Annotation(double x, double y, String text, boolean withArrow, double[] textOffset, java.util.Map<String, Object> arrowProps) {
+            this.x = x; this.y = y; this.text = text; this.withArrow = withArrow;
+            this.textOffset = textOffset; this.arrowProps = arrowProps;
+        }
+    }
+
     /**
      * Strong refs to open non-modal windows so they are not GC'd / flash-closed
      * when the caller returns. Removed on windowClosed.
@@ -67,6 +110,68 @@ public abstract class BaseChart {
     }
     public BaseChart setShowGrid(boolean v) { this.showGrid = v; return this; }
     public BaseChart setShowLegend(boolean v) { this.showLegend = v; return this; }
+
+    // =========================================================================
+    // Enterprise-grade API extensions — PlotEnhancer compatibility.
+    // =========================================================================
+
+    /** matplotlib {@code plt.axhline(y=...)} — register horizontal reference line. */
+    public BaseChart addReferenceLine(ReferenceLine.Orientation orientation, double value,
+                                       Color color, float width, String label) {
+        referenceLines.add(new ReferenceLine(orientation, value, color, width, label));
+        return this;
+    }
+
+    /** matplotlib {@code plt.text} / {@code plt.annotate}. */
+    public BaseChart addAnnotation(double x, double y, String text,
+                                    boolean withArrow, double[] textOffset,
+                                    java.util.Map<String, Object> arrowProps) {
+        annotations.add(new Annotation(x, y, text, withArrow, textOffset, arrowProps));
+        return this;
+    }
+
+    /** matplotlib {@code plt.xlim(min, max)} / {@code plt.ylim(min, max)}. */
+    public BaseChart setXLimits(double min, double max) { this.xMin = min; this.xMax = max; return this; }
+    public BaseChart setYLimits(double min, double max) { this.yMin = min; this.yMax = max; return this; }
+
+    /** matplotlib {@code plt.subplots_adjust(...)}. */
+    public BaseChart setMargins(double left, double right, double top, double bottom) {
+        this.marginLeft = left; this.marginRight = right;
+        this.marginTop = top; this.marginBottom = bottom;
+        return this;
+    }
+
+    /** matplotlib {@code plt.legend(loc=...)}. */
+    public BaseChart setLegendLocation(String loc) { this.legendLocation = loc; return this; }
+    public String getLegendLocation() { return legendLocation; }
+
+    /** matplotlib {@code plt.grid(b=True/False)} (alias for {@link #setShowGrid}). */
+    public BaseChart setGridVisible(boolean v) { return setShowGrid(v); }
+    public boolean isGridVisible() { return showGrid; }
+
+    /** Background color override. */
+    public BaseChart setBackgroundColor(Color c) { this.customBackground = c; return this; }
+    public Color getBackgroundColor() { return customBackground != null ? customBackground : background; }
+
+    /** Grid color. */
+    public BaseChart setGridColor(Color c) { this.gridColor = c; return this; }
+    public Color getGridColor() { return gridColor; }
+
+    /** X-label alias (matplotlib {@code plt.xlabel}). */
+    public BaseChart setXLabel(String s) { return setXAxisLabel(s); }
+    /** Y-label alias (matplotlib {@code plt.ylabel}). */
+    public BaseChart setYLabel(String s) { return setYAxisLabel(s); }
+
+    /** Reference lines accessor (subclasses draw these during render()). */
+    public List<ReferenceLine> getReferenceLines() { return referenceLines; }
+    /** Annotations accessor. */
+    public List<Annotation> getAnnotations() { return annotations; }
+    /** Custom x limits. */
+    public double[] getXLimits() { return new double[]{xMin, xMax}; }
+    /** Custom y limits. */
+    public double[] getYLimits() { return new double[]{yMin, yMax}; }
+    /** Margins (left, right, top, bottom). */
+    public double[] getMargins() { return new double[]{marginLeft, marginRight, marginTop, marginBottom}; }
 
     /** matplotlib {@code plt.xscale("log"|"linear")}. */
     public BaseChart setXScale(String scale) {

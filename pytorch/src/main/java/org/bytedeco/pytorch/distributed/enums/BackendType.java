@@ -20,6 +20,7 @@
  * limitations under the License.
  */
 package org.bytedeco.pytorch.distributed.enums;
+import org.bytedeco.pytorch.distributed.*;
 
 import org.bytedeco.pytorch.distributed.ProcessGroup;
 

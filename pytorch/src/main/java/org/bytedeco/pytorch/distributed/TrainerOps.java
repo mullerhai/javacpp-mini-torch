@@ -20,6 +20,8 @@
  * limitations under the License.
  */
 package org.bytedeco.pytorch.distributed;
+import org.bytedeco.pytorch.nn.*;
+import org.bytedeco.pytorch.jit.*;
 import org.bytedeco.pytorch.distributed.trainer.DDPTrainer;
 import org.bytedeco.pytorch.distributed.trainer.FSDPTrainer;
 

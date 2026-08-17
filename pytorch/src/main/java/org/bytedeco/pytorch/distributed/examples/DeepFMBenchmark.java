@@ -2,6 +2,8 @@
  * DeepFM Enterprise Training Benchmark with Full Distributed Support.
  */
 package org.bytedeco.pytorch.distributed.examples;
+import org.bytedeco.pytorch.optim.*;
+import org.bytedeco.pytorch.optim.options.*;
 
 import org.bytedeco.pytorch.Device;
 import org.bytedeco.pytorch.Scalar;

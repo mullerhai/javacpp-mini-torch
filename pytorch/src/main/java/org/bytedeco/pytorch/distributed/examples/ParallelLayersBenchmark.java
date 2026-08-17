@@ -21,6 +21,9 @@
  * limitations under the License.
  */
 package org.bytedeco.pytorch.distributed.examples;
+import org.bytedeco.pytorch.jit.*;
+import org.bytedeco.pytorch.optim.*;
+import org.bytedeco.pytorch.optim.options.*;
 import org.bytedeco.pytorch.distributed.*;
 
 import org.bytedeco.pytorch.Device;

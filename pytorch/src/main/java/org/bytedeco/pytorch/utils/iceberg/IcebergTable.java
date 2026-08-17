@@ -288,10 +288,11 @@ public final class IcebergTable implements AutoCloseable {
         if (dtype == null) return Types.StringType.get();
         return switch (dtype) {
             case BOOLEAN -> Types.BooleanType.get();
-//            case INT8 -> Types.IntegerType.get();
-//            case INT16 -> Types.IntegerType.get();
+            case INT8 -> Types.IntegerType.get();
+            case INT16 -> Types.IntegerType.get();
             case INT32 -> Types.IntegerType.get();
             case INT64 -> Types.LongType.get();
+            case FLOAT16 -> Types.FloatType.get();
             case FLOAT32 -> Types.FloatType.get();
             case FLOAT64 -> Types.DoubleType.get();
             case DATE -> Types.DateType.get();

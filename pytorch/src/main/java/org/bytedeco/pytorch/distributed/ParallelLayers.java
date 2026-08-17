@@ -21,6 +21,10 @@
  * limitations under the License.
  */
 package org.bytedeco.pytorch.distributed;
+import org.bytedeco.pytorch.nn.modules.*;
+import org.bytedeco.pytorch.nn.modules.container.*;
+import org.bytedeco.pytorch.jit.*;
+import org.bytedeco.pytorch.optim.*;
 import org.bytedeco.pytorch.distributed.trainer.NativeFSDPTrainer;
 
 import org.bytedeco.pytorch.Scalar;

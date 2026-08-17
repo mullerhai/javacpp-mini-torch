@@ -20,6 +20,7 @@
  * limitations under the License.
  */
 package org.bytedeco.pytorch.distributed.enums;
+import org.bytedeco.pytorch.nn.*;
 import org.bytedeco.pytorch.distributed.trainer.FSDPTrainer;
 
 /** Parameter sharding policy for {@link FSDPTrainer}. */
