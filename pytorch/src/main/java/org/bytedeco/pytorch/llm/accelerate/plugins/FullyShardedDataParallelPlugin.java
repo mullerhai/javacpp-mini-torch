@@ -21,11 +21,11 @@
  */
 package org.bytedeco.pytorch.llm.accelerate.plugins;
 
-import org.bytedeco.pytorch.distributed.FSDPTrainer;
-import org.bytedeco.pytorch.distributed.MixedPrecisionConfig;
-import org.bytedeco.pytorch.distributed.NativeFSDPTrainer;
+import org.bytedeco.pytorch.distributed.trainer.FSDPTrainer;
+import org.bytedeco.pytorch.distributed.config.MixedPrecisionConfig;
+import org.bytedeco.pytorch.distributed.trainer.NativeFSDPTrainer;
 import org.bytedeco.pytorch.distributed.ProcessGroupWrapper;
-import org.bytedeco.pytorch.distributed.ShardingStrategy;
+import org.bytedeco.pytorch.distributed.enums.ShardingStrategy;
 import org.bytedeco.pytorch.nn.Module;
 
 import java.util.Objects;

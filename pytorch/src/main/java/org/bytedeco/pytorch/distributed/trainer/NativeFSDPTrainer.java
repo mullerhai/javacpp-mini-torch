@@ -19,8 +19,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.bytedeco.pytorch.distributed;
-import org.bytedeco.pytorch.optim.*;
+package org.bytedeco.pytorch.distributed.trainer;
+import org.bytedeco.pytorch.distributed.*;
 
 import org.bytedeco.javacpp.Loader;
 import org.bytedeco.javacpp.annotation.Properties;
@@ -28,6 +28,8 @@ import org.bytedeco.pytorch.Device;
 import org.bytedeco.pytorch.LongOptional;
 import org.bytedeco.pytorch.NoGradGuard;
 import org.bytedeco.pytorch.Scalar;
+import org.bytedeco.pytorch.distributed.config.MixedPrecisionConfig;
+import org.bytedeco.pytorch.distributed.enums.ShardingStrategy;
 import org.bytedeco.pytorch.global.torch.ScalarType;
 import org.bytedeco.pytorch.Tensor;
 import org.bytedeco.pytorch.TensorVector;
@@ -44,7 +46,6 @@ import java.util.Map;
 import java.util.Objects;
 
 import static org.bytedeco.pytorch.global.torch.DeviceType;
-import static org.bytedeco.pytorch.global.torch.ScalarType;
 import static org.bytedeco.pytorch.global.torch.cat;
 import static org.bytedeco.pytorch.global.torch.empty;
 import static org.bytedeco.pytorch.global.torch.zeros;
@@ -106,7 +107,7 @@ import static org.bytedeco.pytorch.global.torch.zeros_like;
  * }</pre>
  */
 @Properties(inherit = org.bytedeco.pytorch.presets.torch.class)
-public final class NativeFSDPTrainer implements AutoCloseable {
+public final class NativeFSDPTrainer implements BaseDistributedTrainer, AutoCloseable {
     static { Loader.load(org.bytedeco.pytorch.presets.torch.class); }
 
     public static final String VERSION = "3.0";
@@ -117,7 +118,7 @@ public final class NativeFSDPTrainer implements AutoCloseable {
     private final ShardingStrategy shardingStrategy;
     private final boolean reshardAfterForward;
     private final MixedPrecisionConfig mixedPrecision;
-    private final ModuleForward forward;
+    private final ModuleForward moduleForward;
     private final Device device;
     private final Device computeDevice;     // differs from `device` when cpuOffload
     private final boolean cpuOffload;
@@ -174,7 +175,7 @@ public final class NativeFSDPTrainer implements AutoCloseable {
         this.cpuOffload = b.cpuOffload;
         this.limitGpuMemory = b.limitGpuMemory;
         this.anomalyDetection = b.anomalyDetection;
-        this.forward = ModuleForward.of(module);
+        this.moduleForward = ModuleForward.of(module);
 
         this.device = processGroup.getDevice();
         this.computeDevice = cpuOffload
@@ -388,7 +389,7 @@ public final class NativeFSDPTrainer implements AutoCloseable {
                 }
                 writeToModule(fullParams);
             }
-            Tensor output = forward.apply(module, inputAdj);
+            Tensor output = moduleForward.apply(module, inputAdj);
             numForwardCalls++;
             if (reshardAfterForward && fullParams != null
                     && (shardingStrategy == ShardingStrategy.FULL_SHARD

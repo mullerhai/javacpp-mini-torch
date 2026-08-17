@@ -19,14 +19,14 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.bytedeco.pytorch.distributed;
-import org.bytedeco.pytorch.nn.modules.container.*;
-import org.bytedeco.pytorch.optim.*;
+package org.bytedeco.pytorch.distributed.trainer;
+import org.bytedeco.pytorch.distributed.*;
 
 import org.bytedeco.javacpp.Loader;
 import org.bytedeco.javacpp.annotation.Properties;
 import org.bytedeco.pytorch.Device;
 import org.bytedeco.pytorch.Scalar;
+import org.bytedeco.pytorch.distributed.config.MixedPrecisionConfig;
 import org.bytedeco.pytorch.global.torch.ScalarType;
 import org.bytedeco.pytorch.Tensor;
 import org.bytedeco.pytorch.nn.Module;
@@ -36,7 +36,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
-import static org.bytedeco.pytorch.global.torch.ScalarType;
 import static org.bytedeco.pytorch.global.torch.empty;
 import static org.bytedeco.pytorch.global.torch.zeros;
 
@@ -84,7 +83,7 @@ import static org.bytedeco.pytorch.global.torch.zeros;
  * }</pre>
  */
 @Properties(inherit = org.bytedeco.pytorch.presets.torch.class)
-public final class HybridParallelTrainer implements AutoCloseable {
+public final class HybridParallelTrainer implements BaseDistributedTrainer, AutoCloseable {
     static { Loader.load(org.bytedeco.pytorch.presets.torch.class); }
 
     public static final String VERSION = "1.0";
@@ -121,7 +120,7 @@ public final class HybridParallelTrainer implements AutoCloseable {
 
     // ── Training state ────────────────────────────────────────────────────
     private final Module module;
-    private final ModuleForward forward;
+    private final ModuleForward moduleForward;
     private final TrainerStats stats = new TrainerStats();
     private final int numMicroBatches;
     private final int accumulationSteps;
@@ -148,7 +147,7 @@ public final class HybridParallelTrainer implements AutoCloseable {
         this.enableActivationCheckpointing = b.enableActivationCheckpointing;
         this.mixedPrecision = b.mixedPrecision != null ? b.mixedPrecision : MixedPrecisionConfig.fp32();
         this.device = pg.getDevice();
-        this.forward = ModuleForward.of(b.module);
+        this.moduleForward = ModuleForward.of(b.module);
         this.module = b.module;
         this.stages = new Module[1];
         this.stages[0] = b.module;
@@ -193,6 +192,15 @@ public final class HybridParallelTrainer implements AutoCloseable {
     }
 
     public static Builder builder() { return new Builder(); }
+
+    // ── Forward method (required by BaseDistributedTrainer) ───────────────────
+
+    /**
+     * Forward pass through the model.
+     */
+    public Tensor forward(Tensor input) {
+        return moduleForward.apply(module, input);
+    }
 
     // ── Mesh coordinate helpers ───────────────────────────────────────────
 
@@ -269,7 +277,7 @@ public final class HybridParallelTrainer implements AutoCloseable {
         // Forward pass through all stages
         for (int c = 0; c < microInputs.size(); c++) {
             Tensor x = microInputs.get(c);
-            x = forward.apply(module, x);
+            x = moduleForward.apply(module, x);
             lastLoss = DistributedLoss.crossEntropy(x, microTargets.get(c));
         }
 
@@ -309,7 +317,7 @@ public final class HybridParallelTrainer implements AutoCloseable {
             }
 
             // Forward through this stage's module
-            x = forward.apply(stages[0], x);
+            x = moduleForward.apply(stages[0], x);
             numMicroBatchProcessed++;
 
             if (isLastStage) {

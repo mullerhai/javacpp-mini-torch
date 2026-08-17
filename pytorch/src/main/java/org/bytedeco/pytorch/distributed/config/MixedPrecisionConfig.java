@@ -19,7 +19,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.bytedeco.pytorch.distributed;
+package org.bytedeco.pytorch.distributed.config;
+
+import org.bytedeco.pytorch.distributed.trainer.NativeFSDPTrainer;
 
 import static org.bytedeco.pytorch.global.torch.ScalarType;
 

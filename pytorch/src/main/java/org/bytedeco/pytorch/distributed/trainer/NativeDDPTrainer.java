@@ -19,8 +19,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.bytedeco.pytorch.distributed;
-import org.bytedeco.pytorch.optim.*;
+package org.bytedeco.pytorch.distributed.trainer;
+import org.bytedeco.pytorch.distributed.*;
 
 import org.bytedeco.javacpp.Loader;
 import org.bytedeco.javacpp.annotation.Properties;
@@ -28,6 +28,7 @@ import org.bytedeco.pytorch.BoolVector;
 import org.bytedeco.pytorch.Device;
 import org.bytedeco.pytorch.LongVector;
 import org.bytedeco.pytorch.Scalar;
+import org.bytedeco.pytorch.distributed.config.MixedPrecisionConfig;
 import org.bytedeco.pytorch.global.torch.ScalarType;
 import org.bytedeco.pytorch.SizeTStringMap;
 import org.bytedeco.pytorch.SizeTVector;
@@ -40,8 +41,6 @@ import org.bytedeco.pytorch.optim.Optimizer;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
-
-import static org.bytedeco.pytorch.global.torch.ScalarType;
 
 /**
  * Enterprise-grade data-parallel trainer on top of c10d.
@@ -100,7 +99,7 @@ import static org.bytedeco.pytorch.global.torch.ScalarType;
  * }</pre>
  */
 @Properties(inherit = org.bytedeco.pytorch.presets.torch.class)
-public final class NativeDDPTrainer implements AutoCloseable {
+public final class NativeDDPTrainer implements BaseDistributedTrainer, AutoCloseable {
     static { Loader.load(org.bytedeco.pytorch.presets.torch.class); }
 
     public enum CommMode { REDUCER, COALESCED_FALLBACK, SINGLE_RANK }
@@ -122,7 +121,7 @@ public final class NativeDDPTrainer implements AutoCloseable {
     private final boolean delayAllReduce;
 
     // ── Dynamic state ──────────────────────────────────────────────────────
-    private final ModuleForward forward;
+    private final ModuleForward moduleForward;
     private final TrainerStats stats = new TrainerStats();
     private Reducer reducer;
     private CommMode commMode = CommMode.COALESCED_FALLBACK;
@@ -174,7 +173,7 @@ public final class NativeDDPTrainer implements AutoCloseable {
         this.gradAccumSteps = Math.max(1, b.gradAccumSteps);
         this.anomalyDetection = b.anomalyDetection;
         this.delayAllReduce = b.delayAllReduce;
-        this.forward = ModuleForward.of(model);
+        this.moduleForward = ModuleForward.of(model);
 
         Device device = processGroup.getDevice();
         model.to(device, /*non_blocking*/ true);
@@ -359,7 +358,7 @@ public final class NativeDDPTrainer implements AutoCloseable {
             }
         }
         Tensor cast = maybeCastForForward(input);
-        Tensor out = forward.apply(model, cast);
+        Tensor out = moduleForward.apply(model, cast);
         if (cast != input) {
             try { cast.close(); } catch (Throwable ignored) {}
         }

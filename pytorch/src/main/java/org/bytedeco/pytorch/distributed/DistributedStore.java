@@ -20,7 +20,7 @@
  * limitations under the License.
  */
 package org.bytedeco.pytorch.distributed;
-import org.bytedeco.pytorch.nn.options.*;
+import org.bytedeco.pytorch.distributed.enums.StoreType;
 
 import org.bytedeco.javacpp.Loader;
 import org.bytedeco.javacpp.SizeTPointer;

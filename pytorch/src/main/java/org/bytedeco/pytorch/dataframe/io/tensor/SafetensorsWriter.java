@@ -182,11 +182,20 @@ public class SafetensorsWriter {
                 writeZeros(raf, dtype);
             } else {
                 switch (dtype) {
+                    case FLOAT16:
+                        buf.putShort((short) Float.floatToRawIntBits((float) ((Number) val).doubleValue()));
+                        break;
                     case FLOAT32:
                         buf.putFloat(((Number) val).floatValue());
                         break;
                     case FLOAT64:
                         buf.putDouble(((Number) val).doubleValue());
+                        break;
+                    case INT8:
+                        buf.put(val == null ? 0 : ((Number) val).byteValue());
+                        break;
+                    case INT16:
+                        buf.putShort(((Number) val).shortValue());
                         break;
                     case INT32:
                         buf.putInt(((Number) val).intValue());
@@ -195,7 +204,7 @@ public class SafetensorsWriter {
                         buf.putLong(((Number) val).longValue());
                         break;
                     default:
-                        // INT8/INT16/BOOLEAN and other narrow types -> writeFloat best-effort
+                        // BOOLEAN and other narrow types -> writeFloat best-effort
                         try {
                             buf.putFloat(Float.parseFloat(val.toString()));
                         } catch (NumberFormatException e) {
@@ -216,12 +225,20 @@ public class SafetensorsWriter {
             case INT64:
                 size = 8;
                 break;
+            case FLOAT16:
+            case INT16:
+                size = 2;
+                break;
             case FLOAT32:
             case INT32:
                 size = 4;
                 break;
+            case INT8:
+            case BOOLEAN:
+                size = 1;
+                break;
             default:
-                // INT8/INT16/BOOLEAN and others: write 4 bytes of zeros
+                // Unknown types: write 4 bytes of zeros
                 size = 4;
         }
         for (int i = 0; i < size; i++) {
@@ -234,19 +251,26 @@ public class SafetensorsWriter {
         int rows = df.rowCount();
 
         switch (dtype) {
+            case FLOAT16:
+            case INT16:
+                return (long) rows * 2;
             case FLOAT32: return (long) rows * 4;
             case FLOAT64: return (long) rows * 8;
             case INT32: return (long) rows * 4;
             case INT64: return (long) rows * 8;
+            case INT8: return rows;
             case BOOLEAN: return rows;
-            default: return (long) rows * 4;  // INT8/INT16 -> 2 bytes collapsed to 4 here
+            default: return (long) rows * 4;
         }
     }
 
     private static String mapDtype(Column.DType dtype) {
         switch (dtype) {
+            case FLOAT16: return "F16";
             case FLOAT32: return "F32";
             case FLOAT64: return "F64";
+            case INT8: return "I8";
+            case INT16: return "I16";
             case INT32: return "I32";
             case INT64: return "I64";
             case BOOLEAN: return "BOOL";

@@ -19,16 +19,15 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.bytedeco.pytorch.distributed;
-import org.bytedeco.pytorch.jit.*;
-import org.bytedeco.pytorch.optim.*;
+package org.bytedeco.pytorch.distributed.trainer;
+import org.bytedeco.pytorch.distributed.*;
 
 import org.bytedeco.javacpp.Loader;
 import org.bytedeco.javacpp.annotation.Properties;
 import org.bytedeco.pytorch.Device;
 import org.bytedeco.pytorch.Scalar;
-import org.bytedeco.pytorch.global.torch.ScalarType;
 import org.bytedeco.pytorch.Tensor;
+import org.bytedeco.pytorch.distributed.config.MixedPrecisionConfig;
 import org.bytedeco.pytorch.nn.Module;
 import org.bytedeco.pytorch.optim.Optimizer;
 
@@ -36,7 +35,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
-import static org.bytedeco.pytorch.global.torch.ScalarType;
 import static org.bytedeco.pytorch.global.torch.cat;
 import static org.bytedeco.pytorch.global.torch.empty;
 import static org.bytedeco.pytorch.global.torch.zeros;
@@ -85,7 +83,7 @@ import static org.bytedeco.pytorch.global.torch.zeros;
  * }</pre>
  */
 @Properties(inherit = org.bytedeco.pytorch.presets.torch.class)
-public final class SequenceParallelTrainer implements AutoCloseable {
+public final class SequenceParallelTrainer implements BaseDistributedTrainer, AutoCloseable {
     static { Loader.load(org.bytedeco.pytorch.presets.torch.class); }
 
     public enum Mode { ALLREDUCE_EPILOGUE, RING_ATTENTION }
@@ -95,7 +93,7 @@ public final class SequenceParallelTrainer implements AutoCloseable {
     // Configuration
     private final Module module;
     private final ProcessGroupWrapper processGroup;
-    private final ModuleForward forward;
+    private final ModuleForward moduleForward;
     private final Device device;
     private final int spSize;        // sequence parallel size
     private final int spRank;        // this rank's position in the SP group
@@ -137,7 +135,7 @@ public final class SequenceParallelTrainer implements AutoCloseable {
         this.gradAccumSteps = Math.max(1, b.gradAccumSteps);
         this.mixedPrecision = b.mixedPrecision != null ? b.mixedPrecision : MixedPrecisionConfig.fp32();
         this.device = processGroup.getDevice();
-        this.forward = ModuleForward.of(module);
+        this.moduleForward = ModuleForward.of(module);
 
         module.to(device, true);
 
@@ -151,6 +149,15 @@ public final class SequenceParallelTrainer implements AutoCloseable {
     }
 
     public static Builder builder() { return new Builder(); }
+
+    // ── Forward method (required by BaseDistributedTrainer) ───────────────────
+
+    /**
+     * Forward pass through the model.
+     */
+    public Tensor forward(Tensor input) {
+        return moduleForward.apply(module, input);
+    }
 
     // ── Core SP collectives ───────────────────────────────────────────────
 
@@ -327,7 +334,7 @@ public final class SequenceParallelTrainer implements AutoCloseable {
         if (optimizer != null) optimizer.zero_grad();
 
         // Forward
-        Tensor output = forward.apply(module, input);
+        Tensor output = moduleForward.apply(module, input);
         numForwardCalls++;
         stats.fireForward(input);
 

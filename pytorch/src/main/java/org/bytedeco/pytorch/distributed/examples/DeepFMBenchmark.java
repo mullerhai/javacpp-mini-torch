@@ -1,9 +1,7 @@
 /*
  * DeepFM Enterprise Training Benchmark with Full Distributed Support.
  */
-package org.bytedeco.pytorch.distributed;
-import org.bytedeco.pytorch.optim.*;
-import org.bytedeco.pytorch.optim.options.*;
+package org.bytedeco.pytorch.distributed.examples;
 
 import org.bytedeco.pytorch.Device;
 import org.bytedeco.pytorch.Scalar;
@@ -31,7 +29,7 @@ import static org.bytedeco.pytorch.global.torch.*;
  *   Combined → [batch, 1]
  *
  * Usage:
- *   java org.bytedeco.pytorch.distributed.DeepFMBenchmark --steps 100 --batch 4096
+ *   java org.bytedeco.pytorch.distributed.examples.DeepFMBenchmark --steps 100 --batch 4096
  */
 public final class DeepFMBenchmark {
 

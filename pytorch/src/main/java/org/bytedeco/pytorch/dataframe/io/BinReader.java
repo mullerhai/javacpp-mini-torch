@@ -284,7 +284,10 @@ public class BinReader {
                 Column.DType dtype = switch (type) {
                     case "SNET" -> Column.DType.FLOAT32;
                     case "DNET" -> Column.DType.FLOAT64;
+                    case "IN16" -> Column.DType.INT16;
+                    case "IN08" -> Column.DType.INT8;
                     case "IN64" -> Column.DType.INT64;
+                    case "FP16" -> Column.DType.FLOAT16;
                     default -> Column.DType.FLOAT64;
                 };
                 
@@ -293,10 +296,13 @@ public class BinReader {
                 
                 for (int i = 0; i < totalElems; i++) {
                     switch (dtype) {
+                        case FLOAT16 -> col.add((double) Float.intBitsToFloat(buf.getShort() & 0xFFFF));
                         case FLOAT32 -> col.add((double) buf.getFloat());
                         case FLOAT64 -> col.add(buf.getDouble());
-                        case INT64 -> col.add(buf.getLong());
+                        case INT16 -> col.add((long) buf.getShort());
                         case INT32 -> col.add((long) buf.getInt());
+                        case INT64 -> col.add(buf.getLong());
+                        case INT8 -> col.add((long) buf.get());
                         default -> col.add(buf.getDouble());
                     }
                 }

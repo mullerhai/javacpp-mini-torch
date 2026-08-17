@@ -218,11 +218,14 @@ public final class JsonWriter {
             case BOOLEAN:
                 if (v instanceof Boolean) return JsonValue.of((Boolean) v);
                 return JsonValue.of(Boolean.parseBoolean(String.valueOf(v)));
+            case INT8:
+            case INT16:
             case INT32:
             case INT64:
                 if (v instanceof Number) return JsonValue.of(((Number) v).longValue());
                 try { return JsonValue.of(Long.parseLong(String.valueOf(v))); }
                 catch (Exception e) { return JsonValue.of(String.valueOf(v)); }
+            case FLOAT16:
             case FLOAT32:
             case FLOAT64:
                 if (v instanceof Number) {
@@ -334,8 +337,11 @@ public final class JsonWriter {
 
     private static String dtypeToPandas(Column.DType dt) {
         switch (dt) {
+            case INT8:
+            case INT16:
             case INT32:
             case INT64: return "integer";
+            case FLOAT16:
             case FLOAT32:
             case FLOAT64: return "number";
             case BOOLEAN: return "boolean";

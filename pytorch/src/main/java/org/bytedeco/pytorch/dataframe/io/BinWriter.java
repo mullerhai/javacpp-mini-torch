@@ -239,6 +239,10 @@ public class BinWriter {
             case BOOLEAN:
                 out.write(((Boolean) val) ? 1 : 0);
                 break;
+            case INT8:
+                out.write(((Number) val).byteValue());
+                break;
+            case INT16:
             case INT32:
             case FLOAT32:
                 buf.putInt(((Number) val).intValue());
@@ -248,6 +252,12 @@ public class BinWriter {
             case FLOAT64:
                 buf.putLong(((Number) val).longValue());
                 out.write(buf.array(), 0, 8);
+                break;
+            case FLOAT16:
+                // Write FLOAT16 as 2 bytes (half-precision)
+                short f16 = (short) Float.floatToRawIntBits((float) ((Number) val).doubleValue());
+                buf.putShort(f16);
+                out.write(buf.array(), 0, 2);
                 break;
             case STRING:
                 byte[] strBytes = val.toString().getBytes(StandardCharsets.UTF_8);

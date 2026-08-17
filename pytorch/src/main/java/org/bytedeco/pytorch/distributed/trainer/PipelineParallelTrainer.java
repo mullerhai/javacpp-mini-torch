@@ -19,9 +19,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.bytedeco.pytorch.distributed;
-import org.bytedeco.pytorch.jit.*;
-import org.bytedeco.pytorch.optim.*;
+package org.bytedeco.pytorch.distributed.trainer;
+import org.bytedeco.pytorch.distributed.DistributedLoss;
+import org.bytedeco.pytorch.distributed.ModuleForward;
+import org.bytedeco.pytorch.distributed.ProcessGroupWrapper;
 
 import org.bytedeco.javacpp.Loader;
 import org.bytedeco.javacpp.annotation.Properties;
@@ -32,7 +33,6 @@ import org.bytedeco.pytorch.optim.Optimizer;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
-import java.util.function.Function;
 
 import static org.bytedeco.pytorch.global.torch.empty_like;
 
@@ -52,7 +52,7 @@ import static org.bytedeco.pytorch.global.torch.empty_like;
  * }</pre>
  */
 @Properties(inherit = org.bytedeco.pytorch.presets.torch.class)
-public final class PipelineParallelTrainer implements AutoCloseable {
+public final class PipelineParallelTrainer implements BaseDistributedTrainer, AutoCloseable {
     static { Loader.load(org.bytedeco.pytorch.presets.torch.class); }
 
     public static final int TAG_ACT = 7001;
@@ -114,6 +114,20 @@ public final class PipelineParallelTrainer implements AutoCloseable {
 
     public Module localStage() {
         return stages.get(stageId);
+    }
+
+    // ── Required by BaseDistributedTrainer ─────────────────────────────────
+
+    @Override
+    public Module getModule() {
+        return localStage();
+    }
+
+    /**
+     * Forward pass through the local pipeline stage.
+     */
+    public Tensor forward(Tensor input) {
+        return forwards[stageId].apply(stages.get(stageId), input);
     }
 
     /**

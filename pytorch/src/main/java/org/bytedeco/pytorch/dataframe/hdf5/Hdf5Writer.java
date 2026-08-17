@@ -105,6 +105,22 @@ public final class Hdf5Writer {
     private static Object columnToArray(Column col) {
         int n = col.size();
         switch (col.dtype()) {
+            case INT8: {
+                byte[] a = new byte[n];
+                for (int i = 0; i < n; i++) {
+                    Object v = col.get(i);
+                    a[i] = v instanceof Number ? ((Number) v).byteValue() : (byte) 0;
+                }
+                return a;
+            }
+            case INT16: {
+                short[] a = new short[n];
+                for (int i = 0; i < n; i++) {
+                    Object v = col.get(i);
+                    a[i] = v instanceof Number ? ((Number) v).shortValue() : (short) 0;
+                }
+                return a;
+            }
             case INT32: {
                 int[] a = new int[n];
                 for (int i = 0; i < n; i++) {
@@ -118,6 +134,18 @@ public final class Hdf5Writer {
                 for (int i = 0; i < n; i++) {
                     Object v = col.get(i);
                     a[i] = v instanceof Number ? ((Number) v).longValue() : 0L;
+                }
+                return a;
+            }
+            case FLOAT16: {
+                short[] a = new short[n];
+                for (int i = 0; i < n; i++) {
+                    Object v = col.get(i);
+                    if (v instanceof Number) {
+                        a[i] = (short) Float.floatToRawIntBits((float) ((Number) v).doubleValue());
+                    } else {
+                        a[i] = (short) 0;
+                    }
                 }
                 return a;
             }

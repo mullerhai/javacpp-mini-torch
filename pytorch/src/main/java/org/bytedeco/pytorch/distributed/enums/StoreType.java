@@ -19,13 +19,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.bytedeco.pytorch.distributed;
-import org.bytedeco.pytorch.nn.*;
+package org.bytedeco.pytorch.distributed.enums;
 
-/** Parameter sharding policy for {@link FSDPTrainer}. */
-public enum ShardingStrategy {
-    FULL_SHARD,
-    SHARD_GRAD_OP,
-    NO_SHARD,
-    HYBRID_SHARD
+/** Key-value store transport for process-group rendezvous. */
+public enum StoreType {
+    FILE,
+    TCP,
+    HASH,
+    /** TCP for multi-machine hosts; FILE for localhost. */
+    AUTO
 }

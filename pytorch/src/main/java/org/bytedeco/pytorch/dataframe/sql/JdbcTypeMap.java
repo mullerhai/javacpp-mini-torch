@@ -26,7 +26,9 @@ public final class JdbcTypeMap {
             case Types.BIT:
                 return Column.DType.BOOLEAN;
             case Types.TINYINT:
+                return Column.DType.INT8;
             case Types.SMALLINT:
+                return Column.DType.INT16;
             case Types.INTEGER:
                 return Column.DType.INT32;
             case Types.BIGINT:
@@ -76,8 +78,11 @@ public final class JdbcTypeMap {
 
     public static String toSqlType(Column.DType dtype, boolean sqlite) {
         switch (dtype) {
+            case INT8: return "TINYINT";
+            case INT16: return "SMALLINT";
             case INT32: return "INTEGER";
             case INT64: return sqlite ? "INTEGER" : "BIGINT";
+            case FLOAT16: return sqlite ? "REAL" : "FLOAT";
             case FLOAT32: return sqlite ? "REAL" : "REAL";
             case FLOAT64: return sqlite ? "REAL" : "DOUBLE";
             case BOOLEAN: return sqlite ? "INTEGER" : "BOOLEAN";
@@ -91,6 +96,14 @@ public final class JdbcTypeMap {
 
     public static Object getValue(ResultSet rs, int oneBasedCol, Column.DType dtype) throws SQLException {
         switch (dtype) {
+            case INT8: {
+                byte x = rs.getByte(oneBasedCol);
+                return rs.wasNull() ? null : Byte.valueOf(x);
+            }
+            case INT16: {
+                short x = rs.getShort(oneBasedCol);
+                return rs.wasNull() ? null : Short.valueOf(x);
+            }
             case INT32: {
                 int x = rs.getInt(oneBasedCol);
                 return rs.wasNull() ? null : Integer.valueOf(x);
@@ -99,6 +112,7 @@ public final class JdbcTypeMap {
                 long x = rs.getLong(oneBasedCol);
                 return rs.wasNull() ? null : Long.valueOf(x);
             }
+            case FLOAT16:
             case FLOAT32: {
                 float x = rs.getFloat(oneBasedCol);
                 return rs.wasNull() ? null : Float.valueOf(x);

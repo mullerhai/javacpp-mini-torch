@@ -20,12 +20,14 @@
  * limitations under the License.
  */
 package org.bytedeco.pytorch.distributed;
-import org.bytedeco.pytorch.nn.*;
-import org.bytedeco.pytorch.jit.*;
+import org.bytedeco.pytorch.distributed.trainer.DDPTrainer;
+import org.bytedeco.pytorch.distributed.trainer.FSDPTrainer;
 
 import org.bytedeco.javacpp.Loader;
 import org.bytedeco.javacpp.annotation.Properties;
 import org.bytedeco.pytorch.Scalar;
+import org.bytedeco.pytorch.distributed.trainer.NativeDDPTrainer;
+import org.bytedeco.pytorch.distributed.trainer.NativeFSDPTrainer;
 import org.bytedeco.pytorch.global.torch.ScalarType;
 import org.bytedeco.pytorch.Tensor;
 import org.bytedeco.pytorch.TensorVector;
@@ -35,7 +37,6 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Objects;
 
-import static org.bytedeco.pytorch.global.torch.ScalarType;
 import static org.bytedeco.pytorch.global.torch.cat;
 import static org.bytedeco.pytorch.global.torch.empty;
 import static org.bytedeco.pytorch.global.torch.zeros;

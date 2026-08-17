@@ -20,24 +20,20 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.bytedeco.pytorch.distributed;
-import org.bytedeco.pytorch.jit.*;
-import org.bytedeco.pytorch.optim.*;
-import org.bytedeco.pytorch.optim.options.*;
+package org.bytedeco.pytorch.distributed.examples;
+import org.bytedeco.pytorch.distributed.*;
 
 import org.bytedeco.pytorch.Device;
+import org.bytedeco.pytorch.distributed.enums.BackendType;
 import org.bytedeco.pytorch.global.torch.ScalarType;
 import org.bytedeco.pytorch.Tensor;
 import org.bytedeco.pytorch.global.torch;
-import org.bytedeco.pytorch.nn.Module;
 import org.bytedeco.pytorch.optim.Optimizer;
 import org.bytedeco.pytorch.optim.SGD;
 import org.bytedeco.pytorch.optim.options.SGDOptions;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Objects;
-import java.util.concurrent.TimeUnit;
 
 /**
  * Performance benchmarking for ParallelLayers.

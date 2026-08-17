@@ -154,6 +154,14 @@ public final class SqlWriter {
             return;
         }
         switch (dtype) {
+            case INT8:
+                ps.setByte(idx, val instanceof Number ? ((Number) val).byteValue()
+                    : Byte.parseByte(String.valueOf(val)));
+                break;
+            case INT16:
+                ps.setShort(idx, val instanceof Number ? ((Number) val).shortValue()
+                    : Short.parseShort(String.valueOf(val)));
+                break;
             case INT32:
                 ps.setInt(idx, val instanceof Number ? ((Number) val).intValue()
                     : Integer.parseInt(String.valueOf(val)));
@@ -162,6 +170,7 @@ public final class SqlWriter {
                 ps.setLong(idx, val instanceof Number ? ((Number) val).longValue()
                     : Long.parseLong(String.valueOf(val)));
                 break;
+            case FLOAT16:
             case FLOAT32:
                 ps.setFloat(idx, val instanceof Number ? ((Number) val).floatValue()
                     : Float.parseFloat(String.valueOf(val)));

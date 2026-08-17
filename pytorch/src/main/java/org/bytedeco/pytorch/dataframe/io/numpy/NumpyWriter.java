@@ -187,8 +187,11 @@ public class NumpyWriter {
     private static String inferNumpyDtype(Column col) {
         switch (col.dtype()) {
             case BOOLEAN: return "b1";
+            case INT8: return "i1";
+            case INT16: return "i2";
             case INT32: return "i4";
             case INT64: return "i8";
+            case FLOAT16: return "f2";
             case FLOAT32: return "f4";
             case FLOAT64: return "f8";
             default: return "O";  // Object (covers STRING, TENSOR, DATE, DATETIME, TIME, DURATION,
@@ -237,6 +240,8 @@ public class NumpyWriter {
                         out.write(0); out.write(0); break;
                     case "i4": case "u4": case "f4":
                         out.write(0); out.write(0); out.write(0); out.write(0); break;
+                    case "f2":
+                        out.write(0); out.write(0); break;
                     case "i8": case "u8": case "f8":
                         for (int i = 0; i < 8; i++) out.write(0); break;
                     default:
@@ -260,6 +265,12 @@ public class NumpyWriter {
                     short s = ((Number) val).shortValue();
                     out.write(s & 0xFF);
                     out.write((s >> 8) & 0xFF);
+                    break;
+                case "f2":
+                    // FLOAT16: convert double to float16 bits
+                    short f16 = (short) Float.floatToRawIntBits((float) ((Number) val).doubleValue());
+                    out.write(f16 & 0xFF);
+                    out.write((f16 >> 8) & 0xFF);
                     break;
                 case "i4":
                 case "u4":

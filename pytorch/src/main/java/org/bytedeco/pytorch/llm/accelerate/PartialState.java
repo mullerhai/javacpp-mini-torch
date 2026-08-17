@@ -26,7 +26,7 @@ import org.bytedeco.javacpp.annotation.Properties;
 import org.bytedeco.pytorch.Device;
 import org.bytedeco.pytorch.distributed.DistributedStore;
 import org.bytedeco.pytorch.distributed.ProcessGroupWrapper;
-import org.bytedeco.pytorch.distributed.StoreType;
+import org.bytedeco.pytorch.distributed.enums.StoreType;
 import org.bytedeco.pytorch.llm.accelerate.utils.MultiProcessLauncher;
 
 import java.util.Objects;

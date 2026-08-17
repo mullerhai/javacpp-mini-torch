@@ -21,14 +21,11 @@
  * limitations under the License.
  */
 package org.bytedeco.pytorch.distributed;
-import org.bytedeco.pytorch.nn.modules.container.*;
-import org.bytedeco.pytorch.jit.*;
+import org.bytedeco.pytorch.distributed.trainer.NativeFSDPTrainer;
 
 import org.bytedeco.pytorch.Scalar;
 import org.bytedeco.pytorch.global.torch;
-import org.bytedeco.pytorch.nn.modules.*;
 import org.bytedeco.pytorch.nn.modules.container.ModuleListImpl;
-import org.bytedeco.pytorch.optim.*;
 
 import org.bytedeco.javacpp.Loader;
 import org.bytedeco.javacpp.annotation.Properties;
@@ -44,7 +41,6 @@ import java.util.List;
 import java.util.Objects;
 import java.util.function.Function;
 
-import static org.bytedeco.pytorch.global.torch.ScalarType;
 import static org.bytedeco.pytorch.global.torch.empty;
 import static org.bytedeco.pytorch.global.torch.zeros;
 import static org.bytedeco.pytorch.global.torch.cat;
@@ -742,11 +738,11 @@ public final class ParallelLayers {
      * }</pre>
      */
     public static final class HybridTrainer implements AutoCloseable {
-        protected final EmbeddingTP embedding;
+        public final EmbeddingTP embedding;
         protected final AttentionTP attention;
-        protected final DenseTP ffn;
-        protected final RoutedExpertEP moe;
-        protected final PrefillSP prefill;
+        public final DenseTP ffn;
+        public final RoutedExpertEP moe;
+        public final PrefillSP prefill;
         private final DeviceMesh dpMesh;
         private final DeviceMesh tpMesh;
         private final DeviceMesh epMesh;
@@ -754,7 +750,7 @@ public final class ParallelLayers {
         private final ProcessGroupWrapper tpGroup;
         private final ProcessGroupWrapper epGroup;
         private final boolean hasEP;
-        private final Function<Tensor, Tensor> forward;
+        public final Function<Tensor, Tensor> forward;
         private long steps;
         private boolean closed;
 

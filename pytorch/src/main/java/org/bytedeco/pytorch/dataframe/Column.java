@@ -10,8 +10,7 @@ import java.util.*;
 public final class Column implements AutoCloseable {
     /** Column data type. */
     public enum DType {
-//        INT8, INT16,
-        INT32, INT64, FLOAT32, FLOAT64, BOOLEAN, STRING, TENSOR,
+        INT8, INT16, INT32, INT64, FLOAT16, FLOAT32, FLOAT64, BOOLEAN, STRING, TENSOR,
         DATE, DATETIME, TIME, DURATION,
         /** Dense float vector (cell value is float[]). Used for ANN/HNSW. */
         VECTOR,
@@ -47,7 +46,9 @@ public final class Column implements AutoCloseable {
     public boolean isArrowBacked() { return storage.isArrowBacked(); }
 
     public boolean isNumeric() {
-        return storage.dtype() == DType.INT32 || storage.dtype() == DType.INT64 || storage.dtype() == DType.FLOAT32 || storage.dtype() == DType.FLOAT64;
+        return storage.dtype() == DType.INT8 || storage.dtype() == DType.INT16
+            || storage.dtype() == DType.INT32 || storage.dtype() == DType.INT64
+            || storage.dtype() == DType.FLOAT16 || storage.dtype() == DType.FLOAT32 || storage.dtype() == DType.FLOAT64;
     }
     /** Mutable list view — materializes Arrow-backed columns. */
     public List<Object> data() { return storage.materialize(); }

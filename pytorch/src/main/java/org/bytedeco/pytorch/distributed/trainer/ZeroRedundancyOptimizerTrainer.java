@@ -19,20 +19,17 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.bytedeco.pytorch.distributed;
-import org.bytedeco.pytorch.nn.*;
-import org.bytedeco.pytorch.optim.*;
-import org.bytedeco.pytorch.optim.options.*;
+package org.bytedeco.pytorch.distributed.trainer;
+import org.bytedeco.pytorch.distributed.*;
 
 import org.bytedeco.javacpp.Loader;
 import org.bytedeco.javacpp.annotation.Properties;
 import org.bytedeco.pytorch.Device;
-import org.bytedeco.pytorch.LongOptional;
 import org.bytedeco.pytorch.NoGradGuard;
 import org.bytedeco.pytorch.Scalar;
-import org.bytedeco.pytorch.global.torch.ScalarType;
 import org.bytedeco.pytorch.Tensor;
-import org.bytedeco.pytorch.TensorVector;
+import org.bytedeco.pytorch.distributed.config.MixedPrecisionConfig;
+import org.bytedeco.pytorch.distributed.enums.ShardingStrategy;
 import org.bytedeco.pytorch.nn.Module;
 import org.bytedeco.pytorch.optim.Optimizer;
 
@@ -42,7 +39,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
-import static org.bytedeco.pytorch.global.torch.ScalarType;
 import static org.bytedeco.pytorch.global.torch.cat;
 import static org.bytedeco.pytorch.global.torch.empty;
 import static org.bytedeco.pytorch.global.torch.zeros;
@@ -89,7 +85,7 @@ import static org.bytedeco.pytorch.global.torch.zeros;
  * }</pre>
  */
 @Properties(inherit = org.bytedeco.pytorch.presets.torch.class)
-public final class ZeroRedundancyOptimizerTrainer implements AutoCloseable {
+public final class ZeroRedundancyOptimizerTrainer implements BaseDistributedTrainer, AutoCloseable {
     static { Loader.load(org.bytedeco.pytorch.presets.torch.class); }
 
     public enum Stage { OPTIMIZER_STATES, GRADIENTS, PARAMETERS }
@@ -118,7 +114,7 @@ public final class ZeroRedundancyOptimizerTrainer implements AutoCloseable {
     private final long shardSize;
     private final long paddedFullSize;
     private final TrainerStats stats = new TrainerStats();
-    private final ModuleForward forward;
+    private final ModuleForward moduleForward;
 
     private int microStep;
     private volatile boolean syncGradients = true;
@@ -150,7 +146,7 @@ public final class ZeroRedundancyOptimizerTrainer implements AutoCloseable {
         this.gradAccumSteps = Math.max(1, b.gradAccumSteps);
         this.mixedPrecision = b.mixedPrecision != null ? b.mixedPrecision : MixedPrecisionConfig.fp32();
         this.device = processGroup.getDevice();
-        this.forward = ModuleForward.of(module);
+        this.moduleForward = ModuleForward.of(module);
 
         allParameters.addAll(TrainerOps.collectParameters(module));
         totalParamNumel = TrainerOps.totalNumel(allParameters);
@@ -225,7 +221,7 @@ public final class ZeroRedundancyOptimizerTrainer implements AutoCloseable {
                 if (full != null) try { full.close(); } catch (Throwable ignored) {}
             }
         }
-        Tensor out = forward.apply(module, input);
+        Tensor out = moduleForward.apply(module, input);
         if (stage == Stage.PARAMETERS && processGroup.getWorldSize() > 1) {
             // Re-shard: re-write the module's params to only hold this rank's
             // local shard. This is required for ZeRO-3 to actually free

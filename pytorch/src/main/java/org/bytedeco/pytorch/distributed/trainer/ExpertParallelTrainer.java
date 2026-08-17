@@ -19,10 +19,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.bytedeco.pytorch.distributed;
+package org.bytedeco.pytorch.distributed.trainer;
 import org.bytedeco.pytorch.TensorVector;
-import org.bytedeco.pytorch.jit.*;
-import org.bytedeco.pytorch.optim.*;
+import org.bytedeco.pytorch.distributed.*;
 
 import org.bytedeco.javacpp.Loader;
 import org.bytedeco.javacpp.annotation.Properties;
@@ -36,7 +35,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
-import static org.bytedeco.pytorch.global.torch.DeviceType;
 import static org.bytedeco.pytorch.global.torch.ScalarType;
 import static org.bytedeco.pytorch.global.torch.cat;
 import static org.bytedeco.pytorch.global.torch.empty;
@@ -77,7 +75,7 @@ import static org.bytedeco.pytorch.global.torch.zeros;
  * }</pre>
  */
 @Properties(inherit = org.bytedeco.pytorch.presets.torch.class)
-public final class ExpertParallelTrainer implements AutoCloseable {
+public final class ExpertParallelTrainer implements BaseDistributedTrainer, AutoCloseable {
     static { Loader.load(org.bytedeco.pytorch.presets.torch.class); }
 
     public static final String VERSION = "1.0";
@@ -85,7 +83,7 @@ public final class ExpertParallelTrainer implements AutoCloseable {
     // Configuration
     private final Module module;
     private final ProcessGroupWrapper processGroup;
-    private final ModuleForward forward;
+    private final ModuleForward moduleForward;
     private final Device device;
     private final int numExperts;
     private final int topK;
@@ -135,7 +133,7 @@ public final class ExpertParallelTrainer implements AutoCloseable {
         this.auxLossCoeff = b.auxLossCoeff;
         this.useBias = b.useBias;
         this.device = processGroup.getDevice();
-        this.forward = ModuleForward.of(module);
+        this.moduleForward = ModuleForward.of(module);
         this.auxLossBuffer = zeros(1).to(device, ScalarType.Float);
 
         System.out.printf(
@@ -281,7 +279,7 @@ public final class ExpertParallelTrainer implements AutoCloseable {
     public Tensor processLocalExperts(Tensor tokens) {
         // The model should expose its expert layers; this invokes the
         // module forward which contains the MoE layers.
-        return forward.apply(module, tokens);
+        return moduleForward.apply(module, tokens);
     }
 
     private Tensor computeAuxLoss(Tensor topkIndices, int batchSeq) {
@@ -329,7 +327,7 @@ public final class ExpertParallelTrainer implements AutoCloseable {
         Tensor flat = input.reshape(batch * seq, (int) hiddenDim);
 
         // Forward
-        Tensor output = forward.apply(module, flat);
+        Tensor output = moduleForward.apply(module, flat);
         numForwardCalls++;
 
         // Cross-entropy
@@ -385,6 +383,14 @@ public final class ExpertParallelTrainer implements AutoCloseable {
     // Accessors
 
     public Module getModule() { return module; }
+
+    /**
+     * Forward pass through the model.
+     */
+    public Tensor forward(Tensor input) {
+        return moduleForward.apply(module, input);
+    }
+
     public ProcessGroupWrapper getProcessGroup() { return processGroup; }
     public int getEpSize() { return epSize; }
     public int getEpRank() { return epRank; }

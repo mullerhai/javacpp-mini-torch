@@ -20,20 +20,18 @@
  * limitations under the License.
  */
 package org.bytedeco.pytorch.distributed;
-import org.bytedeco.pytorch.nn.options.*;
+import org.bytedeco.pytorch.distributed.enums.BackendType;
 
 import org.bytedeco.javacpp.Loader;
 import org.bytedeco.javacpp.annotation.Properties;
 import org.bytedeco.javacpp.chrono.Milliseconds;
 import org.bytedeco.pytorch.Device;
-import org.bytedeco.pytorch.GlooDeviceVector;
 import org.bytedeco.pytorch.IntVector;
 import org.bytedeco.pytorch.LongVector;
 import org.bytedeco.pytorch.Scalar;
 import org.bytedeco.pytorch.Tensor;
 import org.bytedeco.pytorch.TensorVector;
 
-import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;

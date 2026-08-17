@@ -1161,9 +1161,11 @@ public final class Redis implements Closeable {
         if (raw == null) return null;
         try {
             return switch (dt) {
+                case INT8 -> Byte.parseByte(raw.trim());
+                case INT16 -> Short.parseShort(raw.trim());
                 case INT32 -> Integer.parseInt(raw.trim());
                 case INT64 -> Long.parseLong(raw.trim());
-                case FLOAT32 -> Float.parseFloat(raw.trim());
+                case FLOAT16, FLOAT32 -> Float.parseFloat(raw.trim());
                 case FLOAT64 -> Double.parseDouble(raw.trim());
                 case BOOLEAN -> Boolean.parseBoolean(raw.trim())
                         || "1".equals(raw.trim())

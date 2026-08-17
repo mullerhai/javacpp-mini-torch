@@ -7,20 +7,24 @@ import org.bytedeco.pytorch.dataframe.Column;
  * Bridge to {@link Column.DType} via {@link #toDType()}.
  */
 public enum ColumnType {
-    INT32, INT64, FLOAT32, FLOAT64, STRING, BOOLEAN, VECTOR,
+    INT8, INT16, INT32, INT64, FLOAT16, FLOAT32, FLOAT64, STRING, BOOLEAN, VECTOR,
     IMAGE, AUDIO, VIDEO, TEXT_TOKEN, TENSOR, BINARY,
     STRUCT, JSON, LIST_VIEW, DATE, MAP_VIEW, TIME, TIMESTAMP, LOG_RECORD, EMBEDDING, GRAPH_VIEW,
     POINT_CLOUD;
 
     public boolean isNumericType() {
-        return this == INT32 || this == INT64 || this == FLOAT32 || this == FLOAT64;
+        return this == INT8 || this == INT16 || this == INT32 || this == INT64
+            || this == FLOAT16 || this == FLOAT32 || this == FLOAT64;
     }
 
     /** Map to DataFrame {@link Column.DType} (best-effort). */
     public Column.DType toDType() {
         return switch (this) {
+            case INT8 -> Column.DType.INT8;
+            case INT16 -> Column.DType.INT16;
             case INT32 -> Column.DType.INT32;
             case INT64 -> Column.DType.INT64;
+            case FLOAT16 -> Column.DType.FLOAT16;
             case FLOAT32 -> Column.DType.FLOAT32;
             case FLOAT64 -> Column.DType.FLOAT64;
             case STRING, TEXT_TOKEN -> Column.DType.STRING;
@@ -47,8 +51,11 @@ public enum ColumnType {
     public static ColumnType fromDType(Column.DType d) {
         if (d == null) return STRING;
         return switch (d) {
+            case INT8 -> INT8;
+            case INT16 -> INT16;
             case INT32 -> INT32;
             case INT64 -> INT64;
+            case FLOAT16 -> FLOAT16;
             case FLOAT32 -> FLOAT32;
             case FLOAT64 -> FLOAT64;
             case BOOLEAN -> BOOLEAN;

@@ -52,8 +52,11 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public class AutocastContext implements AutoCloseable {
 
+    // Thread-local stack for nested autocast - must be declared before DISABLED
+    private static final ThreadLocal<List<AutocastContext>> STACK = ThreadLocal.withInitial(ArrayList::new);
+
     /** Disabled context singleton. */
-    public static final AutocastContext DISABLED = new AutocastContext(null, null, null, null);
+    public static final AutocastContext DISABLED = new AutocastContext(null, null, null, null, true);
 
     private final AmpManager manager;
     private final Device device;
@@ -61,9 +64,6 @@ public class AutocastContext implements AutoCloseable {
     private final AmpPrecision backwardPrecision;
     private final boolean disabled;
     private final List<Tensor> cachedTensors;
-
-    // Thread-local stack for nested autocast
-    private static final ThreadLocal<List<AutocastContext>> STACK = ThreadLocal.withInitial(ArrayList::new);
 
     public AutocastContext(AmpManager manager, Device device,
                          AmpPrecision forwardPrecision, AmpPrecision backwardPrecision) {

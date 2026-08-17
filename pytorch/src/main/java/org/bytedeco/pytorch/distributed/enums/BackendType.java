@@ -19,7 +19,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.bytedeco.pytorch.distributed;
+package org.bytedeco.pytorch.distributed.enums;
+
+import org.bytedeco.pytorch.distributed.ProcessGroup;
 
 /**
  * Collective communication backend selection for distributed helpers.

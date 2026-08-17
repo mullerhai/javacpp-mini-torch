@@ -19,8 +19,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.bytedeco.pytorch.distributed;
-import org.bytedeco.pytorch.optim.*;
+package org.bytedeco.pytorch.distributed.trainer;
+import org.bytedeco.pytorch.distributed.ModuleForward;
+import org.bytedeco.pytorch.distributed.ProcessGroupWrapper;
+import org.bytedeco.pytorch.distributed.enums.ShardingStrategy;
+import org.bytedeco.pytorch.distributed.Work;
 
 import org.bytedeco.javacpp.Loader;
 import org.bytedeco.javacpp.annotation.Properties;
@@ -58,7 +61,7 @@ import static org.bytedeco.pytorch.global.torch.zeros_like;
  * }</pre>
  */
 @Properties(inherit = org.bytedeco.pytorch.presets.torch.class)
-public final class FSDPTrainer implements AutoCloseable {
+public final class FSDPTrainer implements BaseDistributedTrainer, AutoCloseable {
     static { Loader.load(org.bytedeco.pytorch.presets.torch.class); }
 
     public static final String VERSION = "2.0";
@@ -67,7 +70,7 @@ public final class FSDPTrainer implements AutoCloseable {
     private final ProcessGroupWrapper processGroup;
     private final ShardingStrategy shardingStrategy;
     private final boolean reshardAfterForward;
-    private final ModuleForward forward;
+    private final ModuleForward moduleForward;
     private final Device device;
 
     private final List<Tensor> shardedParams = new ArrayList<>();
@@ -94,7 +97,7 @@ public final class FSDPTrainer implements AutoCloseable {
         this.shardingStrategy = shardingStrategy;
         this.reshardAfterForward = reshardAfterForward;
         this.useFullPrecision = useFullPrecision;
-        this.forward = ModuleForward.of(module);
+        this.moduleForward = ModuleForward.of(module);
         this.device = processGroup.getDevice();
 
         if (device.type() == DeviceType.CUDA) {
@@ -249,7 +252,7 @@ public final class FSDPTrainer implements AutoCloseable {
         Tensor fullParams = allGatherParameters();
         try {
             writeToModule(fullParams);
-            Tensor output = forward.apply(module, inputAdj);
+            Tensor output = moduleForward.apply(module, inputAdj);
             numForwardCalls++;
             return output;
         } finally {
@@ -353,7 +356,7 @@ public final class FSDPTrainer implements AutoCloseable {
         }
     }
 
-    private void zeroGrad() {
+    public void zeroGrad() {
         TensorVector params = module.parameters();
         for (long i = 0, n = params.size(); i < n; i++) {
             Tensor t = params.get(i);

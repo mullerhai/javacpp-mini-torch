@@ -21,25 +21,15 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.bytedeco.pytorch.distributed;
-import org.bytedeco.pytorch.data.*;
-import org.bytedeco.pytorch.jit.*;
-import org.bytedeco.pytorch.optim.*;
-import org.bytedeco.pytorch.optim.options.*;
+package org.bytedeco.pytorch.distributed.trainer;
+import org.bytedeco.pytorch.distributed.*;
 
-import org.bytedeco.pytorch.nn.modules.*;
 import org.bytedeco.pytorch.nn.Module;
 import org.bytedeco.pytorch.optim.Optimizer;
-import org.bytedeco.pytorch.optim.SGD;
-import org.bytedeco.pytorch.optim.options.SGDOptions;
 import org.bytedeco.pytorch.Tensor;
-import org.bytedeco.pytorch.Device;
-import org.bytedeco.pytorch.global.torch;
 
 import java.util.*;
-import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.function.*;
 
 /**
  * Enterprise-Grade Hybrid Trainer with Full Production Features.
@@ -102,7 +92,7 @@ import java.util.function.*;
  * trainer.close();
  * }</pre>
  */
-public final class EnterpriseHybridTrainer implements AutoCloseable {
+public final class EnterpriseHybridTrainer implements BaseDistributedTrainer, AutoCloseable {
     // Core components
     private final AsyncPipeline pipeline;
     private final ParallelLayers.HybridTrainer model;
@@ -454,6 +444,28 @@ public final class EnterpriseHybridTrainer implements AutoCloseable {
 
             return loss;
         });
+    }
+
+    /**
+     * Forward pass through the model (without target, for inference).
+     */
+    @Override
+    public Tensor forward(Tensor input) {
+        Module module = model.getModule();
+        return module != null ? module.forward(input) : null;
+    }
+
+    /**
+     * Complete training step (required by BaseDistributedTrainer).
+     */
+    @Override
+    public Tensor step(Tensor input, Tensor target, Optimizer optimizer) {
+        return trainStep(input, target, optimizer);
+    }
+
+    @Override
+    public Module getModule() {
+        return model.getModule();
     }
 
     /**

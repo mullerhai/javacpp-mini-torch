@@ -19,8 +19,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.bytedeco.pytorch.distributed;
-import org.bytedeco.pytorch.optim.*;
+package org.bytedeco.pytorch.distributed.trainer;
+import org.bytedeco.pytorch.distributed.ModuleForward;
+import org.bytedeco.pytorch.distributed.ProcessGroupWrapper;
+import org.bytedeco.pytorch.distributed.ReduceOp;
 
 import org.bytedeco.javacpp.Loader;
 import org.bytedeco.javacpp.annotation.Properties;
@@ -50,14 +52,14 @@ import static org.bytedeco.pytorch.global.torch.cross_entropy;
  * }</pre>
  */
 @Properties(inherit = org.bytedeco.pytorch.presets.torch.class)
-public final class DDPTrainer implements AutoCloseable {
+public final class DDPTrainer implements BaseDistributedTrainer, AutoCloseable {
     static { Loader.load(org.bytedeco.pytorch.presets.torch.class); }
 
     public static final String VERSION = "2.0";
 
     private final Module model;
     private final ProcessGroupWrapper processGroup;
-    private final ModuleForward forward;
+    private final ModuleForward moduleForward;
     private final Map<String, Object> extraState = new HashMap<>();
     private long numForwardCalls;
     private long numBackwardCalls;
@@ -66,7 +68,7 @@ public final class DDPTrainer implements AutoCloseable {
     public DDPTrainer(Module model, ProcessGroupWrapper processGroup) {
         this.model = Objects.requireNonNull(model, "model");
         this.processGroup = Objects.requireNonNull(processGroup, "processGroup");
-        this.forward = ModuleForward.of(model);
+        this.moduleForward = ModuleForward.of(model);
         initialize();
     }
 
@@ -109,7 +111,7 @@ public final class DDPTrainer implements AutoCloseable {
 
     public Tensor forward(Tensor input) {
         numForwardCalls++;
-        return forward.apply(model, input);
+        return moduleForward.apply(model, input);
     }
 
     public Tensor step(Tensor input, Tensor target, Optimizer optimizer) {

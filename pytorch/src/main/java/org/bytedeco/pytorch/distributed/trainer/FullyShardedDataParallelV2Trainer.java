@@ -20,10 +20,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.bytedeco.pytorch.distributed;
+package org.bytedeco.pytorch.distributed.trainer;
+import org.bytedeco.pytorch.distributed.*;
+import org.bytedeco.pytorch.distributed.config.MixedPrecisionConfig;
+import org.bytedeco.pytorch.distributed.enums.ShardingStrategy;
 import org.bytedeco.pytorch.global.torch;
-import org.bytedeco.pytorch.nn.modules.*;
-import org.bytedeco.pytorch.optim.*;
 
 import org.bytedeco.javacpp.Loader;
 import org.bytedeco.javacpp.annotation.Properties;
@@ -32,7 +33,6 @@ import org.bytedeco.pytorch.NoGradGuard;
 import org.bytedeco.pytorch.Scalar;
 import org.bytedeco.pytorch.Tensor;
 import org.bytedeco.pytorch.nn.Module;
-import org.bytedeco.pytorch.nn.modules.LinearImpl;
 import org.bytedeco.pytorch.optim.Optimizer;
 
 import java.util.ArrayList;
@@ -41,7 +41,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
-import static org.bytedeco.pytorch.global.torch.ScalarType;
 import static org.bytedeco.pytorch.global.torch.cat;
 import static org.bytedeco.pytorch.global.torch.empty;
 import static org.bytedeco.pytorch.global.torch.zeros;
@@ -88,7 +87,7 @@ import static org.bytedeco.pytorch.global.torch.zeros_like;
  * }</pre>
  */
 @Properties(inherit = org.bytedeco.pytorch.presets.torch.class)
-public final class FullyShardedDataParallelV2Trainer implements AutoCloseable {
+public final class FullyShardedDataParallelV2Trainer implements BaseDistributedTrainer, AutoCloseable {
     static { Loader.load(org.bytedeco.pytorch.presets.torch.class); }
 
     public static final String VERSION = "1.0";
@@ -103,7 +102,7 @@ public final class FullyShardedDataParallelV2Trainer implements AutoCloseable {
     private final boolean limitGpuMemory;
     private final int gradAccumSteps;
     private final TrainerStats stats = new TrainerStats();
-    private final ModuleForward forward;
+    private final ModuleForward moduleForward;
 
     /** Per-parameter FSDP units. */
     private final List<FSDPUnit> units = new ArrayList<>();
@@ -306,7 +305,7 @@ public final class FullyShardedDataParallelV2Trainer implements AutoCloseable {
         this.cpuOffload = b.cpuOffload;
         this.limitGpuMemory = b.limitGpuMemory;
         this.gradAccumSteps = Math.max(1, b.gradAccumSteps);
-        this.forward = ModuleForward.of(module);
+        this.moduleForward = ModuleForward.of(module);
 
         int world = processGroup.getWorldSize();
         int rank = processGroup.getRank();
@@ -330,6 +329,16 @@ public final class FullyShardedDataParallelV2Trainer implements AutoCloseable {
 
     public static Builder builder() { return new Builder(); }
 
+    // ── Forward method (required by BaseDistributedTrainer) ───────────────────
+
+    /**
+     * Forward pass through the distributed model.
+     * Delegates to {@link ModuleForward#apply(Module, Tensor)}.
+     */
+    public Tensor forward(Tensor input) {
+        return moduleForward.apply(module, input);
+    }
+
     // ── Full training step ─────────────────────────────────────────────────
 
     public Tensor step(Tensor input, Tensor target, Optimizer optimizer) {
@@ -341,7 +350,7 @@ public final class FullyShardedDataParallelV2Trainer implements AutoCloseable {
         for (FSDPUnit u : units) u.preForward();
 
         // Forward
-        Tensor output = forward.apply(module, input);
+        Tensor output = moduleForward.apply(module, input);
         numForwardCalls++;
         stats.fireForward(input);
 

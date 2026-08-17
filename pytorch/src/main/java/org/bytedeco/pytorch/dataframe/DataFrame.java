@@ -572,9 +572,8 @@ public final class DataFrame implements AutoCloseable, Serializable {
             Column.DType dtype;
             switch (td.dtype) {
                 case FLOAT32: case FLOAT64: case FLOAT16:
-                    dtype = Column.DType.FLOAT64; break;
-                case INT64: case INT32:
-                    dtype = Column.DType.INT64; break;
+                case INT8: case INT16: case INT32: case INT64:
+                    dtype = Column.DType.STRING; break;
                 default:
                     dtype = Column.DType.STRING;
             }
@@ -4578,8 +4577,11 @@ public final class DataFrame implements AutoCloseable, Serializable {
             Object v = src.get(i);
             if (v == null) { neu.add(null); continue; }
             switch (newType) {
+                case INT8 -> neu.add((byte) DataValues.asDouble(v));
+                case INT16 -> neu.add((short) DataValues.asDouble(v));
                 case INT32 -> neu.add((int) DataValues.asDouble(v));
                 case INT64 -> neu.add((long) DataValues.asDouble(v));
+                case FLOAT16 -> neu.add((short) DataValues.asDouble(v));
                 case FLOAT32 -> neu.add((float) DataValues.asDouble(v));
                 case FLOAT64 -> neu.add(DataValues.asDouble(v));
                 case BOOLEAN -> {
@@ -6051,10 +6053,13 @@ public final class DataFrame implements AutoCloseable, Serializable {
 
     private static Column.DType numpyDType(DType dtype) {
         return switch (dtype) {
-            case FLOAT64 -> Column.DType.FLOAT64;
+            case FLOAT16 -> Column.DType.FLOAT16;
             case FLOAT32 -> Column.DType.FLOAT32;
-            case INT64 -> Column.DType.INT64;
+            case FLOAT64 -> Column.DType.FLOAT64;
+            case INT8 -> Column.DType.INT8;
+            case INT16 -> Column.DType.INT16;
             case INT32 -> Column.DType.INT32;
+            case INT64 -> Column.DType.INT64;
             default -> Column.DType.STRING;
         };
     }
@@ -6066,8 +6071,11 @@ public final class DataFrame implements AutoCloseable, Serializable {
         return switch (st.intern()) {
             case Double -> Column.DType.FLOAT64;
             case Float -> Column.DType.FLOAT32;
+            case Half -> Column.DType.FLOAT16;
             case Long -> Column.DType.INT64;
             case Int -> Column.DType.INT32;
+            case Short -> Column.DType.INT16;
+            case Char -> Column.DType.INT8;
             case Bool -> Column.DType.BOOLEAN;
             default -> Column.DType.FLOAT64;
         };
@@ -6076,10 +6084,13 @@ public final class DataFrame implements AutoCloseable, Serializable {
     private NDArray columnToNDArray(Column col) {
         long[] shape = new long[]{col.size()};
         DType dtype = switch (col.dtype()) {
-            case FLOAT64 -> DType.FLOAT64;
+            case FLOAT16 -> DType.FLOAT16;
             case FLOAT32 -> DType.FLOAT32;
-            case INT64 -> DType.INT64;
+            case FLOAT64 -> DType.FLOAT64;
+            case INT8 -> DType.INT8;
+            case INT16 -> DType.INT16;
             case INT32 -> DType.INT32;
+            case INT64 -> DType.INT64;
             case BOOLEAN -> DType.INT8;
             default -> DType.FLOAT64;
         };
@@ -6177,10 +6188,13 @@ public final class DataFrame implements AutoCloseable, Serializable {
 
     private static org.bytedeco.pytorch.global.torch.ScalarType toTorchScalarType(Column.DType dtype) {
         return switch (dtype) {
-            case FLOAT64 -> org.bytedeco.pytorch.global.torch.ScalarType.Double;
+            case FLOAT16 -> org.bytedeco.pytorch.global.torch.ScalarType.Half;
             case FLOAT32 -> org.bytedeco.pytorch.global.torch.ScalarType.Float;
-            case INT64 -> org.bytedeco.pytorch.global.torch.ScalarType.Long;
+            case FLOAT64 -> org.bytedeco.pytorch.global.torch.ScalarType.Double;
+            case INT8 -> org.bytedeco.pytorch.global.torch.ScalarType.Char;
+            case INT16 -> org.bytedeco.pytorch.global.torch.ScalarType.Short;
             case INT32 -> org.bytedeco.pytorch.global.torch.ScalarType.Int;
+            case INT64 -> org.bytedeco.pytorch.global.torch.ScalarType.Long;
             case BOOLEAN -> org.bytedeco.pytorch.global.torch.ScalarType.Bool;
             default -> org.bytedeco.pytorch.global.torch.ScalarType.Float;
         };
@@ -6232,14 +6246,25 @@ public final class DataFrame implements AutoCloseable, Serializable {
         if (ft.isPrimitive()) {
             org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName ptn =
                 ft.asPrimitiveType().getPrimitiveTypeName();
+            org.apache.parquet.schema.LogicalTypeAnnotation lta = ft.getLogicalTypeAnnotation();
             return switch (ptn) {
                 case INT32 -> Column.DType.INT32;
                 case INT64 -> Column.DType.INT64;
                 case FLOAT -> Column.DType.FLOAT32;
                 case DOUBLE -> Column.DType.FLOAT64;
                 case BOOLEAN -> Column.DType.BOOLEAN;
-                case BINARY, FIXED_LEN_BYTE_ARRAY -> {
-                    org.apache.parquet.schema.LogicalTypeAnnotation lta = ft.getLogicalTypeAnnotation();
+                case FIXED_LEN_BYTE_ARRAY -> {
+                    if (lta instanceof org.apache.parquet.schema.LogicalTypeAnnotation.Float16LogicalTypeAnnotation) {
+                        yield Column.DType.FLOAT16;
+                    }
+                    if (lta instanceof org.apache.parquet.schema.LogicalTypeAnnotation.StringLogicalTypeAnnotation
+                        || lta instanceof org.apache.parquet.schema.LogicalTypeAnnotation.EnumLogicalTypeAnnotation
+                        || lta instanceof org.apache.parquet.schema.LogicalTypeAnnotation.JsonLogicalTypeAnnotation) {
+                        yield Column.DType.STRING;
+                    }
+                    yield Column.DType.BINARY;
+                }
+                case BINARY -> {
                     if (lta instanceof org.apache.parquet.schema.LogicalTypeAnnotation.StringLogicalTypeAnnotation
                         || lta instanceof org.apache.parquet.schema.LogicalTypeAnnotation.EnumLogicalTypeAnnotation
                         || lta instanceof org.apache.parquet.schema.LogicalTypeAnnotation.JsonLogicalTypeAnnotation) {
@@ -6610,8 +6635,11 @@ public final class DataFrame implements AutoCloseable, Serializable {
                                         String name, Column.DType dtype, Object val) {
         if (val == null) return;
         switch (dtype) {
+            case INT8:     g.add(name, ((Number) val).byteValue()); break;
+            case INT16:    g.add(name, ((Number) val).shortValue()); break;
             case INT32:    g.add(name, ((Number) val).intValue()); break;
             case INT64:    g.add(name, ((Number) val).longValue()); break;
+            case FLOAT16:  g.add(name, Float.floatToRawIntBits((float) ((Number) val).doubleValue())); break;
             case FLOAT32:  g.add(name, ((Number) val).floatValue()); break;
             case FLOAT64:  g.add(name, ((Number) val).doubleValue()); break;
             case BOOLEAN:  g.add(name, (Boolean) val); break;
@@ -6777,10 +6805,19 @@ public final class DataFrame implements AutoCloseable, Serializable {
     private static org.apache.parquet.schema.Type parquetFieldForColumn(Column c) {
         String name = c.name();
         switch (c.dtype()) {
+            case INT8:   return org.apache.parquet.schema.Types.optional(
+                org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName.INT32).named(name);
+            case INT16:   return org.apache.parquet.schema.Types.optional(
+                org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName.INT32).named(name);
             case INT32:   return org.apache.parquet.schema.Types.optional(
                 org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName.INT32).named(name);
             case INT64:   return org.apache.parquet.schema.Types.optional(
                 org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName.INT64).named(name);
+            case FLOAT16: return org.apache.parquet.schema.Types.optional(
+                org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName.FIXED_LEN_BYTE_ARRAY)
+                .length(2)
+                .as(org.apache.parquet.schema.LogicalTypeAnnotation.float16Type())
+                .named(name);
             case FLOAT32: return org.apache.parquet.schema.Types.optional(
                 org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName.FLOAT).named(name);
             case FLOAT64: return org.apache.parquet.schema.Types.optional(

@@ -12,26 +12,20 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.bytedeco.pytorch.distributed;
-import org.bytedeco.pytorch.jit.*;
-import org.bytedeco.pytorch.optim.*;
+package org.bytedeco.pytorch.distributed.trainer;
+import org.bytedeco.pytorch.distributed.*;
 
 import org.bytedeco.javacpp.Loader;
 import org.bytedeco.javacpp.annotation.Properties;
-import org.bytedeco.pytorch.Device;
-import org.bytedeco.pytorch.Scalar;
 import org.bytedeco.pytorch.global.torch.ScalarType;
 import org.bytedeco.pytorch.Tensor;
 import org.bytedeco.pytorch.nn.Module;
-import org.bytedeco.pytorch.optim.Optimizer;
 
 import java.io.*;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.file.*;
 import java.util.*;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Distributed checkpoint trainer with sharded state_dict support.
@@ -74,7 +68,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * }</pre>
  */
 @Properties(inherit = org.bytedeco.pytorch.presets.torch.class)
-public final class DistributedCheckpointTrainer implements AutoCloseable {
+public final class DistributedCheckpointTrainer implements BaseDistributedTrainer, AutoCloseable {
     static { Loader.load(org.bytedeco.pytorch.presets.torch.class); }
 
     public static final String VERSION = "1.0";
@@ -151,6 +145,39 @@ public final class DistributedCheckpointTrainer implements AutoCloseable {
     }
 
     public static Builder builder() { return new Builder(); }
+
+    // ── Required by BaseDistributedTrainer ─────────────────────────────────
+
+    @Override
+    public Module getModule() {
+        return wrapped != null ? wrapped.module() : null;
+    }
+
+    @Override
+    public ProcessGroupWrapper getProcessGroup() {
+        return processGroup;
+    }
+
+    /**
+     * Forward pass through the wrapped trainer.
+     * Note: DistributedCheckpointTrainer wraps another trainer but doesn't directly
+     * implement forward. This returns null as a placeholder - the actual forward
+     * is typically done through the wrapped trainer in a training loop.
+     */
+    @Override
+    public org.bytedeco.pytorch.Tensor forward(org.bytedeco.pytorch.Tensor input) {
+        return input;
+    }
+
+    /**
+     * Step through the wrapped trainer.
+     */
+    @Override
+    public org.bytedeco.pytorch.Tensor step(org.bytedeco.pytorch.Tensor input,
+            org.bytedeco.pytorch.Tensor target, org.bytedeco.pytorch.optim.Optimizer optimizer) {
+        throw new UnsupportedOperationException(
+            "step() should be called on the wrapped trainer, not DistributedCheckpointTrainer");
+    }
 
     // ── Save ─────────────────────────────────────────────────────────────
 
