@@ -144,16 +144,49 @@ public final class TrainerFactory {
     public static SFTConfig sftConfig(FactoryArgs args, int maxSteps) {
         TrainingArgs t = args.training();
         return SFTConfig.builder()
+                // Core training
                 .learningRate(t.learningRate())
+                .weightDecay(t.weightDecay())
                 .maxSteps(maxSteps)
+                .numTrainEpochs((int) t.numTrainEpochs())
                 .loggingSteps(Math.max(1, t.loggingSteps()))
+                .saveSteps(Math.max(1, t.saveSteps()))
+                .evalSteps(t.evalSteps() > 0 ? t.evalSteps() : -1)
+                .warmupSteps(t.warmupSteps() > 0 ? t.warmupSteps() : 0)
+                .warmupRatio(t.warmupRatio())
                 .gradientAccumulationSteps(Math.max(1, t.gradientAccumulationSteps()))
                 .maxGradNorm(t.maxGradNorm() > 0 ? t.maxGradNorm() : 1.0)
+                .perDeviceTrainBatchSize(t.perDeviceTrainBatchSize())
+                .perDeviceEvalBatchSize(t.perDeviceEvalBatchSize())
+                .lrSchedulerType(t.lrSchedulerType())
+                // Precision
                 .fp16(t.fp16())
-                .seed(t.seed())
+                .bf16(t.bf16())
+                .gradientCheckpointing(t.gradientCheckpointing())
+                // Optimization
+                .optim("adamw_torch")
+                .adamBeta1(0.9)
+                .adamBeta2(0.999)
+                .adamEpsilon(1e-8)
+                // Dataset
                 .maxSeqLength(Math.max(8, args.data().cutoffLen()))
                 .ignoreIndex(-100L)
                 .packing(args.data().packing())
+                .datasetTextField(args.data().template())
+                // Output
+                .outputDir(t.outputDir())
+                .saveTotalLimit(String.valueOf(t.saveTotalLimit()))
+                .loadBestModelAtEnd(false)
+                .saveState(true)
+                .useFlashAttn(false)
+                // Seed
+                .seed((int) t.seed())
+                // Misc
+                .neftuneAlpha(0.0)
+                .groupByLength(false)
+                .ddpTimeout(t.ddpTimeout())
+                // Legacy margin
+                .margin(0.0)
                 .build();
     }
 

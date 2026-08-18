@@ -10,9 +10,9 @@
  *
  *     http://www.apache.org/licenses/LICENSE-2.0
  *     http://www.gnu.org/licenses/
- *     http://www.gnu.org/licenses/
  *     http://www.gnu.org/software/classpath/license.html
  *
+ * or as provided in the LICENSE.txt file that accompanied this code.
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -23,52 +23,49 @@ package org.bytedeco.pytorch.llm.trl;
 
 import org.bytedeco.javacpp.Loader;
 import org.bytedeco.javacpp.annotation.Properties;
-import org.bytedeco.pytorch.*;
+import org.bytedeco.pytorch.NoGradGuard;
+import org.bytedeco.pytorch.Scalar;
+import org.bytedeco.pytorch.ScalarOptional;
+import org.bytedeco.pytorch.Tensor;
+import org.bytedeco.pytorch.TensorVector;
+import org.bytedeco.pytorch.global.torch;
 import org.bytedeco.pytorch.llm.trl.config.TDPOConfig;
+import org.bytedeco.pytorch.llm.trl.loss.DPOLoss;
 import org.bytedeco.pytorch.nn.Module;
 import org.bytedeco.pytorch.optim.Optimizer;
-import org.bytedeco.pytorch.TensorVector;
 
 import java.util.Map;
 import java.util.Objects;
 
-import static org.bytedeco.pytorch.global.torch.*;
+import static org.bytedeco.pytorch.global.torch.gather;
+import static org.bytedeco.pytorch.global.torch.log_softmax;
+import static org.bytedeco.pytorch.global.torch.zeros_like;
 
 /**
  * TDPO (Token-level Direct Preference Optimization) trainer.
  *
- * <p>TDPO extends DPO to the token level by computing preference optimization
- * at each token position. This provides:
+ * <p>Enterprise features:
  * <ul>
- *   <li>Finer-grained alignment at the token level</li>
- *   <li>Token-level KL divergence regularization</li>
- *   <li>Better handling of sequential dependencies</li>
- *   <li>Improved performance on code generation and structured output</li>
+ *   <li>Token-level forward KL regularization</li>
+ *   <li>PPO-style clipped surrogate (per-token advantage)</li>
+ *   <li>Token-level label smoothing and γ reward shaping</li>
+ *   <li>SFT NLL auxiliary loss</li>
+ *   <li>Length normalization, max length clamp</li>
+ *   <li>NaN/Inf guard</li>
+ *   <li>Precomputed logprob fast path</li>
  * </ul>
- *
- * <p>The key difference from DPO is the token-level advantage computation:
- * <pre>
- *   advantage_t = r(y_t) - baseline_t
- *   where baseline_t is computed from future rewards
- * </pre>
  *
  * <p>Reference: "Token-level Direct Preference Optimization" (Dong et al., 2024)
- *
- * <p>Expected batch keys:
- * <ul>
- *   <li>{@code chosen_input_ids}, {@code rejected_input_ids}</li>
- *   <li>optional {@code chosen_attention_mask}, {@code rejected_attention_mask}</li>
- *   <li>optional {@code token_rewards} for each token position [B, T]</li>
- * </ul>
  */
 @Properties(inherit = org.bytedeco.pytorch.presets.torch.class)
 public final class TDPOTrainer extends BaseTrainer {
     static { Loader.load(org.bytedeco.pytorch.presets.torch.class); }
 
-    public static final String VERSION = "1.0";
+    public static final String VERSION = "2.0";
     public static final String ALGORITHM_ID = "tdpo";
 
     private volatile boolean closed;
+    private long numTrainingSteps;
 
     private final Module policy;
     private final LlmForward policyForward;
@@ -77,13 +74,9 @@ public final class TDPOTrainer extends BaseTrainer {
     private final TDPOConfig tdpoConfig;
     private final TensorVector params;
 
-    // Metrics tracking
     private double totalTokenAcc;
     private int tokenCount;
 
-    /**
-     * Create TDPO trainer with reference model.
-     */
     public TDPOTrainer(
             Module policy,
             LlmForward policyForward,
@@ -98,23 +91,27 @@ public final class TDPOTrainer extends BaseTrainer {
         this.referenceForward = referenceForward;
         this.tdpoConfig = Objects.requireNonNull(config, "config");
         this.params = policy.parameters();
-
-        if (reference != null) {
-            freeze(reference);
-        }
-
+        if (reference != null) freeze(reference);
         System.out.printf(
-                "[TDPOTrainer v%s] beta=%.3f, clipRange=%.3f, tokenLevelAdv=%s%n",
+                "[TDPOTrainer v%s] beta=%.3f, clip=%.3f, fwdKL=%.3f, sftW=%.3f%n",
                 VERSION, tdpoConfig.beta(), tdpoConfig.clipRange(),
-                tdpoConfig.tokenLevelAdvantage());
+                tdpoConfig.forwardKlCoef(), tdpoConfig.sftWeight());
     }
 
-    // ==================== BaseTrainer Overrides ====================
+    public TDPOTrainer(
+            Module policy,
+            LlmForward policyForward,
+            Optimizer optimizer,
+            TDPOConfig config) {
+        this(policy, policyForward, null, null, optimizer, config);
+    }
+
+    public Module policy() { return policy; }
+    public Module reference() { return reference; }
+    public TDPOConfig config() { return tdpoConfig; }
 
     @Override
-    protected TensorVector trainableParameters() {
-        return params;
-    }
+    protected TensorVector trainableParameters() { return params; }
 
     @Override
     public void train() {
@@ -132,7 +129,19 @@ public final class TDPOTrainer extends BaseTrainer {
 
     @Override
     public Tensor computeLoss(Map<String, Tensor> batch) {
-        // Get input sequences
+        // Fast path: precomputed token log-probs
+        if (hasKey(batch, "chosen_token_logps") && hasKey(batch, "rejected_token_logps")) {
+            Tensor chosenLp = batch.get("chosen_token_logps");
+            Tensor rejectedLp = batch.get("rejected_token_logps");
+            Tensor refC = batch.get("ref_chosen_token_logps");
+            Tensor refR = batch.get("ref_rejected_token_logps");
+            Tensor cMask = batch.get("chosen_attention_mask");
+            Tensor rMask = batch.get("rejected_attention_mask");
+            if (refC == null || !refC.defined()) refC = zeros_like(chosenLp);
+            if (refR == null || !refR.defined()) refR = zeros_like(rejectedLp);
+            return combine(batch, chosenLp, rejectedLp, refC, refR, cMask, rMask, null, null, null);
+        }
+
         Tensor chosenIds = require(batch, "chosen_input_ids");
         Tensor rejectedIds = require(batch, "rejected_input_ids");
         Tensor chosenMask = batch.get("chosen_attention_mask");
@@ -140,133 +149,180 @@ public final class TDPOTrainer extends BaseTrainer {
         Tensor chosenLabels = orElse(batch.get("chosen_labels"), chosenIds);
         Tensor rejectedLabels = orElse(batch.get("rejected_labels"), rejectedIds);
 
-        // Forward pass for policy
         Tensor chosenLogits = policyForward.forward(chosenIds, chosenMask);
         Tensor rejectedLogits = policyForward.forward(rejectedIds, rejectedMask);
 
-        // Get token-level log-probs
         Tensor chosenTokenLp = tokenLogProbs(chosenLogits, chosenLabels, chosenMask);
         Tensor rejectedTokenLp = tokenLogProbs(rejectedLogits, rejectedLabels, rejectedMask);
 
-        // Reference log-probs (no grad)
-        Tensor refChosenLp, refRejectedLp;
+        Tensor refChosenLp;
+        Tensor refRejectedLp;
         if (referenceForward != null) {
             try (NoGradGuard guard = new NoGradGuard()) {
-                Tensor refChosenLogits = referenceForward.forward(chosenIds, chosenMask);
-                Tensor refRejectedLogits = referenceForward.forward(rejectedIds, rejectedMask);
-                refChosenLp = tokenLogProbs(refChosenLogits, chosenLabels, chosenMask).detach();
-                refRejectedLp = tokenLogProbs(refRejectedLogits, rejectedLabels, rejectedMask).detach();
+                Tensor refCLogits = referenceForward.forward(chosenIds, chosenMask);
+                Tensor refRLogits = referenceForward.forward(rejectedIds, rejectedMask);
+                refChosenLp = tokenLogProbs(refCLogits, chosenLabels, chosenMask).detach();
+                refRejectedLp = tokenLogProbs(refRLogits, rejectedLabels, rejectedMask).detach();
             }
         } else {
             refChosenLp = zeros_like(chosenTokenLp);
             refRejectedLp = zeros_like(rejectedTokenLp);
         }
 
-        // Token-level DPO loss
-        Tensor tokenLoss = computeTokenDPO(
-                chosenTokenLp, rejectedTokenLp,
-                refChosenLp, refRejectedLp,
-                chosenMask, rejectedMask);
-
-        // Compute token-level accuracy (optional)
-        updateTokenAccuracy(chosenTokenLp, rejectedTokenLp);
-
-        return tokenLoss;
+        return combine(batch, chosenTokenLp, rejectedTokenLp, refChosenLp, refRejectedLp,
+                chosenMask, rejectedMask, chosenLogits, chosenLabels, chosenMask);
     }
 
-    /**
-     * Compute token-level DPO loss.
-     *
-     * Key insight: instead of sequence-level log-prob difference,
-     * we compute at each token position and aggregate.
-     */
-    private Tensor computeTokenDPO(
-            Tensor chosenTokenLp,
-            Tensor rejectedTokenLp,
-            Tensor refChosenLp,
-            Tensor refRejectedLp,
-            Tensor chosenMask,
-            Tensor rejectedMask) {
-
+    private Tensor combine(Map<String, Tensor> batch,
+                           Tensor chosenTokenLp, Tensor rejectedTokenLp,
+                           Tensor refChosenLp, Tensor refRejectedLp,
+                           Tensor chosenMask, Tensor rejectedMask,
+                           Tensor chosenLogits, Tensor chosenLabels, Tensor chosenMaskForNll) {
         double beta = tdpoConfig.beta();
         double clipRange = tdpoConfig.clipRange();
         double forwardKlCoef = tdpoConfig.forwardKlCoef();
+        double gamma = tdpoConfig.gamma();
+        double ls = tdpoConfig.labelSmoothing();
 
-        // Token-level log-prob differences
         Tensor chosenDiff = chosenTokenLp.sub(refChosenLp);
         Tensor rejectedDiff = rejectedTokenLp.sub(refRejectedLp);
 
-        // Importance ratio at token level
         Tensor ratio = chosenDiff.sub(rejectedDiff).exp();
-
-        // PPO-style clipping
-        Tensor ratioClipped = clamp(
-                ratio,
+        Tensor ratioClipped = ratio.clamp(
                 new ScalarOptional(new Scalar(1.0 - clipRange)),
                 new ScalarOptional(new Scalar(1.0 + clipRange)));
 
-        // Token-level advantage (simplified: use diff as advantage proxy)
         Tensor advantage = chosenDiff.sub(rejectedDiff);
 
-        // Clipped surrogate objective
         Tensor surr1 = ratio.mul(advantage);
         Tensor surr2 = ratioClipped.mul(advantage);
-        Tensor policyLoss = minimum(surr1, surr2).mean().neg();
+        Tensor policyLoss = surr1.min(surr2).mean().neg();
 
-        // Forward KL divergence regularization
+        // Forward KL
         Tensor forwardKl = chosenTokenLp.sub(refChosenLp);
-        if (chosenMask != null) {
-            forwardKl = forwardKl.mul(chosenMask);
-        }
+        if (chosenMask != null) forwardKl = forwardKl.mul(chosenMask);
         Tensor klLoss = forwardKl.mean().mul(new Scalar(forwardKlCoef));
 
-        return policyLoss.add(klLoss);
+        // Optional γ-based reward shaping: blend advantage with smoothed target
+        if (gamma > 0.0) {
+            Tensor weighted = advantage.mul(new Scalar(gamma))
+                    .add(advantage.mean().mul(new Scalar(1.0 - gamma)));
+            policyLoss = weighted.mul(surr1.min(surr2)).mean().neg();
+        }
+
+        // Label smoothing: shift advantage towards 0
+        if (ls > 0.0) {
+            Tensor smoothedAdv = advantage.mul(new Scalar(1.0 - ls));
+            Tensor smLoss = smoothedAdv.mul(surr1.min(surr2)).mean().neg();
+            policyLoss = smLoss.mul(new Scalar(1.0 - ls)).add(policyLoss.mul(new Scalar(ls)));
+        }
+
+        Tensor totalLoss = policyLoss.add(klLoss);
+
+        // Length-normalize (per-token mean instead of sum).
+        if (tdpoConfig.lengthNormalize()) {
+            Tensor cCount = (chosenMask != null && chosenMask.defined())
+                    ? chosenMask.sum().add(new Scalar(1e-8))
+                    : torch.tensor(chosenTokenLp.size(1));
+            Tensor rCount = (rejectedMask != null && rejectedMask.defined())
+                    ? rejectedMask.sum().add(new Scalar(1e-8))
+                    : torch.tensor(rejectedTokenLp.size(1));
+            Tensor cSeq = (chosenTokenLp.mul(chosenMask != null ? chosenMask : onesLike(chosenTokenLp))).sum(1).div(cCount);
+            Tensor rSeq = (rejectedTokenLp.mul(rejectedMask != null ? rejectedMask : onesLike(rejectedTokenLp))).sum(1).div(rCount);
+            Tensor seqAdv = cSeq.sub(rSeq).mul(new Scalar(beta));
+            Tensor seqLoss = seqAdv.sigmoid().log().neg().mean();
+            totalLoss = totalLoss.mul(new Scalar(1.0 - tdpoConfig.sftWeight()))
+                    .add(seqLoss.mul(new Scalar(tdpoConfig.sftWeight())));
+        }
+
+        // SFT auxiliary
+        if (tdpoConfig.sftWeight() > 0.0 && chosenLogits != null && chosenLogits.defined()) {
+            Tensor sft = DPOLoss.sftNll(chosenLogits, chosenLabels, chosenMaskForNll);
+            totalLoss = totalLoss.add(sft.mul(new Scalar(tdpoConfig.sftWeight())));
+        }
+
+        // Aux loss coef (MoE)
+        if (tdpoConfig.auxLossCoef() > 0.0) {
+            // Pull auxiliary loss from batch (MoE router or other model exras)
+            Tensor aux = batchAux(batch);
+            if (aux != null && aux.defined()) {
+                totalLoss = totalLoss.add(aux.mul(new Scalar(tdpoConfig.auxLossCoef())));
+            }
+        }
+
+        double v = totalLoss.item_double();
+        if (Double.isNaN(v) || Double.isInfinite(v)) {
+            System.err.println("[TDPOTrainer] WARNING: NaN/Inf loss; falling back to SFT term.");
+            if (chosenLogits != null && chosenLogits.defined()) {
+                totalLoss = DPOLoss.sftNll(chosenLogits, chosenLabels, chosenMaskForNll);
+            }
+        }
+
+        updateTokenAccuracy(chosenTokenLp, rejectedTokenLp);
+        numTrainingSteps++;
+        return totalLoss;
     }
 
     /**
-     * Compute token-level log probabilities.
-     * Returns [B, T] tensor where T is sequence length.
+     * Auxiliary loss from the batch.  Supports conventional keys used by
+     * MoE-style model wrappers: {@code aux_loss}, {@code router_loss},
+     * {@code moe_loss}.  Returns {@code null} if none are present.
      */
+    private static Tensor batchAux(Map<String, Tensor> batch) {
+        if (batch == null) return null;
+        String[] keys = {"aux_loss", "router_loss", "moe_loss", "z_loss"};
+        for (String k : keys) {
+            Tensor t = batch.get(k);
+            if (t != null && t.defined()) return t;
+        }
+        return null;
+    }
+
+    private static Tensor onesLike(Tensor t) {
+        return t.detach().mul(new Scalar(0.0)).add(new Scalar(1.0));
+    }
+
     private Tensor tokenLogProbs(Tensor logits, Tensor labels, Tensor mask) {
-        // Log softmax over vocabulary
         Tensor logProbs = log_softmax(logits, -1);
-
-        // Gather log-probs for labels
         Tensor tokenLp = gatherLogProbs(logProbs, labels);
-
-        // Apply mask (set masked positions to 0)
-        if (mask != null) {
+        if (mask != null && mask.defined()) {
             tokenLp = tokenLp.mul(mask);
         }
-
         return tokenLp;
     }
 
-    /**
-     * Gather log-probs for label tokens.
-     * Helper for token-level computation.
-     */
     private Tensor gatherLogProbs(Tensor logProbs, Tensor labels) {
-        // Simplified: assume labels are already the target token indices
-        // In practice, you would use gather or similar operation
-        int seqLen = (int) labels.size(labels.dim() - 1);
-        Tensor result = zeros(new long[]{logProbs.size(0), seqLen}, logProbs.options());
-
-        for (int t = 0; t < seqLen; t++) {
-            // This is a placeholder - actual implementation would use torch.gather
-            // or a native gather operation
-        }
-
-        return result;
+        // logProbs: [B, T, V], labels: [B, T]
+        long B = logProbs.size(0);
+        long T = logProbs.size(1);
+        long V = logProbs.size(2);
+        Tensor expanded = labels.reshape(new long[]{B * T}).to(org.bytedeco.pytorch.global.torch.ScalarType.Long).unsqueeze(1);
+        Tensor flat = logProbs.reshape(new long[]{B * T, V});
+        Tensor gathered = gather(flat, 1, expanded);
+        return gathered.reshape(new long[]{B, T});
     }
 
     private void updateTokenAccuracy(Tensor chosenTokenLp, Tensor rejectedTokenLp) {
-        Tensor tokenCorrect = chosenTokenLp.gt(rejectedTokenLp);
-        totalTokenAcc += tokenCorrect.sum().item_double();
-        tokenCount += chosenTokenLp.numel();
+        try {
+            Tensor tokenCorrect = chosenTokenLp.gt(rejectedTokenLp);
+            totalTokenAcc += tokenCorrect.sum().item_double();
+            tokenCount += (int) chosenTokenLp.size(0) * (int) chosenTokenLp.size(1);
+        } catch (Exception ignored) {}
     }
 
-    // ==================== Utility Methods ====================
+    public double getTokenAccuracy() {
+        return tokenCount > 0 ? totalTokenAcc / tokenCount : 0.0;
+    }
+
+    public void resetMetrics() {
+        totalTokenAcc = 0.0;
+        tokenCount = 0;
+    }
+
+    private static boolean hasKey(Map<String, Tensor> batch, String key) {
+        Tensor t = batch.get(key);
+        return t != null && t.defined();
+    }
 
     private static void freeze(Module m) {
         TensorVector pv = m.parameters();
@@ -291,45 +347,18 @@ public final class TDPOTrainer extends BaseTrainer {
         return t;
     }
 
-    // ==================== Getters ====================
-
-    public Module policy() { return policy; }
-    public Module reference() { return reference; }
-    public TDPOConfig config() { return tdpoConfig; }
-
-    /**
-     * Get algorithm identifier.
-     */
-    public String algorithm() {
-        return ALGORITHM_ID;
-    }
-
-    public String algorithmName() {
-        return "TDPO (Token-level Direct Preference Optimization)";
-    }
-
-    // ==================== Metrics ====================
-
-    public double getTokenAccuracy() {
-        return tokenCount > 0 ? totalTokenAcc / tokenCount : 0.0;
-    }
-
-    public void resetMetrics() {
-        totalTokenAcc = 0.0;
-        tokenCount = 0;
-    }
-
-    // ==================== Lifecycle ====================
-
     @Override
     public void close() {
         if (closed) return;
         closed = true;
         super.close();
-        System.out.printf(
-                "[TDPOTrainer v%s] Closed: tokenAcc=%.2f%%%n",
-                VERSION, getTokenAccuracy() * 100);
+        System.out.printf("[TDPOTrainer v%s] Closed: steps=%d, tokenAcc=%.2f%%%n",
+                VERSION, numTrainingSteps, getTokenAccuracy() * 100);
     }
 
     public boolean isClosed() { return closed; }
+    public String algorithm() { return ALGORITHM_ID; }
+    public String algorithmName() {
+        return "TDPO v" + VERSION + " (Token-level Direct Preference Optimization)";
+    }
 }

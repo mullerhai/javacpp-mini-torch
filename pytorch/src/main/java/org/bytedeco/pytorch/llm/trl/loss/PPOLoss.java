@@ -114,8 +114,59 @@ public final class PPOLoss {
         return new Result(total, policyLoss, valueLoss, ent);
     }
 
+    /**
+     * Extended variant: clip the ratio additionally by {@code ratioRange}
+     * (typically equals {@code clipRange} but exposed separately) and apply a
+     * hard {@code ratioThreshold} that zeros out ratios exceeding it.
+     */
+    public static Result compute(
+            Tensor newLogprobs,
+            Tensor oldLogprobs,
+            Tensor advantages,
+            Tensor values,
+            Tensor returns,
+            Tensor oldValues,
+            Tensor entropy,
+            double clipRange,
+            double clipRangeVf,
+            double vfCoef,
+            double entCoef,
+            double clipRangeRatio,
+            double ratioThreshold) {
+        Tensor logRatio = newLogprobs.sub(oldLogprobs);
+        // Hard threshold on the log-ratio: clamp to (-ln rThr, +ln rThr).
+        if (ratioThreshold > 0.0) {
+            double lim = Math.log(ratioThreshold);
+            logRatio = clamp(logRatio, new ScalarOptional(new Scalar(-lim)), new ScalarOptional(new Scalar(lim)));
+        }
+        Tensor ratio = logRatio.exp();
+        Tensor surr1 = ratio.mul(advantages);
+        Tensor ratioClipped = clamp(ratio,
+                new ScalarOptional(new Scalar(1.0 - clipRangeRatio)),
+                new ScalarOptional(new Scalar(1.0 + clipRangeRatio)));
+        Tensor surr2 = ratioClipped.mul(advantages);
+        Tensor policyLoss = min(surr1, surr2).mean().neg();
+
+        Tensor valueLoss;
+        if (clipRangeVf > 0.0 && oldValues != null && oldValues.defined()) {
+            Tensor vClipped = oldValues.add(
+                    clamp(values.sub(oldValues),
+                            new ScalarOptional(new Scalar(-clipRangeVf)),
+                            new ScalarOptional(new Scalar(clipRangeVf))));
+            Tensor vf1 = values.sub(returns).pow(new Scalar(2.0));
+            Tensor vf2 = vClipped.sub(returns).pow(new Scalar(2.0));
+            valueLoss = elementwiseMax(vf1, vf2).mean().mul(new Scalar(0.5));
+        } else {
+            valueLoss = values.sub(returns).pow(new Scalar(2.0)).mean().mul(new Scalar(0.5));
+        }
+        Tensor ent = entropy.mean();
+        Tensor total = policyLoss
+                .add(valueLoss.mul(new Scalar(vfCoef)))
+                .sub(ent.mul(new Scalar(entCoef)));
+        return new Result(total, policyLoss, valueLoss, ent);
+    }
+
     private static Tensor elementwiseMax(Tensor a, Tensor b) {
-        // max(a,b) = 0.5 * (a+b + |a-b|)
         Tensor diff = a.sub(b).abs();
         return a.add(b).add(diff).mul(new Scalar(0.5));
     }

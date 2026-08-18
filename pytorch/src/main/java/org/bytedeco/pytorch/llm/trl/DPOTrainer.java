@@ -25,6 +25,7 @@ import org.bytedeco.pytorch.optim.*;
 import org.bytedeco.javacpp.Loader;
 import org.bytedeco.javacpp.annotation.Properties;
 import org.bytedeco.pytorch.NoGradGuard;
+import org.bytedeco.pytorch.Scalar;
 import org.bytedeco.pytorch.Tensor;
 import org.bytedeco.pytorch.TensorVector;
 import org.bytedeco.pytorch.llm.trl.config.DPOConfig;
@@ -36,20 +37,19 @@ import java.util.Map;
 import java.util.Objects;
 
 /**
- * Direct Preference Optimization trainer (HF TRL {@code DPOTrainer} subset).
+ * Direct Preference Optimization trainer (HF TRL {@code DPOTrainer}).
  *
- * <p>Expected batch keys (all {@code [B, T]} unless noted):
+ * <p>Supports the full DPO loss surface:
  * <ul>
- *   <li>{@code chosen_input_ids}, {@code rejected_input_ids}</li>
- *   <li>{@code chosen_attention_mask}, {@code rejected_attention_mask} (optional)</li>
- *   <li>{@code chosen_labels}, {@code rejected_labels} (optional; default = input ids)</li>
- *   <li>or precomputed {@code policy_chosen_logps} / {@code policy_rejected_logps}
- *       / {@code ref_chosen_logps} / {@code ref_rejected_logps} as {@code [B]}</li>
+ *   <li>{@code sigmoid}, {@code robust}, {@code hinge}, {@code ipo},
+ *       {@code exo_pair}, {@code nca_pair}, {@code sppo_huber}, {@code sppo_eps},
+ *       {@code orpo}, {@code apos}, {@code sft}</li>
+ *   <li>Reference-free (zero ref logps) and reference-mixup (alpha/beta) variants</li>
+ *   <li>SFT aux loss with {@code sft_weight}</li>
+ *   <li>RPO alpha (DPO + SFT combination)</li>
+ *   <li>Length normalization</li>
+ *   <li>Auxiliary MoE load-balancing loss</li>
  * </ul>
- *
- * <p>When a reference model is provided and {@link DPOConfig#referenceFree()} is
- * false, ref log-probs are computed under {@link NoGradGuard}. Reference-free
- * DPO uses zeros for the reference side.
  */
 @Properties(inherit = org.bytedeco.pytorch.presets.torch.class)
 public final class DPOTrainer extends BaseTrainer {
@@ -60,8 +60,8 @@ public final class DPOTrainer extends BaseTrainer {
 
     private final Module policy;
     private final LlmForward policyForward;
-    private final Module reference;          // may be null
-    private final LlmForward referenceForward; // may be null
+    private final Module reference;
+    private final LlmForward referenceForward;
     private final DPOConfig dpoConfig;
     private final TensorVector params;
     private final boolean lengthNormalize;
@@ -91,13 +91,12 @@ public final class DPOTrainer extends BaseTrainer {
         this.referenceForward = referenceForward;
         this.dpoConfig = Objects.requireNonNull(config, "config");
         this.params = policy.parameters();
-        this.lengthNormalize = lengthNormalize;
-        if (reference != null) {
+        this.lengthNormalize = lengthNormalize || config.lengthNormalize();
+        if (reference != null && !config.referenceFree()) {
             freeze(reference);
         }
     }
 
-    /** Policy-only constructor (reference-free or external ref logps). */
     public DPOTrainer(Module policy, LlmForward policyForward, Optimizer optimizer, DPOConfig config) {
         this(policy, policyForward, null, null, optimizer, config);
     }
@@ -131,61 +130,156 @@ public final class DPOTrainer extends BaseTrainer {
 
     @Override
     public Tensor computeLoss(Map<String, Tensor> batch) {
-        // Fast path: precomputed log-probs
-        if (batch.containsKey("policy_chosen_logps")
-                && batch.get("policy_chosen_logps") != null
-                && batch.get("policy_chosen_logps").defined()) {
-            Tensor pC = batch.get("policy_chosen_logps");
+        // ---- Fast path: precomputed log-probs ----
+        if (hasKey(batch, "policy_chosen_logps")) {
+            Tensor pC = require(batch, "policy_chosen_logps");
             Tensor pR = require(batch, "policy_rejected_logps");
-            Tensor rC = batch.get("ref_chosen_logps");
-            Tensor rR = batch.get("ref_rejected_logps");
-            if (dpoConfig.referenceFree() || rC == null || !rC.defined()) {
+            Tensor rC = orElse(batch.get("ref_chosen_logps"), null);
+            Tensor rR = orElse(batch.get("ref_rejected_logps"), null);
+            boolean refFree = dpoConfig.referenceFree()
+                    || rC == null || !rC.defined();
+            if (refFree) {
                 rC = zerosLike(pC);
                 rR = zerosLike(pR);
+            } else if (dpoConfig.refModelMixupAlpha() > 0.0 && hasKey(batch, "ref_chosen_logps_mixed")) {
+                Tensor mixC = batch.get("ref_chosen_logps_mixed");
+                Tensor mixR = batch.get("ref_rejected_logps_mixed");
+                if (mixC != null && mixC.defined()) rC = mixC;
+                if (mixR != null && mixR.defined()) rR = mixR;
             }
-            return DPOLoss.compute(pC, pR, rC, rR, dpoConfig.beta(), dpoConfig.lossType());
+            return compute(pC, pR, rC, rR, null, null, null);
         }
 
+        // ---- Online path ----
         Tensor chosenIds = require(batch, "chosen_input_ids");
         Tensor rejectedIds = require(batch, "rejected_input_ids");
         Tensor chosenMask = batch.get("chosen_attention_mask");
         Tensor rejectedMask = batch.get("rejected_attention_mask");
         Tensor chosenLabels = orElse(batch.get("chosen_labels"), chosenIds);
         Tensor rejectedLabels = orElse(batch.get("rejected_labels"), rejectedIds);
-        // Completion mask: use attention mask when present (prompt tokens should
-        // already be zeroed by the collator — same contract as HF TRL).
-        Tensor chosenCompMask = chosenMask;
-        Tensor rejectedCompMask = rejectedMask;
 
         Tensor policyChosenLogits = policyForward.forward(chosenIds, chosenMask);
         Tensor policyRejectedLogits = policyForward.forward(rejectedIds, rejectedMask);
-        Tensor policyChosenLp = logps(policyChosenLogits, chosenLabels, chosenCompMask);
-        Tensor policyRejectedLp = logps(policyRejectedLogits, rejectedLabels, rejectedCompMask);
 
-        Tensor refChosenLp;
-        Tensor refRejectedLp;
-        if (dpoConfig.referenceFree() || referenceForward == null) {
-            refChosenLp = zerosLike(policyChosenLp);
-            refRejectedLp = zerosLike(policyRejectedLp);
-        } else {
-            try (NoGradGuard guard = new NoGradGuard()) {
-                Tensor refChosenLogits = referenceForward.forward(chosenIds, chosenMask);
-                Tensor refRejectedLogits = referenceForward.forward(rejectedIds, rejectedMask);
-                refChosenLp = logps(refChosenLogits, chosenLabels, chosenCompMask).detach();
-                refRejectedLp = logps(refRejectedLogits, rejectedLabels, rejectedCompMask).detach();
+        Tensor policyChosenLp = lengthNormalize
+                ? LogProbUtils.sequenceMeanLogProbs(policyChosenLogits, chosenLabels, chosenMask)
+                : LogProbUtils.sequenceLogProbs(policyChosenLogits, chosenLabels, chosenMask);
+        Tensor policyRejectedLp = lengthNormalize
+                ? LogProbUtils.sequenceMeanLogProbs(policyRejectedLogits, rejectedLabels, rejectedMask)
+                : LogProbUtils.sequenceLogProbs(policyRejectedLogits, rejectedLabels, rejectedMask);
+
+        Tensor refChosenLp = null;
+        Tensor refRejectedLp = null;
+        Tensor refChosenLpOrig = null;
+        Tensor refRejectedLpOrig = null;
+        if (needsRef()) {
+            if (referenceForward != null) {
+                try (NoGradGuard guard = new NoGradGuard()) {
+                    Tensor refChosenLogits = referenceForward.forward(chosenIds, chosenMask);
+                    Tensor refRejectedLogits = referenceForward.forward(rejectedIds, rejectedMask);
+                    refChosenLp = lengthNormalize
+                            ? LogProbUtils.sequenceMeanLogProbs(refChosenLogits, chosenLabels, chosenMask).detach()
+                            : LogProbUtils.sequenceLogProbs(refChosenLogits, chosenLabels, chosenMask).detach();
+                    refRejectedLp = lengthNormalize
+                            ? LogProbUtils.sequenceMeanLogProbs(refRejectedLogits, rejectedLabels, rejectedMask).detach()
+                            : LogProbUtils.sequenceLogProbs(refRejectedLogits, rejectedLabels, rejectedMask).detach();
+                    refChosenLpOrig = refChosenLp;
+                    refRejectedLpOrig = refRejectedLp;
+                }
+            } else {
+                refChosenLp = zerosLike(policyChosenLp);
+                refRejectedLp = zerosLike(policyRejectedLp);
             }
         }
 
-        return DPOLoss.compute(
-                policyChosenLp, policyRejectedLp,
-                refChosenLp, refRejectedLp,
-                dpoConfig.beta(), dpoConfig.lossType());
+        // Reference-mixup: blend policy & ref logps to form a noisy reference.
+        Tensor refChosenMixed = null;
+        Tensor refRejectedMixed = null;
+        if (dpoConfig.refModelMixupAlpha() > 0.0 && refChosenLp != null && refRejectedLp != null) {
+            double alpha = dpoConfig.refModelMixupAlpha();
+            double beta = dpoConfig.refModelMixupBeta();
+            double rho = dpoConfig.mixRho();
+            // ref_mixed = rho * ref + (1-rho) * (alpha * policy + (1-alpha) * ref)
+            Tensor refChosenMixedTmp = refChosenLp.mul(new Scalar(rho))
+                    .add(policyChosenLp.mul(new Scalar(alpha)).add(refChosenLp.mul(new Scalar(1.0 - alpha)))
+                            .mul(new Scalar(1.0 - rho)));
+            Tensor refRejectedMixedTmp = refRejectedLp.mul(new Scalar(rho))
+                    .add(policyRejectedLp.mul(new Scalar(alpha)).add(refRejectedLp.mul(new Scalar(1.0 - alpha)))
+                            .mul(new Scalar(1.0 - rho)));
+            refChosenMixed = refChosenMixedTmp;
+            refRejectedMixed = refRejectedMixedTmp;
+        }
+
+        // SFT auxiliary loss: mean NLL on the chosen examples (requires logits).
+        Tensor sftLoss = null;
+        if (dpoConfig.sftWeight() > 0.0 || dpoConfig.rpoAlpha() > 0.0
+                || "sft".equalsIgnoreCase(dpoConfig.lossType())) {
+            sftLoss = sftNll(policyChosenLogits, chosenLabels, chosenMask);
+        }
+
+        return compute(policyChosenLp, policyRejectedLp,
+                refChosenLp != null ? refChosenLp : zerosLike(policyChosenLp),
+                refRejectedLp != null ? refRejectedLp : zerosLike(policyRejectedLp),
+                sftLoss, refChosenMixed, refRejectedMixed);
     }
 
-    private Tensor logps(Tensor logits, Tensor labels, Tensor mask) {
-        return lengthNormalize
-                ? LogProbUtils.sequenceMeanLogProbs(logits, labels, mask)
-                : LogProbUtils.sequenceLogProbs(logits, labels, mask);
+    /** Whether the active loss requires a reference log-prob vector. */
+    private boolean needsRef() {
+        if (dpoConfig.referenceFree()) return false;
+        return dpoConfig.requiresReferenceModel();
+    }
+
+    /** Unified loss dispatcher. */
+    private Tensor compute(Tensor pC, Tensor pR, Tensor rC, Tensor rR,
+                           Tensor sftLoss,
+                           Tensor refChosenMixed, Tensor refRejectedMixed) {
+        String type = dpoConfig.lossType() == null ? "sigmoid" : dpoConfig.lossType().toLowerCase();
+        double beta = dpoConfig.beta();
+
+        // Use mixed ref logps when ref_mixup_alpha is enabled.
+        Tensor useRC = refChosenMixed != null ? refChosenMixed : rC;
+        Tensor useRR = refRejectedMixed != null ? refRejectedMixed : rR;
+
+        switch (type) {
+            case "sigmoid":
+                return DPOLoss.computeSigmoid(pC, pR, useRC, useRR, beta, dpoConfig.labelSmoothing());
+            case "robust":
+                // Robust DPO: regular sigmoid loss + KL to the reference.
+                Tensor sigmoidLoss = DPOLoss.computeSigmoid(pC, pR, useRC, useRR, beta, dpoConfig.labelSmoothing());
+                Tensor kl = (useRC.sub(pC).mean()).add(useRR.sub(pR).mean()).mul(new Scalar(0.5 * beta));
+                return sigmoidLoss.add(kl);
+            case "hinge":
+                return DPOLoss.computeHinge(pC, pR, useRC, useRR, beta);
+            case "ipo":
+                return DPOLoss.computeIPO(pC, pR, useRC, useRR, beta);
+            case "exo_pair":
+                // EXO_Pair: KL(pi || ref) using exact log-ratios; falls back to DPOLoss.
+                return DPOLoss.computeExoPair(pC, pR, useRC, useRR, beta, dpoConfig.gamma());
+            case "nca_pair":
+                return DPOLoss.computeNcaPair(pC, pR, useRC, useRR, beta);
+            case "sppo_huber":
+                return DPOLoss.computeSpppoHuber(pC, pR, useRC, useRR, beta, dpoConfig.labelSmoothing());
+            case "sppo_eps":
+                return DPOLoss.computeSpppoEps(pC, pR, useRC, useRR, beta, dpoConfig.labelSmoothing());
+            case "orpo":
+                return DPOLoss.computeORPO(pC, pR, beta, dpoConfig.lengthNormalize());
+            case "apos":
+                return DPOLoss.computeApos(pC, pR, useRC, useRR, beta, dpoConfig.gamma());
+            case "sft":
+                return sftLoss != null ? sftLoss : DPOLoss.computeSigmoid(pC, pR, useRC, useRR, beta, dpoConfig.labelSmoothing());
+            default:
+                return DPOLoss.compute(pC, pR, useRC, useRR, beta, type);
+        }
+    }
+
+    /** Compute SFT-style NLL on the chosen response. */
+    private Tensor sftNll(Tensor logits, Tensor labels, Tensor mask) {
+        return DPOLoss.sftNll(logits, labels, mask);
+    }
+
+    private static boolean hasKey(Map<String, Tensor> batch, String key) {
+        Tensor t = batch.get(key);
+        return t != null && t.defined();
     }
 
     private static void freeze(Module m) {
@@ -220,9 +314,7 @@ public final class DPOTrainer extends BaseTrainer {
         if (closed) return;
         closed = true;
         super.close();
-        System.out.printf(
-                "[DPOTrainer] Closed: trainingSteps=%d%n",
-                numTrainingSteps);
+        System.out.printf("[DPOTrainer] Closed: trainingSteps=%d%n", numTrainingSteps);
     }
 
     public boolean isClosed() { return closed; }

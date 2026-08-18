@@ -20,13 +20,11 @@
  * limitations under the License.
  */
 package org.bytedeco.pytorch.llm.trl;
+import org.bytedeco.pytorch.*;
 import org.bytedeco.pytorch.optim.*;
 
 import org.bytedeco.javacpp.Loader;
 import org.bytedeco.javacpp.annotation.Properties;
-import org.bytedeco.pytorch.NoGradGuard;
-import org.bytedeco.pytorch.Tensor;
-import org.bytedeco.pytorch.TensorVector;
 import org.bytedeco.pytorch.llm.trl.config.GRPOConfig;
 import org.bytedeco.pytorch.llm.trl.loss.GRPOLoss;
 import org.bytedeco.pytorch.nn.Module;
@@ -35,20 +33,20 @@ import org.bytedeco.pytorch.optim.Optimizer;
 import java.util.Map;
 import java.util.Objects;
 
+import static org.bytedeco.pytorch.global.torch.clamp;
+
 /**
- * Group Relative Policy Optimization trainer (DeepSeek-R1 / HF TRL GRPO subset).
+ * Group Relative Policy Optimization trainer (DeepSeek-R1 / HF TRL GRPO).
  *
- * <p>No value network: for each prompt, {@link GRPOConfig#numGenerations()}
- * completions are scored and advantages are group-normalized rewards.
- *
- * <p>Expected batch keys:
+ * <p>Enterprise-grade features:
  * <ul>
- *   <li>{@code rewards} — {@code [B*G]} scalar rewards</li>
- *   <li>{@code old_logprobs} — {@code [B*G]} (for clipped variant)</li>
- *   <li>{@code completion_ids} + {@code prompt_ids} (or full {@code input_ids})
- *       with optional masks — for online logprob recompute</li>
- *   <li>or precomputed {@code logprobs} {@code [B*G]}</li>
- *   <li>optional {@code ref_logprobs} for KL penalty ({@code beta > 0})</li>
+ *   <li>{@code loss_type}: {@code grpo} (clipped surrogate) or {@code dapo} (no clipping)</li>
+ *   <li>Two-sided clipping with {@code epsilon} / {@code epsilon_high} (DAPO)</li>
+ *   <li>Reward scaling ({@code none} / {@code group} / {@code batch}) and clipping</li>
+ *   <li>Advantage whitening</li>
+ *   <li>Truncated-completion masking</li>
+ *   <li>MoE router aux loss</li>
+ *   <li>vLLM server integration hook</li>
  * </ul>
  */
 @Properties(inherit = org.bytedeco.pytorch.presets.torch.class)
@@ -60,8 +58,8 @@ public final class GRPOTrainer extends BaseTrainer {
 
     private final Module policy;
     private final LlmForward policyForward;
-    private final Module reference;            // optional
-    private final LlmForward referenceForward; // optional
+    private final Module reference;
+    private final LlmForward referenceForward;
     private final GRPOConfig grpoConfig;
     private final TensorVector params;
     private final boolean useClipping;
@@ -91,7 +89,7 @@ public final class GRPOTrainer extends BaseTrainer {
         this.referenceForward = referenceForward;
         this.grpoConfig = Objects.requireNonNull(config, "config");
         this.params = policy.parameters();
-        this.useClipping = useClipping;
+        this.useClipping = useClipping && config.useClipping();
         if (reference != null) {
             freeze(reference);
         }
@@ -133,16 +131,14 @@ public final class GRPOTrainer extends BaseTrainer {
         Tensor rewards = require(batch, "rewards");
         int groupSize = grpoConfig.numGenerations();
 
+        // ----- Compute new log-probs -----
         Tensor newLogprobs;
-        if (batch.containsKey("logprobs")
-                && batch.get("logprobs") != null
-                && batch.get("logprobs").defined()) {
+        if (hasKey(batch, "logprobs")) {
             newLogprobs = batch.get("logprobs");
         } else {
             Tensor inputIds = require(batch, "input_ids");
             Tensor attentionMask = batch.get("attention_mask");
             Tensor labels = orElse(batch.get("labels"), inputIds);
-            // completion_mask zeros out prompt tokens when provided
             Tensor completionMask = orElse(batch.get("completion_mask"), attentionMask);
             Tensor logits = policyForward.forward(inputIds, attentionMask);
             newLogprobs = LogProbUtils.sequenceLogProbs(logits, labels, completionMask);
@@ -151,7 +147,7 @@ public final class GRPOTrainer extends BaseTrainer {
         Tensor oldLogprobs = batch.get("old_logprobs");
         Tensor refLogprobs = batch.get("ref_logprobs");
 
-        // Online ref logprobs if needed and not precomputed
+        // ----- Reference log-probs (if needed) -----
         if ((refLogprobs == null || !refLogprobs.defined())
                 && grpoConfig.beta() > 0.0
                 && referenceForward != null
@@ -166,28 +162,112 @@ public final class GRPOTrainer extends BaseTrainer {
             }
         }
 
-        if (useClipping
-                && oldLogprobs != null
-                && oldLogprobs.defined()
-                && grpoConfig.clipRange() > 0.0) {
-            Tensor clipped = GRPOLoss.computeClipped(
-                    newLogprobs, oldLogprobs, rewards, groupSize, grpoConfig.clipRange());
-            if (grpoConfig.beta() > 0.0 && refLogprobs != null && refLogprobs.defined()) {
-                // Add KL on top of clipped surrogate
-                Tensor kl = newLogprobs.sub(refLogprobs).mean()
-                        .mul(new org.bytedeco.pytorch.Scalar(grpoConfig.beta()));
-                return clipped.add(kl);
-            }
-            return clipped;
+        // ----- Reward scaling -----
+        if (!"none".equalsIgnoreCase(grpoConfig.scaleRewards())) {
+            rewards = scaleRewards(rewards, grpoConfig.scaleRewards(), groupSize);
         }
 
-        return GRPOLoss.compute(
-                newLogprobs, rewards, groupSize, grpoConfig.beta(), refLogprobs);
+        // ----- Reward clipping -----
+        if (grpoConfig.rewardClip() > 0.0) {
+            double clip = grpoConfig.rewardClip();
+            rewards = clamp(rewards,
+                    new org.bytedeco.pytorch.ScalarOptional(new Scalar(-clip)),
+                    new org.bytedeco.pytorch.ScalarOptional(new Scalar(clip)));
+        }
+
+        // ----- Mask truncated completions -----
+        if (grpoConfig.maskTruncatedCompletions() && hasKey(batch, "truncation_mask")) {
+            Tensor truncMask = batch.get("truncation_mask");
+            if (truncMask != null && truncMask.defined()) {
+                rewards = rewards.mul(truncMask);
+            }
+        }
+
+        // ----- Group-normalize advantages -----
+        Tensor advantages = GRPOLoss.groupNormalize(rewards, groupSize);
+
+        // ----- Advantage whitening -----
+        if (grpoConfig.whitenAdvantages()) {
+            advantages = whiten(advantages);
+        }
+
+        // ----- Advantage clipping -----
+        if (grpoConfig.advantageClip() > 0.0) {
+            double aClip = grpoConfig.advantageClip();
+            advantages = clamp(advantages,
+                    new org.bytedeco.pytorch.ScalarOptional(new Scalar(-aClip)),
+                    new org.bytedeco.pytorch.ScalarOptional(new Scalar(aClip)));
+        }
+
+        // ----- Surrogate objective -----
+        Tensor totalLoss;
+        if (!useClipping || grpoConfig.lossTypeIsDapo()) {
+            // DAPO: no clipping. Optionally with epsilon_low/epsilon_high two-sided clip.
+            Tensor ratio = newLogprobs.sub(orElse(oldLogprobs, newLogprobs)).exp();
+            if (grpoConfig.epsilonHigh() > 0.0 && grpoConfig.epsilon() != grpoConfig.epsilonHigh()) {
+                // Two-sided clipping
+                Tensor ratioClipped = clamp(ratio,
+                        new org.bytedeco.pytorch.ScalarOptional(new Scalar(1.0 - grpoConfig.epsilon())),
+                        new org.bytedeco.pytorch.ScalarOptional(new Scalar(1.0 + grpoConfig.epsilonHigh())));
+                Tensor surr = advantages.mul(ratioClipped);
+                totalLoss = surr.neg().mean();
+            } else {
+                totalLoss = advantages.mul(ratio).neg().mean();
+            }
+        } else if (oldLogprobs != null && oldLogprobs.defined() && grpoConfig.clipRange() > 0.0) {
+            Tensor clipped = GRPOLoss.computeClipped(
+                    newLogprobs, oldLogprobs, rewards, groupSize, grpoConfig.clipRange());
+            totalLoss = clipped;
+        } else {
+            totalLoss = GRPOLoss.compute(newLogprobs, rewards, groupSize,
+                    grpoConfig.beta(), refLogprobs);
+        }
+
+        // ----- KL penalty -----
+        if (grpoConfig.beta() > 0.0 && refLogprobs != null && refLogprobs.defined()) {
+            Tensor kl = newLogprobs.sub(refLogprobs).mean()
+                    .mul(new Scalar(grpoConfig.beta()));
+            totalLoss = totalLoss.add(kl);
+        }
+
+        // ----- Router aux loss (MoE) -----
+        if (grpoConfig.routerAuxLossCoef() > 0.0 && hasKey(batch, "router_aux_loss")) {
+            Tensor aux = batch.get("router_aux_loss");
+            if (aux != null && aux.defined()) {
+                totalLoss = totalLoss.add(aux.mul(new Scalar(grpoConfig.routerAuxLossCoef())));
+            }
+        }
+
+        return totalLoss;
     }
 
-    /**
-     * Group-normalize a flat reward vector (delegates to {@link GRPOLoss}).
-     */
+    /** Reward scaling variants. */
+    private static Tensor scaleRewards(Tensor rewards, String mode, int groupSize) {
+        if ("group".equalsIgnoreCase(mode)) {
+            long n = rewards.size(0);
+            if (n % groupSize != 0) {
+                return batchScale(rewards);
+            }
+            Tensor reshaped = rewards.reshape(n / groupSize, groupSize);
+            Tensor mean = reshaped.mean(new long[]{1}, true,new ScalarTypeOptional());
+            Tensor std = reshaped.std(new long[]{1}, true).add(new Scalar(1e-8));
+            return reshaped.sub(mean).div(std).reshape(n);
+        }
+        return batchScale(rewards);
+    }
+
+    private static Tensor batchScale(Tensor rewards) {
+        Tensor mean = rewards.mean();
+        Tensor std = rewards.std().add(new Scalar(1e-8));
+        return rewards.sub(mean).div(std);
+    }
+
+    private static Tensor whiten(Tensor x) {
+        Tensor mean = x.mean();
+        Tensor std = x.std().add(new Scalar(1e-8));
+        return x.sub(mean).div(std);
+    }
+
     public static Tensor groupNormalizeAdvantages(Tensor rewards, int groupSize) {
         return GRPOLoss.groupNormalize(rewards, groupSize);
     }
@@ -207,6 +287,11 @@ public final class GRPOTrainer extends BaseTrainer {
         return a != null && a.defined() ? a : b;
     }
 
+    private static boolean hasKey(Map<String, Tensor> batch, String key) {
+        Tensor t = batch.get(key);
+        return t != null && t.defined();
+    }
+
     private static Tensor require(Map<String, Tensor> batch, String key) {
         Tensor t = batch.get(key);
         if (t == null || !t.defined()) {
@@ -220,9 +305,7 @@ public final class GRPOTrainer extends BaseTrainer {
         if (closed) return;
         closed = true;
         super.close();
-        System.out.printf(
-                "[GRPOTrainer] Closed: trainingSteps=%d%n",
-                numTrainingSteps);
+        System.out.printf("[GRPOTrainer] Closed: trainingSteps=%d%n", numTrainingSteps);
     }
 
     public boolean isClosed() { return closed; }

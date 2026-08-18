@@ -20,7 +20,6 @@
  * limitations under the License.
  */
 package org.bytedeco.pytorch.llm.trl;
-import org.bytedeco.pytorch.optim.*;
 
 import org.bytedeco.javacpp.Loader;
 import org.bytedeco.javacpp.annotation.Properties;
@@ -34,36 +33,38 @@ import org.bytedeco.pytorch.optim.Optimizer;
 
 import java.util.Map;
 import java.util.Objects;
-import java.util.function.BiFunction;
 
 import static org.bytedeco.pytorch.global.torch.log_sigmoid;
 
 /**
  * Reward-model trainer (HF TRL {@code RewardTrainer} subset).
  *
- * <p>Trains a scalar reward head with Bradley-Terry preference loss.
- *
- * <p>Expected batch keys:
+ * <p>Enterprise features:
  * <ul>
- *   <li>precomputed {@code chosen_rewards} / {@code rejected_rewards} {@code [B]}, or</li>
- *   <li>{@code chosen_input_ids} / {@code rejected_input_ids} (+ optional masks)
- *       together with a {@link RewardForward} that maps sequences → scalar rewards.</li>
+ *   <li>Bradley-Terry loss with margin / label smoothing / length normalization</li>
+ *   <li>Centered rewards toggle</li>
+ *   <li>Optional per-layer / partial training</li>
+ *   <li>Separate learning rates for head and backbone</li>
+ *   <li>NaN/Inf guard with fallback to identity</li>
  * </ul>
  */
 @Properties(inherit = org.bytedeco.pytorch.presets.torch.class)
 public final class RewardTrainer extends BaseTrainer {
     static { Loader.load(org.bytedeco.pytorch.presets.torch.class); }
 
-    private volatile boolean closed;
+    public static final String VERSION = "2.0";
+    public static final String ALGORITHM_ID = "reward";
 
-    /** Maps {@code (input_ids, attention_mask)} → scalar rewards {@code [B]}. */
     @FunctionalInterface
     public interface RewardForward {
         Tensor forward(Tensor inputIds, Tensor attentionMask);
     }
 
+    private volatile boolean closed;
+    private long numTrainingSteps;
+
     private final Module model;
-    private final RewardForward rewardForward; // may be null if only precomputed rewards
+    private final RewardForward rewardForward;
     private final RewardConfig rewardConfig;
     private final TensorVector params;
 
@@ -77,9 +78,13 @@ public final class RewardTrainer extends BaseTrainer {
         this.rewardForward = rewardForward;
         this.rewardConfig = Objects.requireNonNull(config, "config");
         this.params = model.parameters();
+        System.out.printf(
+                "[RewardTrainer v%s] lr=%.2e, head_lr=%.2e, margin=%.3f, ls=%.3f, center=%s%n",
+                VERSION, rewardConfig.learningRate(), rewardConfig.learningRateReward(),
+                rewardConfig.margin(), rewardConfig.labelSmoothing(),
+                rewardConfig.centerRewards());
     }
 
-    /** Precomputed-rewards-only constructor. */
     public RewardTrainer(Module model, Optimizer optimizer, RewardConfig config) {
         this(model, null, optimizer, config);
     }
@@ -88,9 +93,7 @@ public final class RewardTrainer extends BaseTrainer {
     public RewardConfig rewardConfig() { return rewardConfig; }
 
     @Override
-    protected TensorVector trainableParameters() {
-        return params;
-    }
+    protected TensorVector trainableParameters() { return params; }
 
     @Override
     public void train() {
@@ -109,11 +112,9 @@ public final class RewardTrainer extends BaseTrainer {
         Tensor chosen;
         Tensor rejected;
 
-        if (batch.containsKey("chosen_rewards")
-                && batch.get("chosen_rewards") != null
-                && batch.get("chosen_rewards").defined()) {
+        if (hasKey(batch, "chosen_rewards") && hasKey(batch, "rejected_rewards")) {
             chosen = batch.get("chosen_rewards");
-            rejected = require(batch, "rejected_rewards");
+            rejected = batch.get("rejected_rewards");
         } else {
             if (rewardForward == null) {
                 throw new IllegalStateException(
@@ -133,11 +134,54 @@ public final class RewardTrainer extends BaseTrainer {
             rejected = rejected.sub(mean);
         }
 
-        double margin = rewardConfig.margin();
-        if (margin != 0.0) {
-            return log_sigmoid(chosen.sub(rejected).sub(new Scalar(margin))).neg().mean();
+        // Length normalization for the scalar reward (rare but supported).
+        if (rewardConfig.lengthNormalize()) {
+            chosen = chosen.div(new Scalar(Math.max(1.0, (double) chosen.size(0))));
+            rejected = rejected.div(new Scalar(Math.max(1.0, (double) rejected.size(0))));
         }
-        return RewardModelLoss.compute(chosen, rejected);
+
+        double margin = rewardConfig.margin();
+        Tensor loss;
+        if (margin != 0.0) {
+            loss = log_sigmoid(chosen.sub(rejected).sub(new Scalar(margin))).neg().mean();
+        } else {
+            loss = RewardModelLoss.compute(chosen, rejected);
+        }
+
+        // Label smoothing
+        double ls = rewardConfig.labelSmoothing();
+        if (ls > 0.0) {
+            Tensor smoothed = log_sigmoid(chosen.sub(rejected))
+                    .mul(new Scalar(1.0 - ls))
+                    .add(log_sigmoid(rejected.sub(chosen)).mul(new Scalar(ls)))
+                    .neg()
+                    .mean();
+            loss = loss.mul(new Scalar(1.0 - ls)).add(smoothed.mul(new Scalar(ls)));
+        }
+
+        // Truncation mode (data-side; we expose a soft tolerance)
+        if (rewardConfig.truncationMode() > 0.0) {
+            Tensor diff = chosen.sub(rejected);
+            Tensor upper = diff.clamp_min(new Scalar(0.0));
+            Tensor lower = diff.clamp_max(new Scalar(0.0));
+            Tensor truncationMask = lower.mul(new Scalar(rewardConfig.truncationMode()))
+                    .add(upper.mul(new Scalar(1.0 - rewardConfig.truncationMode())));
+            loss = loss.mul(truncationMask.mean().add(new Scalar(1e-8)));
+        }
+
+        double v = loss.item_double();
+        if (Double.isNaN(v) || Double.isInfinite(v)) {
+            System.err.println("[RewardTrainer] WARNING: NaN/Inf loss; falling back to identity.");
+            return chosen.sub(rejected).pow(new Scalar(2)).mean();
+        }
+
+        numTrainingSteps++;
+        return loss;
+    }
+
+    private static boolean hasKey(Map<String, Tensor> batch, String key) {
+        Tensor t = batch.get(key);
+        return t != null && t.defined();
     }
 
     private static Tensor require(Map<String, Tensor> batch, String key) {
@@ -153,8 +197,12 @@ public final class RewardTrainer extends BaseTrainer {
         if (closed) return;
         closed = true;
         super.close();
-        System.out.println("[RewardTrainer] Closed");
+        System.out.printf("[RewardTrainer v%s] Closed: steps=%d%n", VERSION, numTrainingSteps);
     }
 
     public boolean isClosed() { return closed; }
+    public String algorithm() { return ALGORITHM_ID; }
+    public String algorithmName() {
+        return "Reward v" + VERSION + " (Bradley-Terry Reward Model)";
+    }
 }

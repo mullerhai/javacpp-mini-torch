@@ -4,19 +4,15 @@
  * Licensed either under the Apache License, Version 2.0, or (at your option)
  * under the terms of the GNU General Public License as published by
  * the Free Software Foundation (subject to the "Classpath" exception),
- * either version 2, or (at your option)
- * under the terms of the GNU General Public License as published by
- * the Free Software Foundation (subject to the "Classpath" exception),
  * either version 2, or any later version (collectively, the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
  *     http://www.apache.org/licenses/LICENSE-2.0
  *     http://www.gnu.org/licenses/
- *     http://www.gnu.org/licenses/
- *     http://www.gnu.org/licenses/
  *     http://www.gnu.org/software/classpath/license.html
  *
+ * or as provided in the LICENSE.txt file that accompanied this code.
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -27,12 +23,15 @@ package org.bytedeco.pytorch.llm.trl;
 
 import org.bytedeco.javacpp.Loader;
 import org.bytedeco.javacpp.annotation.Properties;
-import org.bytedeco.pytorch.*;
+import org.bytedeco.pytorch.NoGradGuard;
+import org.bytedeco.pytorch.Scalar;
+import org.bytedeco.pytorch.Tensor;
+import org.bytedeco.pytorch.TensorVector;
 import org.bytedeco.pytorch.llm.trl.config.IPOConfig;
+import org.bytedeco.pytorch.llm.trl.loss.DPOLoss;
 import org.bytedeco.pytorch.llm.trl.loss.IPOLoss;
 import org.bytedeco.pytorch.nn.Module;
 import org.bytedeco.pytorch.optim.Optimizer;
-import org.bytedeco.pytorch.TensorVector;
 
 import java.util.Map;
 import java.util.Objects;
@@ -42,37 +41,26 @@ import static org.bytedeco.pytorch.global.torch.zeros_like;
 /**
  * IPO (Identity Preference Optimization) trainer.
  *
- * <p>IPO is a theoretically grounded preference optimization algorithm that
- * adds a regularization term to DPO, providing:
+ * <p>Reference: "A Theoretical Analysis of IPO" (Azar et al., 2024).
+ *
+ * <p>Enterprise features:
  * <ul>
- *   <li>Provable convergence to optimal policy</li>
- *   <li>Better finite-sample bounds</li>
- *   <li>Reduced reward hacking</li>
- *   <li>More stable training</li>
- * </ul>
- *
- * <p>The key difference from DPO is the squared error loss:
- * <pre>
- *   L = E[(π(y_w) - π(y_l) - 1/(2β))²]
- * </pre>
- *
- * <p>Reference: "A Theoretical Analysis of IPO" (Azar et al., 2024)
- *
- * <p>Expected batch keys:
- * <ul>
- *   <li>{@code chosen_input_ids}, {@code rejected_input_ids}</li>
- *   <li>optional {@code chosen_attention_mask}, {@code rejected_attention_mask}</li>
- *   <li>or precomputed {@code policy_chosen_logps} / {@code policy_rejected_logps}</li>
+ *   <li>Length normalization toggle (independent of ref-free mode)</li>
+ *   <li>Reference-free / precomputed logprob fast paths</li>
+ *   <li>Label smoothing-aware identity regularization</li>
+ *   <li>Optional SFT auxiliary term (sft_weight)</li>
+ *   <li>MoE aux loss integration</li>
  * </ul>
  */
 @Properties(inherit = org.bytedeco.pytorch.presets.torch.class)
 public final class IPOTrainer extends BaseTrainer {
     static { Loader.load(org.bytedeco.pytorch.presets.torch.class); }
 
-    public static final String VERSION = "1.0";
+    public static final String VERSION = "2.0";
     public static final String ALGORITHM_ID = "ipo";
 
     private volatile boolean closed;
+    private long numTrainingSteps;
 
     private final Module policy;
     private final LlmForward policyForward;
@@ -81,9 +69,6 @@ public final class IPOTrainer extends BaseTrainer {
     private final IPOConfig ipoConfig;
     private final TensorVector params;
 
-    /**
-     * Create IPO trainer with reference model.
-     */
     public IPOTrainer(
             Module policy,
             LlmForward policyForward,
@@ -98,17 +83,16 @@ public final class IPOTrainer extends BaseTrainer {
         this.referenceForward = referenceForward;
         this.ipoConfig = Objects.requireNonNull(config, "config");
         this.params = policy.parameters();
-
-        if (reference != null) {
+        if (reference != null && !config.referenceFree()) {
             freeze(reference);
         }
-
         System.out.printf(
-                "[IPOTrainer v%s] beta=%.3f, identityCoef=%.2f%n",
-                VERSION, ipoConfig.beta(), ipoConfig.identityCoef());
+                "[IPOTrainer v%s] beta=%.3f, identityCoef=%.2f, lenNorm=%s, ref_free=%s%n",
+                VERSION, ipoConfig.beta(), ipoConfig.identityCoef(),
+                ipoConfig.lengthNormalize(),
+                ipoConfig.referenceFree());
     }
 
-    /** Policy-only constructor (reference-free). */
     public IPOTrainer(
             Module policy,
             LlmForward policyForward,
@@ -117,12 +101,12 @@ public final class IPOTrainer extends BaseTrainer {
         this(policy, policyForward, null, null, optimizer, config);
     }
 
-    // ==================== BaseTrainer Overrides ====================
+    public Module policy() { return policy; }
+    public Module reference() { return reference; }
+    public IPOConfig config() { return ipoConfig; }
 
     @Override
-    protected TensorVector trainableParameters() {
-        return params;
-    }
+    protected TensorVector trainableParameters() { return params; }
 
     @Override
     public void train() {
@@ -140,14 +124,10 @@ public final class IPOTrainer extends BaseTrainer {
 
     @Override
     public Tensor computeLoss(Map<String, Tensor> batch) {
-        // Fast path: precomputed log-probs
-        if (batch.containsKey("policy_chosen_logps")
-                && batch.get("policy_chosen_logps") != null
-                && batch.get("policy_chosen_logps").defined()) {
+        if (hasKey(batch, "policy_chosen_logps")) {
             return computeFromLogps(batch);
         }
 
-        // Compute log-probs from input
         Tensor chosenIds = require(batch, "chosen_input_ids");
         Tensor rejectedIds = require(batch, "rejected_input_ids");
         Tensor chosenMask = batch.get("chosen_attention_mask");
@@ -155,17 +135,15 @@ public final class IPOTrainer extends BaseTrainer {
         Tensor chosenLabels = orElse(batch.get("chosen_labels"), chosenIds);
         Tensor rejectedLabels = orElse(batch.get("rejected_labels"), rejectedIds);
 
-        // Forward pass
         Tensor chosenLogits = policyForward.forward(chosenIds, chosenMask);
         Tensor rejectedLogits = policyForward.forward(rejectedIds, rejectedMask);
 
-        // Get log-probs
         Tensor chosenLp = logps(chosenLogits, chosenLabels, chosenMask);
         Tensor rejectedLp = logps(rejectedLogits, rejectedLabels, rejectedMask);
 
-        // Reference log-probs
-        Tensor refChosenLp, refRejectedLp;
-        if (referenceForward != null) {
+        Tensor refChosenLp;
+        Tensor refRejectedLp;
+        if (referenceForward != null && !ipoConfig.referenceFree()) {
             try (NoGradGuard guard = new NoGradGuard()) {
                 Tensor refChosenLogits = referenceForward.forward(chosenIds, chosenMask);
                 Tensor refRejectedLogits = referenceForward.forward(rejectedIds, rejectedMask);
@@ -177,28 +155,43 @@ public final class IPOTrainer extends BaseTrainer {
             refRejectedLp = zeros_like(rejectedLp);
         }
 
-        // Compute IPO loss
-        return IPOLoss.compute(
-                chosenLp, rejectedLp,
-                refChosenLp, refRejectedLp,
-                ipoConfig.beta(),
-                ipoConfig.identityCoef());
+        return combine(chosenLp, rejectedLp, refChosenLp, refRejectedLp, chosenLogits, chosenLabels, chosenMask);
     }
 
-    /**
-     * Compute IPO loss from precomputed log-probs.
-     */
+    private Tensor combine(Tensor chosenLp, Tensor rejectedLp, Tensor refChosenLp,
+                           Tensor refRejectedLp, Tensor chosenLogits,
+                           Tensor chosenLabels, Tensor chosenMask) {
+        Tensor primary = IPOLoss.compute(
+                chosenLp, rejectedLp, refChosenLp, refRejectedLp,
+                ipoConfig.beta(), ipoConfig.identityCoef());
+
+        // Label smoothing: inject a small uniform nudge on the labels (sigmoid-style).
+        if (ipoConfig.labelSmoothing() > 0.0) {
+            Tensor smoothTerm = IPOLoss.compute(
+                    chosenLp, rejectedLp, refChosenLp, refRejectedLp,
+                    ipoConfig.beta() * 0.5, ipoConfig.identityCoef() * 0.5)
+                    .mul(new Scalar(ipoConfig.labelSmoothing()));
+            primary = primary.mul(new Scalar(1.0 - ipoConfig.labelSmoothing())).add(smoothTerm);
+        }
+
+        // SFT NLL auxiliary loss (encourages chosen likelihood under the policy).
+        if (ipoConfig.sftWeight() > 0.0 && chosenLogits != null && chosenLogits.defined()) {
+            Tensor sftLoss = DPOLoss.sftNll(chosenLogits, chosenLabels, chosenMask);
+            primary = primary.add(sftLoss.mul(new Scalar(ipoConfig.sftWeight())));
+        }
+
+        numTrainingSteps++;
+        return primary;
+    }
+
     private Tensor computeFromLogps(Map<String, Tensor> batch) {
         Tensor pC = require(batch, "policy_chosen_logps");
         Tensor pR = require(batch, "policy_rejected_logps");
         Tensor rC = batch.get("ref_chosen_logps");
         Tensor rR = batch.get("ref_rejected_logps");
-
         if (rC == null || !rC.defined()) rC = zeros_like(pC);
         if (rR == null || !rR.defined()) rR = zeros_like(pR);
-
-        return IPOLoss.compute(pC, pR, rC, rR,
-                ipoConfig.beta(), ipoConfig.identityCoef());
+        return combine(pC, pR, rC, rR, null, null, null);
     }
 
     private Tensor logps(Tensor logits, Tensor labels, Tensor mask) {
@@ -207,7 +200,10 @@ public final class IPOTrainer extends BaseTrainer {
                 : LogProbUtils.sequenceLogProbs(logits, labels, mask);
     }
 
-    // ==================== Utility Methods ====================
+    private static boolean hasKey(Map<String, Tensor> batch, String key) {
+        Tensor t = batch.get(key);
+        return t != null && t.defined();
+    }
 
     private static void freeze(Module m) {
         TensorVector pv = m.parameters();
@@ -232,30 +228,18 @@ public final class IPOTrainer extends BaseTrainer {
         return t;
     }
 
-    // ==================== Getters ====================
-
-    public Module policy() { return policy; }
-    public Module reference() { return reference; }
-    public IPOConfig config() { return ipoConfig; }
-
-//    @Override
-    public String algorithm() {
-        return ALGORITHM_ID;
-    }
-
-    public String algorithmName() {
-        return "IPO (Identity Preference Optimization)";
-    }
-
-    // ==================== Lifecycle ====================
-
     @Override
     public void close() {
         if (closed) return;
         closed = true;
         super.close();
-        System.out.printf("[IPOTrainer v%s] Closed%n", VERSION);
+        System.out.printf("[IPOTrainer v%s] Closed: steps=%d%n", VERSION, numTrainingSteps);
     }
 
     public boolean isClosed() { return closed; }
+
+    public String algorithm() { return ALGORITHM_ID; }
+    public String algorithmName() {
+        return "IPO v" + VERSION + " (Identity Preference Optimization)";
+    }
 }

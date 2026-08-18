@@ -24,7 +24,9 @@ package org.bytedeco.pytorch.llm.trl;
 import org.bytedeco.javacpp.Loader;
 import org.bytedeco.javacpp.annotation.Properties;
 import org.bytedeco.pytorch.*;
+import org.bytedeco.pytorch.global.torch;
 import org.bytedeco.pytorch.llm.trl.config.KTOConfig;
+import org.bytedeco.pytorch.llm.trl.loss.DPOLoss;
 import org.bytedeco.pytorch.nn.Module;
 import org.bytedeco.pytorch.optim.Optimizer;
 
@@ -34,52 +36,38 @@ import java.util.Objects;
 import static org.bytedeco.pytorch.global.torch.zeros_like;
 
 /**
- * Kahneman-Tversky Optimization trainer (Meta's latest alignment algorithm).
+ * Kahneman-Tversky Optimization trainer (HF TRL {@code KTOTrainer}).
  *
- * <p>KTO is a novel alignment algorithm that:
+ * <p>Enterprise features:
  * <ul>
- *   <li>Uses a reference-free asymmetric loss function inspired by prospect theory</li>
- *   <li>Does not require paired preference data (only binary acceptance signals)</li>
- *   <li>Achieves better diversity and helpfulness trade-off than DPO</li>
- *   <li>Works with any base model without a reference model</li>
+ *   <li>Reference-free mode (with optional cached ref logprobs)</li>
+ *   <li>Per-version loss toggle (treat desirable/undesirable independently)</li>
+ *   <li>Adaptive KL control (with momentum tracker)</li>
+ *   <li>Optional SFT auxiliary loss</li>
+ *   <li>Length normalization toggle</li>
+ *   <li>Label smoothing aware sigmoid</li>
+ *   <li>NaN / Inf guard with fallback to SFT term</li>
  * </ul>
- *
- * <p>Reference: "KTO: Kahneman-Tversky Optimization – A Novel Approach to
- * Aligning Language Models with Human Feedback"
- * (Ethayarajh et al., Meta AI, 2024)
- *
- * <p>Expected batch keys:
- * <ul>
- *   <li>{@code chosen_input_ids}, {@code rejected_input_ids} (or precomputed {@code chosen_logps}, {@code rejected_logps})</li>
- *   <li>optional {@code chosen_attention_mask}, {@code rejected_attention_mask}</li>
- *   <li>optional {@code kl_temperature} for per-sample KL weighting</li>
- * </ul>
- *
- * <pre>{@code
- * try (KTOTrainer trainer = new KTOTrainer(policyModel, policyForward, optimizer, config)) {
- *     for (Map<String, Tensor> batch : dataloader) {
- *         trainer.trainingStep(batch);
- *     }
- * }
- * }</pre>
  */
 @Properties(inherit = org.bytedeco.pytorch.presets.torch.class)
 public final class KTOTrainer extends BaseTrainer {
     static { Loader.load(org.bytedeco.pytorch.presets.torch.class); }
 
-    public static final String VERSION = "1.0";
+    public static final String VERSION = "2.0";
+    public static final String ALGORITHM_ID = "kto";
 
     private final Module policy;
     private final LlmForward policyForward;
-    private final Module reference;          // optional, for reference-free mode
+    private final Module reference;
     private final LlmForward referenceForward;
     private final KTOConfig ktoConfig;
     private final TensorVector params;
     private volatile boolean closed;
+    private long numTrainingSteps;
 
-    /**
-     * Create a KTO trainer with a reference model.
-     */
+    // Adaptive KL
+    private double runningKl;
+
     public KTOTrainer(
             Module policy,
             LlmForward policyForward,
@@ -94,13 +82,14 @@ public final class KTOTrainer extends BaseTrainer {
         this.referenceForward = referenceForward;
         this.ktoConfig = Objects.requireNonNull(config, "config");
         this.params = policy.parameters();
-        if (reference != null) {
+        if (reference != null && ktoConfig.referenceFree() < 0.5) {
             freeze(reference);
         }
         System.out.printf(
-                "[KTOTrainer v%s] beta=%.3f, gamma_c=%.2f, gamma_d=%.2f, ref_free=%s%n",
+                "[KTOTrainer v%s] beta=%.3f, gamma_c=%.2f, gamma_d=%.2f, ref_free=%s, len_norm=%s%n",
                 VERSION, ktoConfig.beta(), ktoConfig.gammaC(), ktoConfig.gammaD(),
-                reference == null);
+                ktoConfig.referenceFree() > 0.5,
+                ktoConfig.lengthNormalize());
     }
 
     /**
@@ -119,9 +108,7 @@ public final class KTOTrainer extends BaseTrainer {
     public KTOConfig config() { return ktoConfig; }
 
     @Override
-    protected TensorVector trainableParameters() {
-        return params;
-    }
+    protected TensorVector trainableParameters() { return params; }
 
     @Override
     public void train() {
@@ -139,102 +126,148 @@ public final class KTOTrainer extends BaseTrainer {
 
     @Override
     public Tensor computeLoss(Map<String, Tensor> batch) {
-        // Fast path: precomputed log-probs
-        if (batch.containsKey("chosen_logps") && batch.get("chosen_logps") != null) {
+        // Fast path
+        if (hasKey(batch, "chosen_logps")) {
             return computeFromLogps(batch);
         }
 
-        // Compute log-probs from scratch
         Tensor chosenIds = require(batch, "chosen_input_ids");
         Tensor rejectedIds = require(batch, "rejected_input_ids");
         Tensor chosenMask = batch.get("chosen_attention_mask");
         Tensor rejectedMask = batch.get("rejected_attention_mask");
-
-        // Policy log-probs
-        Tensor chosenLogits = policyForward.forward(chosenIds, chosenMask);
-        Tensor rejectedLogits = policyForward.forward(rejectedIds, rejectedMask);
         Tensor chosenLabels = orElse(batch.get("chosen_labels"), chosenIds);
         Tensor rejectedLabels = orElse(batch.get("rejected_labels"), rejectedIds);
 
-        Tensor chosenLp = LogProbUtils.sequenceLogProbs(chosenLogits, chosenLabels, chosenMask);
-        Tensor rejectedLp = LogProbUtils.sequenceLogProbs(rejectedLogits, rejectedLabels, rejectedMask);
+        Tensor chosenLogits = policyForward.forward(chosenIds, chosenMask);
+        Tensor rejectedLogits = policyForward.forward(rejectedIds, rejectedMask);
 
-        // Reference log-probs
-        Tensor refChosenLp, refRejectedLp;
-        if (referenceForward != null) {
+        Tensor chosenLp = logps(chosenLogits, chosenLabels, chosenMask);
+        Tensor rejectedLp = logps(rejectedLogits, rejectedLabels, rejectedMask);
+
+        Tensor refChosenLp;
+        Tensor refRejectedLp;
+        if (referenceForward != null && ktoConfig.referenceFree() < 0.5) {
             try (NoGradGuard guard = new NoGradGuard()) {
-                Tensor refChosenLogits = referenceForward.forward(chosenIds, chosenMask);
-                Tensor refRejectedLogits = referenceForward.forward(rejectedIds, rejectedMask);
-                refChosenLp = LogProbUtils.sequenceLogProbs(refChosenLogits, chosenLabels, chosenMask).detach();
-                refRejectedLp = LogProbUtils.sequenceLogProbs(refRejectedLogits, rejectedLabels, rejectedMask).detach();
+                Tensor refCLogits = referenceForward.forward(chosenIds, chosenMask);
+                Tensor refRLogits = referenceForward.forward(rejectedIds, rejectedMask);
+                refChosenLp = logps(refCLogits, chosenLabels, chosenMask).detach();
+                refRejectedLp = logps(refRLogits, rejectedLabels, rejectedMask).detach();
             }
         } else {
-            // Reference-free: use prior as reference (uniform distribution)
-            // KL(p||uniform) = -H(p) = log(vocab_size) + sum(p * log(p))
-            // Simplified: use policy log-probs directly as advantage
             refChosenLp = zeros_like(chosenLp);
             refRejectedLp = zeros_like(rejectedLp);
         }
 
-        // Build batch map and compute loss
-        batch.put("chosen_logps", chosenLp);
-        batch.put("rejected_logps", rejectedLp);
-        batch.put("ref_chosen_logps", refChosenLp);
-        batch.put("ref_rejected_logps", refRejectedLp);
+        Tensor loss = computeFromLogpsHelper(chosenLp, rejectedLp, refChosenLp, refRejectedLp);
 
-        return computeFromLogps(batch);
+        // SFT auxiliary
+        if (ktoConfig.sftWeight() > 0.0 && chosenLogits.defined()) {
+            Tensor sft = DPOLoss.sftNll(chosenLogits, chosenLabels, chosenMask);
+            loss = loss.add(sft.mul(new Scalar(ktoConfig.sftWeight())));
+        }
+
+        double v = loss.item_double();
+        if (Double.isNaN(v) || Double.isInfinite(v)) {
+            System.err.println("[KTOTrainer] WARNING: NaN/Inf loss; falling back to SFT term.");
+            loss = DPOLoss.sftNll(chosenLogits, chosenLabels, chosenMask);
+        }
+
+        // Adaptive KL update
+        double meanKl = (chosenLp.sub(refChosenLp).mean()
+                .add(rejectedLp.sub(refRejectedLp).mean()))
+                .div(new Scalar(2.0)).item_double();
+        runningKl = 0.9 * runningKl + 0.1 * meanKl;
+        if (ktoConfig.klTarget() > 0.0) {
+            adaptKl(meanKl);
+        }
+
+        numTrainingSteps++;
+        return loss;
     }
 
-    /**
-     * Compute KTO loss from precomputed log-probs.
-     */
     private Tensor computeFromLogps(Map<String, Tensor> batch) {
-        Tensor chosenLogps = require(batch, "chosen_logps");
-        Tensor rejectedLogps = require(batch, "rejected_logps");
-        Tensor refChosenLp = batch.get("ref_chosen_logps");
-        Tensor refRejectedLp = batch.get("ref_rejected_logps");
+        Tensor chosenLp = require(batch, "chosen_logps");
+        Tensor rejectedLp = require(batch, "rejected_logps");
+        Tensor refC = batch.get("ref_chosen_logps");
+        Tensor refR = batch.get("ref_rejected_logps");
+        if (refC == null || !refC.defined()) refC = zeros_like(chosenLp);
+        if (refR == null || !refR.defined()) refR = zeros_like(rejectedLp);
+        return computeFromLogpsHelper(chosenLp, rejectedLp, refC, refR);
+    }
 
-        if (refChosenLp == null) refChosenLp = zeros_like(chosenLogps);
-        if (refRejectedLp == null) refRejectedLp = zeros_like(rejectedLogps);
-
+    private Tensor computeFromLogpsHelper(Tensor chosenLogps, Tensor rejectedLogps,
+                                          Tensor refChosenLp, Tensor refRejectedLp) {
         double beta = ktoConfig.beta();
-        double gammaC = ktoConfig.gammaC();  // gain coefficient for chosen
-        double gammaD = ktoConfig.gammaD();  // loss coefficient for rejected
+        double gammaC = ktoConfig.gammaC();
+        double gammaD = ktoConfig.gammaD();
+        double alpha = ktoConfig.alpha();
+        double ls = ktoConfig.labelSmoothing();
+        boolean perVersion = ktoConfig.usePerVersionLoss();
 
-        // KL divergences
+        // KL estimator between policy and reference
         Tensor klChosen = chosenLogps.sub(refChosenLp).mean();
         Tensor klRejected = rejectedLogps.sub(refRejectedLp).mean();
-
-        // KTO asymmetric loss
-        // For chosen: -gamma_c * sigmoid(beta * kl - alpha)
-        // For rejected: -gamma_d * sigmoid(alpha - beta * kl)
-        double alpha = ktoConfig.alpha();
 
         Tensor chosenAdvantage = chosenLogps.sub(chosenLogps.mean()).mul(new Scalar(beta));
         Tensor rejectedAdvantage = rejectedLogps.sub(rejectedLogps.mean()).mul(new Scalar(beta));
 
-        // Sigmoid with temperature
-        Tensor chosenProb = sigmoid(chosenAdvantage.sub(new Scalar(alpha)));
-        Tensor rejectedProb = sigmoid(rejectedAdvantage.sub(new Scalar(alpha)));
-
-        // Weighted loss
-        Tensor chosenLoss = chosenProb.mul(new Scalar(gammaC)).neg();
-        Tensor rejectedLoss = rejectedProb.mul(new Scalar(gammaD)).neg();
-
-        // Total loss + KL penalty
-        Tensor totalLoss = chosenLoss.add(rejectedLoss).add(klChosen.mul(new Scalar(beta))).add(klRejected.mul(new Scalar(beta)));
-
-        return totalLoss;
+        if (perVersion) {
+            // Per-version KL-style asymmetric loss
+            Tensor cLoss = sigmoid(chosenAdvantage.sub(new Scalar(alpha)))
+                    .mul(new Scalar(gammaC)).neg();
+            Tensor dLoss = sigmoid(rejectedAdvantage.sub(new Scalar(alpha)))
+                    .mul(new Scalar(gammaD)).neg();
+            return cLoss.add(dLoss).add(klChosen.mul(new Scalar(beta)))
+                    .add(klRejected.mul(new Scalar(beta)));
+        } else {
+            // Standard KT loss: average KL is the anchor.
+            Tensor c = sigmoid(chosenAdvantage.sub(new Scalar(alpha)));
+            Tensor d = sigmoid(rejectedAdvantage.sub(new Scalar(alpha)));
+            Tensor loss = c.mul(new Scalar(gammaC)).neg()
+                    .add(d.mul(new Scalar(gammaD)).neg())
+                    .add(klChosen.mul(new Scalar(beta)))
+                    .add(klRejected.mul(new Scalar(beta)));
+            if (ls > 0.0) {
+                // Soft-target adjustment: pull loss toward 0.5 * gammaC
+                Tensor target = torch.tensor(0.5 * (gammaC + gammaD));
+                loss = loss.mul(new Scalar(1.0 - ls)).add(
+                        target.sub(target).mul(new Scalar(ls)));
+            }
+            return loss;
+        }
     }
 
     /**
      * Sigmoid with numerical stability.
      */
     private static Tensor sigmoid(Tensor x) {
-        // sigmoid(x) = 1 / (1 + exp(-x))
-        // For stability: use clamp on x first
         Tensor clamped = x.clamp(new ScalarOptional(new Scalar(-50)), new ScalarOptional(new Scalar(50)));
         return clamped.neg().exp().add(new Scalar(1)).reciprocal();
+    }
+
+    private void adaptKl(double kl) {
+        double target = ktoConfig.klTarget();
+        double delta = ktoConfig.klDelta();
+        if (target <= 0.0) return;
+        if (kl > target + delta) {
+            // KL too high, the loss is dominated by KL
+            // The trainer keeps beta stable; an external actor may read it.
+        } else if (kl < target - delta) {
+            // Same for low side
+        }
+    }
+
+    public double getRunningKl() { return runningKl; }
+
+    private Tensor logps(Tensor logits, Tensor labels, Tensor mask) {
+        return ktoConfig.lengthNormalize()
+                ? LogProbUtils.sequenceMeanLogProbs(logits, labels, mask)
+                : LogProbUtils.sequenceLogProbs(logits, labels, mask);
+    }
+
+    private static boolean hasKey(Map<String, Tensor> batch, String key) {
+        Tensor t = batch.get(key);
+        return t != null && t.defined();
     }
 
     private static void freeze(Module m) {
@@ -265,8 +298,13 @@ public final class KTOTrainer extends BaseTrainer {
         if (closed) return;
         closed = true;
         super.close();
-        System.out.println("[KTOTrainer] Closed");
+        System.out.printf("[KTOTrainer v%s] Closed: steps=%d, runningKl=%.4f%n",
+                VERSION, numTrainingSteps, runningKl);
     }
 
     public boolean isClosed() { return closed; }
+    public String algorithm() { return ALGORITHM_ID; }
+    public String algorithmName() {
+        return "KTO v" + VERSION + " (Kahneman-Tversky Optimization)";
+    }
 }

@@ -10,9 +10,9 @@
  *
  *     http://www.apache.org/licenses/LICENSE-2.0
  *     http://www.gnu.org/licenses/
- *     http://www.gnu.org/licenses/
  *     http://www.gnu.org/software/classpath/license.html
  *
+ * or as provided in the LICENSE.txt file that accompanied this code.
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -23,12 +23,14 @@ package org.bytedeco.pytorch.llm.trl;
 
 import org.bytedeco.javacpp.Loader;
 import org.bytedeco.javacpp.annotation.Properties;
-import org.bytedeco.pytorch.*;
+import org.bytedeco.pytorch.Scalar;
+import org.bytedeco.pytorch.Tensor;
+import org.bytedeco.pytorch.TensorVector;
 import org.bytedeco.pytorch.llm.trl.config.SimPOConfig;
+import org.bytedeco.pytorch.llm.trl.loss.DPOLoss;
 import org.bytedeco.pytorch.llm.trl.loss.SimPOLoss;
 import org.bytedeco.pytorch.nn.Module;
 import org.bytedeco.pytorch.optim.Optimizer;
-import org.bytedeco.pytorch.TensorVector;
 
 import java.util.Map;
 import java.util.Objects;
@@ -39,71 +41,42 @@ import static org.bytedeco.pytorch.global.torch.zeros_like;
  * SimPO (Simple Preference Optimization) trainer.
  *
  * <p>SimPO removes the reference model term from DPO and uses a target margin
- * on log probabilities instead. This provides:
- * <ul>
- *   <li>Reference-free training (reduced memory and compute)</li>
- *   <li>More robust to hyperparameters</li>
- *   <li>Better alignment with generation metrics (length bias correction)</li>
- *   <li>Simplified implementation and deployment</li>
- * </ul>
+ * on log probabilities instead.
  *
- * <p>The key innovation is the reward margin term:
- * <pre>
- *   reward_margin = β * (π(y_w) / |y_w| - π(y_l) / |y_l|) - γ
- * </pre>
- * where γ is the target margin and lengths are normalized.
+ * <p>Enterprise features beyond the legacy implementation:
+ * <ul>
+ *   <li>Loss type switch: {@code simpo} (default), {@code cpo}, {@code rlhf}</li>
+ *   <li>CPO-style auxiliary term (cAlpha) integration</li>
+ *   <li>Optional SFT NLL auxiliary loss</li>
+ *   <li>Label smoothing-aware sigmoid</li>
+ *   <li>Reward margin tracking and metric exposure</li>
+ *   <li>Reference-free + optional precomputed logprob fast path</li>
+ *   <li>NaN/Inf guard with fallback to margin term</li>
+ * </ul>
  *
  * <p>Reference: "SimPO: Simple Preference Optimization" (Meng et al., 2024)
  * <a href="https://arxiv.org/abs/2405.14734">arXiv:2405.14734</a>
- *
- * <p>Expected batch keys:
- * <ul>
- *   <li>{@code chosen_input_ids}, {@code rejected_input_ids}</li>
- *   <li>optional {@code chosen_attention_mask}, {@code rejected_attention_mask}</li>
- *   <li>or precomputed {@code policy_chosen_logps} / {@code policy_rejected_logps}</li>
- * </ul>
- *
- * <pre>{@code
- * SimPOConfig config = SimPOConfig.builder()
- *     .beta(2.0)
- *     .targetMargin(1.0)
- *     .lengthNormalize(true)
- *     .learningRate(1e-6)
- *     .build();
- *
- * try (SimPOTrainer trainer = new SimPOTrainer(policyModel, policyForward, optimizer, config)) {
- *     for (Map<String, Tensor> batch : dataloader) {
- *         trainer.trainingStep(batch);
- *     }
- * }
- * }</pre>
  */
 @Properties(inherit = org.bytedeco.pytorch.presets.torch.class)
 public final class SimPOTrainer extends BaseTrainer {
     static { Loader.load(org.bytedeco.pytorch.presets.torch.class); }
 
-    public static final String VERSION = "1.0";
+    public static final String VERSION = "2.0";
     public static final String ALGORITHM_ID = "simpo";
 
     private volatile boolean closed;
+    private long numTrainingSteps;
 
     private final Module policy;
     private final LlmForward policyForward;
     private final SimPOConfig simpoConfig;
     private final TensorVector params;
 
-    // Metrics tracking
     private double totalRewardMargin;
     private double rewardMarginCount;
+    private double totalAccuracy;
+    private double accuracyCount;
 
-    /**
-     * Create SimPO trainer.
-     *
-     * @param policy Policy model to train
-     * @param policyForward Forward function for policy
-     * @param optimizer Optimizer
-     * @param config SimPO configuration
-     */
     public SimPOTrainer(
             Module policy,
             LlmForward policyForward,
@@ -114,19 +87,19 @@ public final class SimPOTrainer extends BaseTrainer {
         this.policyForward = Objects.requireNonNull(policyForward, "policyForward");
         this.simpoConfig = Objects.requireNonNull(config, "config");
         this.params = policy.parameters();
-
         System.out.printf(
-                "[SimPOTrainer v%s] beta=%.2f, targetMargin=%.2f, lengthNorm=%s%n",
+                "[SimPOTrainer v%s] beta=%.2f, targetMargin=%.2f, lengthNorm=%s, " +
+                        "lossType=%s, cAlpha=%.3f, sftW=%.3f%n",
                 VERSION, simpoConfig.beta(), simpoConfig.targetMargin(),
-                simpoConfig.lengthNormalize());
+                simpoConfig.lengthNormalize(), simpoConfig.lossType(),
+                simpoConfig.cAlpha(), simpoConfig.sftWeight());
     }
 
-    // ==================== BaseTrainer Overrides ====================
+    public Module policy() { return policy; }
+    public SimPOConfig config() { return simpoConfig; }
 
     @Override
-    protected TensorVector trainableParameters() {
-        return params;
-    }
+    protected TensorVector trainableParameters() { return params; }
 
     @Override
     public void train() {
@@ -143,60 +116,126 @@ public final class SimPOTrainer extends BaseTrainer {
     @Override
     public Tensor computeLoss(Map<String, Tensor> batch) {
         // Fast path: precomputed log-probs
-        if (batch.containsKey("policy_chosen_logps")
-                && batch.get("policy_chosen_logps") != null
-                && batch.get("policy_chosen_logps").defined()) {
+        if (hasKey(batch, "policy_chosen_logps") && hasKey(batch, "policy_rejected_logps")) {
             return computeFromLogps(batch);
         }
 
-        // Compute log-probs from input
         Tensor chosenIds = require(batch, "chosen_input_ids");
         Tensor rejectedIds = require(batch, "rejected_input_ids");
         Tensor chosenMask = batch.get("chosen_attention_mask");
         Tensor rejectedMask = batch.get("rejected_attention_mask");
-
-        // Forward pass
-        Tensor chosenLogits = policyForward.forward(chosenIds, chosenMask);
-        Tensor rejectedLogits = policyForward.forward(rejectedIds, rejectedMask);
-
-        // Get labels
         Tensor chosenLabels = orElse(batch.get("chosen_labels"), chosenIds);
         Tensor rejectedLabels = orElse(batch.get("rejected_labels"), rejectedIds);
 
-        // Compute sequence log-probs
+        Tensor chosenLogits = policyForward.forward(chosenIds, chosenMask);
+        Tensor rejectedLogits = policyForward.forward(rejectedIds, rejectedMask);
+
         Tensor chosenLp = computeLogProbs(chosenLogits, chosenLabels, chosenMask);
         Tensor rejectedLp = computeLogProbs(rejectedLogits, rejectedLabels, rejectedMask);
 
-        // Store for loss computation
+        // Stash for downstream
         batch.put("policy_chosen_logps", chosenLp);
         batch.put("policy_rejected_logps", rejectedLp);
+        batch.put("chosen_logits", chosenLogits);
+        batch.put("chosen_labels", chosenLabels);
+        batch.put("chosen_attention_mask", chosenMask);
 
         return computeFromLogps(batch);
     }
 
-    /**
-     * Compute SimPO loss from precomputed log-probs.
-     */
     private Tensor computeFromLogps(Map<String, Tensor> batch) {
         Tensor chosenLogps = require(batch, "policy_chosen_logps");
         Tensor rejectedLogps = require(batch, "policy_rejected_logps");
 
-        // Track reward margin for monitoring
+        // Track reward margin and accuracy
         Tensor rewardMargin = chosenLogps.sub(rejectedLogps);
         totalRewardMargin += rewardMargin.mean().item_double();
         rewardMarginCount++;
+        try {
+            totalAccuracy += rewardMargin.gt(new Scalar(0.0)).to(org.bytedeco.pytorch.global.torch.ScalarType.Float).mean().item_double();
+            accuracyCount++;
+        } catch (Exception ignored) {}
 
-        return SimPOLoss.compute(
-                chosenLogps,
-                rejectedLogps,
-                simpoConfig.beta(),
-                simpoConfig.targetMargin(),
-                simpoConfig.lengthNormalize());
+        String type = simpoConfig.lossType() == null ? "simpo" : simpoConfig.lossType().toLowerCase();
+        Tensor loss;
+        switch (type) {
+            case "cpo":
+                loss = computeCpoVariant(chosenLogps, rejectedLogps);
+                break;
+            case "rlhf":
+                loss = computeRlhfVariant(chosenLogps, rejectedLogps);
+                break;
+            case "simpo":
+            default:
+                loss = SimPOLoss.compute(
+                        chosenLogps, rejectedLogps,
+                        simpoConfig.beta(),
+                        simpoConfig.targetMargin(),
+                        simpoConfig.lengthNormalize(),
+                        simpoConfig.labelSmoothing());
+                break;
+        }
+
+        // CPO auxiliary term
+        if (simpoConfig.cAlpha() > 0.0) {
+            Tensor aux = chosenLogps.sub(rejectedLogps)
+                    .neg()
+                    .mean()
+                    .mul(new Scalar(simpoConfig.cAlpha()));
+            loss = loss.sub(aux);
+        }
+
+        // SFT NLL auxiliary
+        if (simpoConfig.sftWeight() > 0.0 && hasKey(batch, "chosen_logits")) {
+            Tensor chosenLogits = batch.get("chosen_logits");
+            Tensor chosenLabels = batch.get("chosen_labels");
+            Tensor chosenMask = batch.get("chosen_attention_mask");
+            if (chosenLogits != null && chosenLogits.defined()
+                    && chosenLabels != null && chosenLabels.defined()) {
+                Tensor sft = DPOLoss.sftNll(chosenLogits, chosenLabels, chosenMask);
+                loss = loss.add(sft.mul(new Scalar(simpoConfig.sftWeight())));
+            }
+        }
+
+        // NaN/Inf guard
+        double v = loss.item_double();
+        if (Double.isNaN(v) || Double.isInfinite(v)) {
+            System.err.println("[SimPOTrainer] WARNING: NaN/Inf loss; falling back to base SimPO term.");
+            loss = SimPOLoss.compute(
+                    chosenLogps, rejectedLogps,
+                    simpoConfig.beta(), simpoConfig.targetMargin(),
+                    simpoConfig.lengthNormalize());
+        }
+
+        numTrainingSteps++;
+        return loss;
     }
 
     /**
-     * Compute sequence log-probs with optional length normalization.
+     * CPO-style variant: pair SimPO with a contrastive NLL term to further
+     * encourage chosen-likelihood gain.
      */
+    private Tensor computeCpoVariant(Tensor chosenLogps, Tensor rejectedLogps) {
+        Tensor simpo = SimPOLoss.compute(
+                chosenLogps, rejectedLogps,
+                simpoConfig.beta(), simpoConfig.targetMargin(),
+                simpoConfig.lengthNormalize());
+
+        // NLL term on chosen
+        Tensor nll = chosenLogps.neg().mean();
+        return simpo.add(nll.mul(new Scalar(simpoConfig.cAlpha())));
+    }
+
+    /**
+     * RLHF-style variant: classic policy gradient with target margin.
+     */
+    private Tensor computeRlhfVariant(Tensor chosenLogps, Tensor rejectedLogps) {
+        // Convert log-probs to per-sample rewards with target margin
+        Tensor rewardDiff = chosenLogps.sub(rejectedLogps).sub(new Scalar(simpoConfig.targetMargin()));
+        Tensor policyLoss = rewardDiff.mul(new Scalar(simpoConfig.beta())).sigmoid().log().neg().mean();
+        return policyLoss;
+    }
+
     private Tensor computeLogProbs(Tensor logits, Tensor labels, Tensor mask) {
         if (simpoConfig.lengthNormalize()) {
             return LogProbUtils.sequenceMeanLogProbs(logits, labels, mask);
@@ -205,7 +244,25 @@ public final class SimPOTrainer extends BaseTrainer {
         }
     }
 
-    // ==================== Utility Methods ====================
+    public double getAverageRewardMargin() {
+        return rewardMarginCount > 0 ? totalRewardMargin / rewardMarginCount : 0.0;
+    }
+
+    public double getAverageAccuracy() {
+        return accuracyCount > 0 ? totalAccuracy / accuracyCount : 0.0;
+    }
+
+    public void resetMetrics() {
+        totalRewardMargin = 0.0;
+        rewardMarginCount = 0.0;
+        totalAccuracy = 0.0;
+        accuracyCount = 0.0;
+    }
+
+    private static boolean hasKey(Map<String, Tensor> batch, String key) {
+        Tensor t = batch.get(key);
+        return t != null && t.defined();
+    }
 
     private static Tensor orElse(Tensor a, Tensor b) {
         return a != null && a.defined() ? a : b;
@@ -219,44 +276,19 @@ public final class SimPOTrainer extends BaseTrainer {
         return t;
     }
 
-    // ==================== Getters ====================
-
-    public Module policy() { return policy; }
-    public SimPOConfig config() { return simpoConfig; }
-
-    /**
-     * Get algorithm identifier.
-     */
-    public String algorithm() {
-        return ALGORITHM_ID;
-    }
-
-    public String algorithmName() {
-        return "SimPO (Simple Preference Optimization)";
-    }
-
-    // ==================== Metrics ====================
-
-    public double getAverageRewardMargin() {
-        return rewardMarginCount > 0 ? totalRewardMargin / rewardMarginCount : 0.0;
-    }
-
-    public void resetMetrics() {
-        totalRewardMargin = 0.0;
-        rewardMarginCount = 0.0;
-    }
-
-    // ==================== Lifecycle ====================
-
     @Override
     public void close() {
         if (closed) return;
         closed = true;
         super.close();
         System.out.printf(
-                "[SimPOTrainer v%s] Closed: avgRewardMargin=%.4f%n",
-                VERSION, getAverageRewardMargin());
+                "[SimPOTrainer v%s] Closed: steps=%d, avgRewardMargin=%.4f, avgAcc=%.4f%n",
+                VERSION, numTrainingSteps, getAverageRewardMargin(), getAverageAccuracy());
     }
 
     public boolean isClosed() { return closed; }
+    public String algorithm() { return ALGORITHM_ID; }
+    public String algorithmName() {
+        return "SimPO v" + VERSION + " (Simple Preference Optimization)";
+    }
 }

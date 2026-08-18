@@ -1714,6 +1714,10 @@ public final class BitsAndBytes {
         return prepareModelForKbitTraining(model, true, null);
     }
 
+    public static PreparationResult prepareModelForKBitTraining(Module model) {
+        return prepareModelForKbitTraining(model, true, null);
+    }
+
     /**
      * Full-featured model preparation for k-bit training.
      *

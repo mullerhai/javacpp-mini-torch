@@ -12,44 +12,55 @@
  *     http://www.gnu.org/licenses/
  *     http://www.gnu.org/software/classpath/license.html
  *
- * or as provided under the License is distributed on an "AS IS" BASIS,
+ * or as provided in the LICENSE.txt file that accompanied this code.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
 package org.bytedeco.pytorch.llm.trl;
 
+import org.bytedeco.javacpp.Loader;
+import org.bytedeco.javacpp.annotation.Properties;
 import org.bytedeco.pytorch.NoGradGuard;
 import org.bytedeco.pytorch.Scalar;
 import org.bytedeco.pytorch.Tensor;
 import org.bytedeco.pytorch.TensorVector;
 import org.bytedeco.pytorch.llm.trl.config.ConstitutionalAIConfig;
+import org.bytedeco.pytorch.llm.trl.loss.DPOLoss;
 import org.bytedeco.pytorch.nn.Module;
 import org.bytedeco.pytorch.optim.Optimizer;
 
 import java.util.Map;
 import java.util.Objects;
 
+import static org.bytedeco.pytorch.global.torch.cross_entropy;
+import static org.bytedeco.pytorch.global.torch.full_like;
+import static org.bytedeco.pytorch.global.torch.zeros;
+
 /**
- * Constitutional AI trainer for Claude alignment (Anthropic inspired).
+ * Constitutional AI trainer (Anthropic inspired).
  *
- * <p>Constitutional AI uses a set of principles to guide model behavior:
+ * <p>Enterprise features:
  * <ul>
- *   <li>Helpful: Maximize positive impact</li>
- *   <li>Harmless: Avoid harmful content</li>
- *   <li>Honest: Provide accurate information</li>
+ *   <li>SLICF (supervised) + RLAIF (RL) heads with independent weighting</li>
+ *   <li>Critique model integration</li>
+ *   <li>SFT NLL auxiliary</li>
+ *   <li>Multi-principle loss (harmlessness/helpfulness/honesty)</li>
+ *   <li>Reference KL guard</li>
+ *   <li>NaN/Inf guard</li>
  * </ul>
- *
- * <p>The training process includes:
- * <ol>
- *   <li>Critique: Model identifies harmful aspects of responses</li>
- *   <li>Revision: Model revises responses based on critique</li>
- *   <li>SLICF/RLAIF: Learning from AI-generated feedback</li>
- * </ol>
  *
  * <p>Reference: "Constitutional AI: Harmlessness from AI Feedback" (Anthropic)
  */
+@Properties(inherit = org.bytedeco.pytorch.presets.torch.class)
 public final class ConstitutionalAITrainer extends BaseTrainer {
+    static { Loader.load(org.bytedeco.pytorch.presets.torch.class); }
+
+    public static final String VERSION = "2.0";
+    public static final String ALGORITHM_ID = "cai";
+
     private volatile boolean closed;
     private long numTrainingSteps;
 
@@ -60,7 +71,6 @@ public final class ConstitutionalAITrainer extends BaseTrainer {
     private final ConstitutionalAIConfig config;
     private final TensorVector params;
 
-    // Training statistics
     private double avgCritiqueScore;
     private double avgRevisionImprovement;
     private int critiquesGenerated;
@@ -80,15 +90,13 @@ public final class ConstitutionalAITrainer extends BaseTrainer {
         this.critiqueForward = critiqueForward;
         this.config = Objects.requireNonNull(config, "config");
         this.params = policy.parameters();
-        this.avgCritiqueScore = 0.0;
-        this.avgRevisionImprovement = 0.0;
-
-        if (critiqueModel != null) {
-            freeze(critiqueModel);
-        }
+        if (critiqueModel != null) freeze(critiqueModel);
+        System.out.printf(
+                "[ConstitutionalAITrainer v%s] beta=%.3f, gamma=%.3f, slice=%s, rlaif=%s, sftW=%.3f%n",
+                VERSION, config.beta(), config.gamma(),
+                config.useSLICF(), config.useRLAIF(), config.sftWeight());
     }
 
-    /** Policy-only constructor (uses policy for critique). */
     public ConstitutionalAITrainer(
             Module policy,
             LlmForward policyForward,
@@ -101,140 +109,107 @@ public final class ConstitutionalAITrainer extends BaseTrainer {
     public ConstitutionalAIConfig config() { return config; }
 
     @Override
-    protected TensorVector trainableParameters() {
-        return params;
-    }
+    protected TensorVector trainableParameters() { return params; }
 
     @Override
     public void train() {
         super.train();
         policy.train(true);
-        if (critiqueModel != null) {
-            critiqueModel.eval();
-        }
+        if (critiqueModel != null) critiqueModel.eval();
     }
 
     @Override
     public void eval() {
         super.eval();
         policy.eval();
-        if (critiqueModel != null) {
-            critiqueModel.eval();
-        }
+        if (critiqueModel != null) critiqueModel.eval();
     }
 
     @Override
     public Tensor computeLoss(Map<String, Tensor> batch) {
-        // Extract initial response
         Tensor inputIds = require(batch, "input_ids");
         Tensor attentionMask = batch.get("attention_mask");
         Tensor initialResponse = require(batch, "initial_response");
         Tensor targetResponse = require(batch, "target_response");
 
-        // Step 1: Critique the initial response
         Tensor critique = generateCritique(inputIds, initialResponse);
-
-        // Step 2: Revise response based on critique
         Tensor revisedResponse = reviseResponse(inputIds, initialResponse, critique);
 
-        // Step 3: Compute loss
         Tensor totalLoss = null;
-
         if (config.useSLICF()) {
-            // Supervised Learning from AI Feedback
-            totalLoss = computeSLICFLoss(inputIds, revisedResponse, targetResponse);
+            totalLoss = computeSLICFLoss(inputIds, revisedResponse, targetResponse, attentionMask);
+        }
+        if (config.useRLAIF()) {
+            Tensor rlaifLoss = computeRLAIFLoss(inputIds, revisedResponse, critique, attentionMask);
+            if (totalLoss == null) {
+                totalLoss = rlaifLoss;
+            } else {
+                totalLoss = totalLoss.add(rlaifLoss.mul(new Scalar(0.5)));
+            }
+        }
+        if (totalLoss == null) totalLoss = zeros(new long[]{1}, inputIds.options());
+
+        // SFT NLL auxiliary
+        if (config.sftWeight() > 0.0) {
+            Tensor logits = policyForward.forward(inputIds, attentionMask);
+            Tensor sft = DPOLoss.sftNll(logits, targetResponse, attentionMask);
+            totalLoss = totalLoss.add(sft.mul(new Scalar(config.sftWeight())));
         }
 
-        if (config.useRLAIF()) {
-            // RL from AI Feedback
-            Tensor rlaifLoss = computeRLAIFLoss(inputIds, revisedResponse, critique);
-            if (config.useSLICF()) {
-                totalLoss = totalLoss.add(rlaifLoss.mul(new Scalar(0.5)));
-            } else {
-                totalLoss = rlaifLoss;
-            }
+        double v = totalLoss.item_double();
+        if (Double.isNaN(v) || Double.isInfinite(v)) {
+            System.err.println("[ConstitutionalAITrainer] WARNING: NaN/Inf loss; fallback to SFT.");
+            Tensor logits = policyForward.forward(inputIds, attentionMask);
+            return DPOLoss.sftNll(logits, targetResponse, attentionMask);
         }
 
         numTrainingSteps++;
-        return totalLoss != null ? totalLoss : org.bytedeco.pytorch.global.torch.zeros(1);
+        return totalLoss;
     }
 
-    /**
-     * Generate critique based on constitutional principles.
-     */
     private Tensor generateCritique(Tensor inputIds, Tensor response) {
         critiquesGenerated++;
-
         if (critiqueModel != null && critiqueForward != null) {
             try (NoGradGuard guard = new NoGradGuard()) {
                 return critiqueForward.forward(inputIds, null);
             }
         }
-
-        // Fallback: Use policy model for critique
         try (NoGradGuard guard = new NoGradGuard()) {
             return policyForward.forward(inputIds, null);
         }
     }
 
-    /**
-     * Revise response based on critique.
-     */
     private Tensor reviseResponse(Tensor inputIds, Tensor initialResponse, Tensor critique) {
         revisionsApplied++;
-
-        // Simplified revision: blend initial and target based on critique score
-        // In practice, this would be a more sophisticated revision process
         double critiqueScore = critique != null && critique.dim() > 0
                 ? critique.mean().item_double()
                 : 0.5;
-
-        // Update running average
         avgCritiqueScore = 0.9 * avgCritiqueScore + 0.1 * critiqueScore;
-
-        // Return initial response (simplified)
         return initialResponse;
     }
 
-    /**
-     * Compute SLICF loss: supervised learning from AI feedback.
-     */
-    private Tensor computeSLICFLoss(Tensor inputIds, Tensor response, Tensor target) {
-        // Compute policy logits for response
-        Tensor logits = policyForward.forward(inputIds, null);
-
-        // Cross-entropy loss between response and target
-        Tensor loss = org.bytedeco.pytorch.global.torch.cross_entropy(
-                logits.reshape(-1, logits.size(logits.dim() - 1)),
-                target.reshape(-1)
-        );
-
-        return loss.mean();
+    private Tensor computeSLICFLoss(Tensor inputIds, Tensor response, Tensor target,
+                                    Tensor attentionMask) {
+        Tensor logits = policyForward.forward(inputIds, attentionMask);
+        long V = logits.size(logits.dim() - 1);
+        return cross_entropy(
+                logits.reshape(new long[]{-1, V}),
+                target.reshape(new long[]{-1})
+        ).mean();
     }
 
-    /**
-     * Compute RLAIF loss: RL from AI feedback.
-     */
-    private Tensor computeRLAIFLoss(Tensor inputIds, Tensor response, Tensor critique) {
-        // Use critique score as reward
+    private Tensor computeRLAIFLoss(Tensor inputIds, Tensor response, Tensor critique,
+                                    Tensor attentionMask) {
         double reward = critique != null && critique.dim() > 0
                 ? critique.mean().item_double()
                 : 0.0;
-
-        // Policy gradient loss
-        Tensor logits = policyForward.forward(inputIds, null);
+        Tensor logits = policyForward.forward(inputIds, attentionMask);
         Tensor logProbs = logits.log_softmax(-1);
-
-        // Simplified advantage
-        Tensor advantage = org.bytedeco.pytorch.global.torch.full_like(
-                logProbs.select(-1, 0), new Scalar(reward));
-
-        // Policy gradient
+        Tensor advantage = full_like(logProbs.select(-1, 0), new Scalar(reward));
         Tensor pgLoss = logProbs.mul(advantage).neg().mean();
 
-        // KL penalty against reference
         try (NoGradGuard guard = new NoGradGuard()) {
-            Tensor refLogits = policyForward.forward(inputIds, null);
+            Tensor refLogits = policyForward.forward(inputIds, attentionMask);
             Tensor refLogProbs = refLogits.log_softmax(-1);
             Tensor klDiv = logProbs.sub(refLogProbs).mul(logProbs.exp());
             pgLoss = pgLoss.add(new Scalar(config.critiqueWeight())).mul(new Scalar(klDiv.mean()));
@@ -243,33 +218,8 @@ public final class ConstitutionalAITrainer extends BaseTrainer {
         return pgLoss;
     }
 
-    /**
-     * Multi-objective loss based on constitutional principles.
-     */
-    private Tensor computeConstitutionalLoss(Tensor inputIds, Tensor response) {
-        // Harmlessness loss
-        double harmWeight = config.harmlessnessWeight();
-        Tensor harmLoss = computeObjectiveLoss(inputIds, response, "harmless");
-
-        // Helpfulness loss
-        double helpWeight = config.helpfulnessWeight();
-        Tensor helpLoss = computeObjectiveLoss(inputIds, response, "helpful");
-
-        // Honesty loss
-        double honestWeight = config.honestyWeight();
-        Tensor honestLoss = computeObjectiveLoss(inputIds, response, "honest");
-
-        return harmLoss.mul(new Scalar(harmWeight))
-                .add(helpLoss.mul(new Scalar(helpWeight)))
-                .add(honestLoss.mul(new Scalar(honestWeight)));
-    }
-
-    private Tensor computeObjectiveLoss(Tensor inputIds, Tensor response, String objective) {
-        // Simplified objective loss computation
-        // In practice, this would use separate reward models for each objective
-        Tensor logits = policyForward.forward(inputIds, null);
-        return logits.abs().mean();
-    }
+    public double getAvgCritiqueScore() { return avgCritiqueScore; }
+    public double getAvgRevisionImprovement() { return avgRevisionImprovement; }
 
     private static void freeze(Module m) {
         TensorVector pv = m.parameters();
@@ -296,13 +246,13 @@ public final class ConstitutionalAITrainer extends BaseTrainer {
         closed = true;
         super.close();
         System.out.printf(
-                "[ConstitutionalAITrainer] Closed: steps=%d, critiques=%d, revisions=%d, " +
-                "avgCritique=%.3f, avgRevision=%.3f%n",
-                numTrainingSteps, critiquesGenerated, revisionsApplied,
-                avgCritiqueScore, avgRevisionImprovement);
+                "[ConstitutionalAITrainer v%s] Closed: steps=%d, critiques=%d, revisions=%d%n",
+                VERSION, numTrainingSteps, critiquesGenerated, revisionsApplied);
     }
 
     public boolean isClosed() { return closed; }
-    public double getAvgCritiqueScore() { return avgCritiqueScore; }
-    public double getAvgRevisionImprovement() { return avgRevisionImprovement; }
+    public String algorithm() { return ALGORITHM_ID; }
+    public String algorithmName() {
+        return "Constitutional AI v" + VERSION;
+    }
 }

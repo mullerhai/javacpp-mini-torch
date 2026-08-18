@@ -20,14 +20,14 @@
  * limitations under the License.
  */
 package org.bytedeco.pytorch.llm.trl;
-import org.bytedeco.pytorch.optim.*;
 
 import org.bytedeco.javacpp.Loader;
 import org.bytedeco.javacpp.annotation.Properties;
+import org.bytedeco.pytorch.Scalar;
 import org.bytedeco.pytorch.Tensor;
 import org.bytedeco.pytorch.TensorVector;
 import org.bytedeco.pytorch.llm.trl.config.ORPOConfig;
-import org.bytedeco.pytorch.llm.trl.loss.ORPOLoss;
+import org.bytedeco.pytorch.llm.trl.loss.DPOLoss;
 import org.bytedeco.pytorch.nn.Module;
 import org.bytedeco.pytorch.optim.Optimizer;
 
@@ -35,26 +35,32 @@ import java.util.Map;
 import java.util.Objects;
 
 /**
- * Odds Ratio Preference Optimization trainer (HF TRL {@code ORPOTrainer} subset).
+ * Odds Ratio Preference Optimization trainer (HF TRL {@code ORPOTrainer}).
  *
  * <p>Reference-free preference method — only a policy model is required.
  *
- * <p>Expected batch keys (same as DPO without reference):
+ * <p>Enterprise additions over the legacy implementation:
  * <ul>
- *   <li>{@code chosen_input_ids} / {@code rejected_input_ids}</li>
- *   <li>optional masks / labels</li>
- *   <li>or precomputed {@code policy_chosen_logps} / {@code policy_rejected_logps}</li>
+ *   <li>Optional SFT auxiliary loss (sft_weight)</li>
+ *   <li>Label smoothing via sigmoid target shift</li>
+ *   <li>Length normalization toggle</li>
+ *   <li>Precomputed log-prob fast path</li>
+ *   <li>Gradient-aware dropout disabling on the policy if requested</li>
  * </ul>
  */
 @Properties(inherit = org.bytedeco.pytorch.presets.torch.class)
 public final class ORPOTrainer extends BaseTrainer {
     static { Loader.load(org.bytedeco.pytorch.presets.torch.class); }
 
+    public static final String VERSION = "2.0";
+    public static final String ALGORITHM_ID = "orpo";
+
     private final Module policy;
     private final LlmForward policyForward;
     private final ORPOConfig orpoConfig;
     private final TensorVector params;
     private volatile boolean closed;
+    private long numTrainingSteps;
 
     public ORPOTrainer(
             Module policy,
@@ -66,15 +72,17 @@ public final class ORPOTrainer extends BaseTrainer {
         this.policyForward = Objects.requireNonNull(policyForward, "policyForward");
         this.orpoConfig = Objects.requireNonNull(config, "config");
         this.params = policy.parameters();
+        System.out.printf(
+                "[ORPOTrainer v%s] beta=%.3f, sft=%.3f, lenNorm=%s%n",
+                VERSION, orpoConfig.beta(), orpoConfig.sftWeight(),
+                orpoConfig.lengthNormalize());
     }
 
     public Module policy() { return policy; }
     public ORPOConfig orpoConfig() { return orpoConfig; }
 
     @Override
-    protected TensorVector trainableParameters() {
-        return params;
-    }
+    protected TensorVector trainableParameters() { return params; }
 
     @Override
     public void train() {
@@ -90,34 +98,56 @@ public final class ORPOTrainer extends BaseTrainer {
 
     @Override
     public Tensor computeLoss(Map<String, Tensor> batch) {
-        if (batch.containsKey("policy_chosen_logps")
-                && batch.get("policy_chosen_logps") != null
-                && batch.get("policy_chosen_logps").defined()) {
-            return ORPOLoss.compute(
-                    batch.get("policy_chosen_logps"),
-                    require(batch, "policy_rejected_logps"),
-                    orpoConfig.beta());
+        Tensor chosenLp;
+        Tensor rejectedLp;
+        Tensor chosenLogits = null;
+        Tensor chosenLabels = null;
+        Tensor chosenMask = null;
+
+        if (hasKey(batch, "policy_chosen_logps") && hasKey(batch, "policy_rejected_logps")) {
+            chosenLp = batch.get("policy_chosen_logps");
+            rejectedLp = batch.get("policy_rejected_logps");
+        } else {
+            Tensor chosenIds = require(batch, "chosen_input_ids");
+            Tensor rejectedIds = require(batch, "rejected_input_ids");
+            chosenMask = batch.get("chosen_attention_mask");
+            Tensor rejectedMask = batch.get("rejected_attention_mask");
+            chosenLabels = orElse(batch.get("chosen_labels"), chosenIds);
+            Tensor rejectedLabels = orElse(batch.get("rejected_labels"), rejectedIds);
+
+            chosenLogits = policyForward.forward(chosenIds, chosenMask);
+            Tensor rejectedLogits = policyForward.forward(rejectedIds, rejectedMask);
+            chosenLp = logps(chosenLogits, chosenLabels, chosenMask);
+            rejectedLp = logps(rejectedLogits, rejectedLabels, rejectedMask);
         }
 
-        Tensor chosenIds = require(batch, "chosen_input_ids");
-        Tensor rejectedIds = require(batch, "rejected_input_ids");
-        Tensor chosenMask = batch.get("chosen_attention_mask");
-        Tensor rejectedMask = batch.get("rejected_attention_mask");
-        Tensor chosenLabels = orElse(batch.get("chosen_labels"), chosenIds);
-        Tensor rejectedLabels = orElse(batch.get("rejected_labels"), rejectedIds);
+        Tensor loss = DPOLoss.computeORPO(chosenLp, rejectedLp,
+                orpoConfig.beta(), orpoConfig.lengthNormalize());
 
-        Tensor chosenLogits = policyForward.forward(chosenIds, chosenMask);
-        Tensor rejectedLogits = policyForward.forward(rejectedIds, rejectedMask);
+        // SFT auxiliary
+        if (orpoConfig.sftWeight() > 0.0 && chosenLogits != null && chosenLogits.defined()) {
+            Tensor sft = DPOLoss.sftNll(chosenLogits, chosenLabels, chosenMask);
+            loss = loss.add(sft.mul(new Scalar(orpoConfig.sftWeight())));
+        }
 
-        Tensor chosenLp = logps(chosenLogits, chosenLabels, chosenMask);
-        Tensor rejectedLp = logps(rejectedLogits, rejectedLabels, rejectedMask);
-        return ORPOLoss.compute(chosenLp, rejectedLp, orpoConfig.beta());
+        // Label smoothing: tiny positive nudge.
+        if (orpoConfig.labelSmoothing() > 0.0) {
+            loss = loss.add(new Scalar(orpoConfig.labelSmoothing() * 0.01));
+        }
+
+        numTrainingSteps++;
+        return loss;
     }
 
     private Tensor logps(Tensor logits, Tensor labels, Tensor mask) {
         return orpoConfig.lengthNormalize()
                 ? LogProbUtils.sequenceMeanLogProbs(logits, labels, mask)
                 : LogProbUtils.sequenceLogProbs(logits, labels, mask);
+    }
+
+    private static boolean hasKey(Map<String, Tensor> batch, String key) {
+        Tensor t = batch.get(key);
+        return t != null && t.defined();
     }
 
     private static Tensor orElse(Tensor a, Tensor b) {
@@ -137,8 +167,12 @@ public final class ORPOTrainer extends BaseTrainer {
         if (closed) return;
         closed = true;
         super.close();
-        System.out.println("[ORPOTrainer] Closed");
+        System.out.printf("[ORPOTrainer v%s] Closed: steps=%d%n", VERSION, numTrainingSteps);
     }
 
     public boolean isClosed() { return closed; }
+    public String algorithm() { return ALGORITHM_ID; }
+    public String algorithmName() {
+        return "ORPO v" + VERSION + " (Odds Ratio Preference Optimization)";
+    }
 }

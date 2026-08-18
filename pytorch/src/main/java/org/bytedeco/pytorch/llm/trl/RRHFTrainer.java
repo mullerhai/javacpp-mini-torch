@@ -10,9 +10,9 @@
  *
  *     http://www.apache.org/licenses/LICENSE-2.0
  *     http://www.gnu.org/licenses/
- *     http://www.gnu.org/licenses/
  *     http://www.gnu.org/software/classpath/license.html
  *
+ * or as provided in the LICENSE.txt file that accompanied this code.
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -23,12 +23,16 @@ package org.bytedeco.pytorch.llm.trl;
 
 import org.bytedeco.javacpp.Loader;
 import org.bytedeco.javacpp.annotation.Properties;
-import org.bytedeco.pytorch.*;
+import org.bytedeco.pytorch.NoGradGuard;
+import org.bytedeco.pytorch.Scalar;
+import org.bytedeco.pytorch.Tensor;
+import org.bytedeco.pytorch.TensorVector;
+import org.bytedeco.pytorch.global.torch;
 import org.bytedeco.pytorch.llm.trl.config.RRHFConfig;
+import org.bytedeco.pytorch.llm.trl.loss.DPOLoss;
 import org.bytedeco.pytorch.llm.trl.loss.RRHFLoss;
 import org.bytedeco.pytorch.nn.Module;
 import org.bytedeco.pytorch.optim.Optimizer;
-import org.bytedeco.pytorch.TensorVector;
 
 import java.util.Map;
 import java.util.Objects;
@@ -38,59 +42,38 @@ import static org.bytedeco.pytorch.global.torch.zeros_like;
 /**
  * RRHF (Rank Responses to Rank Responses) trainer.
  *
- * <p>RRHF aligns language models using a ranking loss on generated responses.
- * Unlike DPO, it doesn't require preference pairs - instead, it uses a reward
- * model to score multiple generated responses and learns to match the ranking.
- *
- * <p>Key features:
+ * <p>Enterprise features beyond the legacy implementation:
  * <ul>
- *   <li>Only requires a reward model (no reference model needed)</li>
- *   <li>Can use any number of responses per prompt</li>
- *   <li>Compatible with any reward model scoring function</li>
- *   <li>Simpler data requirements than pairwise methods</li>
+ *   <li>Optional SFT auxiliary loss</li>
+ *   <li>Top-K truncation of candidates per prompt</li>
+ *   <li>Margin penalty for ranking loss</li>
+ *   <li>Rank head scoring hook (for use_rank_head)</li>
+ *   <li>NaN/Inf guard with fallback to SFT term</li>
  * </ul>
  *
- * <p>Reference: "RRHF: Rank Responses to Rank Responses for Human Preference"
- * (Yuan et al., 2023)
- *
- * <p>Expected batch keys:
- * <ul>
- *   <li>{@code input_ids} - prompt tokens {@code [B * num_responses, T]}</li>
- *   <li>{@code rewards} - scalar reward for each response {@code [B * num_responses]}</li>
- *   <li>optional {@code attention_mask}, {@code labels}</li>
- *   <li>or precomputed {@code log_probs} for policy responses</li>
- * </ul>
+ * <p>Reference: "RRHF: Rank Responses to Rank Human Preference" (Yuan et al., 2023)
  */
 @Properties(inherit = org.bytedeco.pytorch.presets.torch.class)
 public final class RRHFTrainer extends BaseTrainer {
     static { Loader.load(org.bytedeco.pytorch.presets.torch.class); }
 
-    public static final String VERSION = "1.0";
+    public static final String VERSION = "2.0";
     public static final String ALGORITHM_ID = "rrhf";
 
     private volatile boolean closed;
+    private long numTrainingSteps;
 
     private final Module policy;
     private final LlmForward policyForward;
     private final Module rewardModel;
-    private final Module reference;  // optional
+    private final Module reference;
     private final LlmForward referenceForward;
     private final RRHFConfig rrhfConfig;
     private final TensorVector params;
 
-    // Metrics
     private double totalRewardCorrelation;
     private int correlationCount;
 
-    /**
-     * Create RRHF trainer with reward model.
-     *
-     * @param policy Policy model to train
-     * @param policyForward Forward function for policy
-     * @param rewardModel Reward model for scoring responses
-     * @param optimizer Optimizer
-     * @param config RRHF configuration
-     */
     public RRHFTrainer(
             Module policy,
             LlmForward policyForward,
@@ -100,9 +83,6 @@ public final class RRHFTrainer extends BaseTrainer {
         this(policy, policyForward, rewardModel, null, null, optimizer, config);
     }
 
-    /**
-     * Create RRHF trainer with reward model and reference model.
-     */
     public RRHFTrainer(
             Module policy,
             LlmForward policyForward,
@@ -119,29 +99,29 @@ public final class RRHFTrainer extends BaseTrainer {
         this.referenceForward = referenceForward;
         this.rrhfConfig = Objects.requireNonNull(config, "config");
         this.params = policy.parameters();
-
-        if (reference != null) {
-            freeze(reference);
-        }
+        if (reference != null) freeze(reference);
+        if (rewardModel != null) freeze(rewardModel);
 
         System.out.printf(
-                "[RRHFTrainer v%s] numResponses=%d, rewardTemp=%.2f, pairwise=%s%n",
-                VERSION, rrhfConfig.numResponses(), rrhfConfig.rewardTemperature(),
-                rrhfConfig.pairwiseLoss());
+                "[RRHFTrainer v%s] numResponses=%d, topK=%d, sftW=%.3f, useRankHead=%s%n",
+                VERSION, rrhfConfig.numResponses(), rrhfConfig.topK(),
+                rrhfConfig.sftWeight(), rrhfConfig.useRankHead());
     }
 
-    // ==================== BaseTrainer Overrides ====================
+    public Module policy() { return policy; }
+    public Module rewardModel() { return rewardModel; }
+    public Module reference() { return reference; }
+    public RRHFConfig config() { return rrhfConfig; }
 
     @Override
-    protected TensorVector trainableParameters() {
-        return params;
-    }
+    protected TensorVector trainableParameters() { return params; }
 
     @Override
     public void train() {
         super.train();
         policy.train(true);
         if (reference != null) reference.eval();
+        if (rewardModel != null) rewardModel.eval();
     }
 
     @Override
@@ -149,46 +129,70 @@ public final class RRHFTrainer extends BaseTrainer {
         super.eval();
         policy.eval();
         if (reference != null) reference.eval();
+        if (rewardModel != null) rewardModel.eval();
     }
 
     @Override
     public Tensor computeLoss(Map<String, Tensor> batch) {
-        // Get responses and rewards
         Tensor rewards = require(batch, "rewards");
         int numResponses = rrhfConfig.numResponses();
+        int topK = rrhfConfig.topK();
 
-        // Get log-probs
         Tensor logProbs;
-        Tensor refLogProbs = null;
-
-        if (batch.containsKey("log_probs") && batch.get("log_probs") != null
-                && batch.get("log_probs").defined()) {
-            // Use precomputed log-probs
+        Tensor chosenLogits = null;
+        Tensor chosenLabels = null;
+        Tensor chosenMask = null;
+        if (hasKey(batch, "log_probs")) {
             logProbs = batch.get("log_probs");
         } else {
-            // Compute log-probs from forward pass
             Tensor inputIds = require(batch, "input_ids");
             Tensor attentionMask = batch.get("attention_mask");
             Tensor labels = orElse(batch.get("labels"), inputIds);
-
-            // Policy forward
             Tensor logits = policyForward.forward(inputIds, attentionMask);
-            logProbs = LogProbUtils.sequenceLogProbs(logits, labels, attentionMask);
+            logProbs = rrhfConfig.lengthNormalize()
+                    ? LogProbUtils.sequenceMeanLogProbs(logits, labels, attentionMask)
+                    : LogProbUtils.sequenceLogProbs(logits, labels, attentionMask);
+            chosenLogits = logits;
+            chosenLabels = labels;
+            chosenMask = attentionMask;
         }
 
-        // Compute reference log-probs if available
-        if (referenceForward != null && rrhfConfig.ratioWeight() > 0) {
+        Tensor refLogProbs = null;
+        if (referenceForward != null && rrhfConfig.useReferenceModel()) {
             try (NoGradGuard guard = new NoGradGuard()) {
                 Tensor inputIds = require(batch, "input_ids");
                 Tensor attentionMask = batch.get("attention_mask");
                 Tensor labels = orElse(batch.get("labels"), inputIds);
-
                 Tensor refLogits = referenceForward.forward(inputIds, attentionMask);
-                refLogProbs = LogProbUtils.sequenceLogProbs(refLogits, labels, attentionMask);
+                refLogProbs = rrhfConfig.lengthNormalize()
+                        ? LogProbUtils.sequenceMeanLogProbs(refLogits, labels, attentionMask)
+                        : LogProbUtils.sequenceLogProbs(refLogits, labels, attentionMask);
+                refLogProbs = refLogProbs.detach();
             }
         }
 
-        // Compute RRHF loss
+        // Use rank head scoring if enabled (substitute ref logprobs with rank head scores).
+        if (rrhfConfig.useRankHead() && rewardModel != null) {
+            try (NoGradGuard guard = new NoGradGuard()) {
+                Tensor inputIds = require(batch, "input_ids");
+                Tensor attentionMask = batch.get("attention_mask");
+                Tensor rmOut = rewardModel.forward(inputIds);
+                // Use the first scalar of the rank head as the per-sample score.
+                rewards = rmOut.reshape(new long[]{rmOut.size(0)}).detach();
+            }
+        }
+
+        // Truncate to topK
+        if (topK > 0 && topK < numResponses) {
+            int k = topK;
+            int keep = (int) (rewards.size(0) - rewards.size(0) % k);
+            if (keep > 0) {
+                logProbs = logProbs.slice(0, sliceStart(0), sliceEnd(keep), 1);
+                rewards = rewards.slice(0, sliceStart(0), sliceEnd(keep), 1);
+                if (refLogProbs != null) refLogProbs = refLogProbs.slice(0, sliceStart(0), sliceEnd(keep), 1);
+            }
+        }
+
         Tensor loss;
         if (rrhfConfig.pairwiseLoss()) {
             loss = RRHFLoss.computePairwise(
@@ -201,19 +205,64 @@ public final class RRHFTrainer extends BaseTrainer {
                     rrhfConfig.rewardWeight(), rrhfConfig.ratioWeight());
         }
 
-        // Track reward correlation
-        updateRewardCorrelation(logProbs, rewards);
+        // Margin penalty
+        if (rrhfConfig.margin() > 0.0) {
+            Tensor diff = logProbs.sub(refLogProbs != null ? refLogProbs : zeros_like(logProbs));
+            Tensor marginTerm = torch.tensor(rrhfConfig.margin()).sub(diff).clamp_min(new Scalar(0.0));
+            loss = loss.add(marginTerm.mean());
+        }
 
+        // Reference KL regularization
+        if (refLogProbs != null && rrhfConfig.beta() > 0.0) {
+            Tensor kl = logProbs.sub(refLogProbs).mean();
+            loss = loss.add(kl.mul(new Scalar(rrhfConfig.beta())));
+        }
+
+        // SFT auxiliary
+        if (rrhfConfig.sftWeight() > 0.0 && chosenLogits != null && chosenLogits.defined()) {
+            Tensor sft = DPOLoss.sftNll(chosenLogits, chosenLabels, chosenMask);
+            loss = loss.add(sft.mul(new Scalar(rrhfConfig.sftWeight())));
+        }
+
+        double v = loss.item_double();
+        if (Double.isNaN(v) || Double.isInfinite(v)) {
+            System.err.println("[RRHFTrainer] WARNING: NaN/Inf loss; falling back to SFT term.");
+            if (chosenLogits != null) {
+                loss = DPOLoss.sftNll(chosenLogits, chosenLabels, chosenMask);
+            }
+        }
+
+        updateRewardCorrelation(logProbs, rewards);
+        numTrainingSteps++;
         return loss;
     }
 
+    private static org.bytedeco.pytorch.LongOptional sliceStart(long v) {
+        return new org.bytedeco.pytorch.LongOptional(v);
+    }
+    private static org.bytedeco.pytorch.LongOptional sliceEnd(long v) {
+        return new org.bytedeco.pytorch.LongOptional(v);
+    }
+
     private void updateRewardCorrelation(Tensor logProbs, Tensor rewards) {
-        // Simple correlation tracking (placeholder for actual Spearman correlation)
-        // In practice, you would compute Spearman/Pearson correlation
+        try {
+            double lp = logProbs.mean().item_double();
+            double rw = rewards.mean().item_double();
+            // crude positive-favourable correlation tracking: monotone only when
+            // both averages move together. Real impl would compute Spearman.
+            totalRewardCorrelation += lp * rw;
+        } catch (Exception ignored) {}
         correlationCount++;
     }
 
-    // ==================== Utility Methods ====================
+    public double getRewardCorrelation() {
+        return correlationCount > 0 ? totalRewardCorrelation / correlationCount : 0.0;
+    }
+
+    private static boolean hasKey(Map<String, Tensor> batch, String key) {
+        Tensor t = batch.get(key);
+        return t != null && t.defined();
+    }
 
     private static void freeze(Module m) {
         TensorVector pv = m.parameters();
@@ -238,33 +287,17 @@ public final class RRHFTrainer extends BaseTrainer {
         return t;
     }
 
-    // ==================== Getters ====================
-
-    public Module policy() { return policy; }
-    public Module rewardModel() { return rewardModel; }
-    public Module reference() { return reference; }
-    public RRHFConfig config() { return rrhfConfig; }
-
-    /**
-     * Get algorithm identifier.
-     */
-    public String algorithm() {
-        return ALGORITHM_ID;
-    }
-
-    public String algorithmName() {
-        return "RRHF (Rank Responses to Rank Responses)";
-    }
-
-    // ==================== Lifecycle ====================
-
     @Override
     public void close() {
         if (closed) return;
         closed = true;
         super.close();
-        System.out.printf("[RRHFTrainer v%s] Closed%n", VERSION);
+        System.out.printf("[RRHFTrainer v%s] Closed: steps=%d%n", VERSION, numTrainingSteps);
     }
 
     public boolean isClosed() { return closed; }
+    public String algorithm() { return ALGORITHM_ID; }
+    public String algorithmName() {
+        return "RRHF v" + VERSION + " (Rank Responses to Rank Human Preference)";
+    }
 }
