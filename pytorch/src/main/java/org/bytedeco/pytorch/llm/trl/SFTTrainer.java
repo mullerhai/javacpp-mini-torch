@@ -110,6 +110,22 @@ public final class SFTTrainer extends BaseTrainer {
         this(model, null, null, forward, null, null, optimizer, config);
     }
 
+    /**
+     * Convenience constructor that wires a default {@link LlmForward} from the model.
+     * Suitable for {@code Module} subclasses that already implement a forward pass
+     * returning logits (e.g. {@code CausalLM}, where the forward takes input ids).
+     */
+    public SFTTrainer(Module model, Optimizer optimizer, SFTConfig config) {
+        this(model, defaultForwardFor(model), optimizer, config);
+    }
+
+    private static LlmForward defaultForwardFor(Module model) {
+        return (ids, mask) -> {
+            if (mask != null) return model.forward(ids, mask);
+            return model.forward(ids);
+        };
+    }
+
     public SFTTrainer(Module model, PeftModel peftModel, LoraConfig loraConfig, LlmForward forward,
                        PeftConfig peftConfig, FastTokenizer tokenizer,
                        Optimizer optimizer, SFTConfig config) {

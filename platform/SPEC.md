@@ -857,9 +857,9 @@ out.writeParquet("centrality.parquet");
 
 ### 15.2 New I/O Formats
 
-- **GraphML** (`io/GraphML.java`) — read/write XML graph exchange format
-- **GEXF** (`io/GEXF.java`) — Gephi XML format
-- **JSON node-link** (`io/JSONGraph.java`) — minimal hand-written JSON parser/writer
+- **GraphML** (`../pytorch/src/main/java/org/bytedeco/pytorch/graphx/io/GraphML.java`) — read/write XML graph exchange format
+- **GEXF** (`../pytorch/src/main/java/org/bytedeco/pytorch/graphx/io/GEXF.java`) — Gephi XML format
+- **JSON node-link** (`../pytorch/src/main/java/org/bytedeco/pytorch/graphx/io/JSONGraph.java`) — minimal hand-written JSON parser/writer
 
 ### 15.3 Community & Flow Algorithms (NEW)
 
@@ -883,8 +883,8 @@ out.writeParquet("centrality.parquet");
 
 ### 15.4 New Layouts
 
-- **ForceAtlas2** (`layout/ForceAtlas2Layout.java`) — Gephi-style large-network layout with swinging/traction adaptive cooling
-- **ARF** (`layout/ARFLayout.java`) — Attractive-Repulsive Forces
+- **ForceAtlas2** (`../pytorch/src/main/java/org/bytedeco/pytorch/graphx/layout/ForceAtlas2Layout.java`) — Gephi-style large-network layout with swinging/traction adaptive cooling
+- **ARF** (`../pytorch/src/main/java/org/bytedeco/pytorch/graphx/layout/ARFLayout.java`) — Attractive-Repulsive Forces
 
 ### 15.5 Plot Module Integration (NEW)
 

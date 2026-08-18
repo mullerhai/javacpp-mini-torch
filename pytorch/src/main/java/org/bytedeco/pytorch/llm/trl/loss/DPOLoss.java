@@ -31,7 +31,7 @@ import static org.bytedeco.pytorch.global.torch.clamp;
 import static org.bytedeco.pytorch.global.torch.log;
 import static org.bytedeco.pytorch.global.torch.sigmoid;
 import static org.bytedeco.pytorch.global.torch.cross_entropy;
-import static org.bytedeco.pytorch.global.torch.LongOptional;
+
 
 /**
  * Direct Preference Optimization loss (Rafailov et al.) and its modern variants.
