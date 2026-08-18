@@ -71,6 +71,10 @@ public final class AutoTokenizer {
      * Download only tokenizer artifacts for {@code modelId} and load them.
      * OpenAI / tiktoken ids short-circuit to the bundled Java encodings.
      */
+    public static FastTokenizer fromPretrainedTokenizerOnly(String modelId) throws IOException {
+        HfHub hub = HfHub.fromEnv();
+        return fromPretrained(modelId, hub);
+    }
     public static FastTokenizer fromPretrainedTokenizerOnly(String modelId, HfHub hub) throws IOException {
         return fromPretrained(modelId, hub);
     }

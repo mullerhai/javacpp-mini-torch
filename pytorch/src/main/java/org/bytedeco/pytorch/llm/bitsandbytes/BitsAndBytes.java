@@ -31,6 +31,7 @@ import org.bytedeco.pytorch.TensorVector;
 import org.bytedeco.pytorch.global.torch;
 import org.bytedeco.pytorch.nn.Module;
 import org.bytedeco.pytorch.nn.modules.LinearImpl;
+import org.bytedeco.pytorch.nn.modules.container.SharedModuleVector;
 import org.bytedeco.pytorch.llm.quantization.BitsAndBytesConfig;
 
 import java.nio.file.Files;
@@ -61,7 +62,7 @@ import static org.bytedeco.pytorch.global.torch.tensor;
  *   <li>{@link Linear4bit} / {@link Linear8bitLt} fused layers</li>
  *   <li>{@link Params4bit} / {@link Int8Params} weight-parameter wrappers</li>
  *   <li>Outlier-aware INT8 column-wise dequant (LLM.int8() style)</li>
- *   <li>{@link BnbOptimizer} stats and 8-bit {@link Adam8bit} / {@link Lion8bit} accumulator hooks</li>
+ *   <li>{ BnbOptimizer} stats and 8-bit {@link Adam8bit} / {@link Lion8bit} accumulator hooks</li>
  *   <li>HF-style {@code from_pretrained} / {@code state_dict} (de)serialization</li>
  *   <li>Memory estimation, ratio, and per-layer reporting</li>
  *   <li>Defensive input validation, NaN/Inf guards, device/dtype helpers</li>
@@ -1686,24 +1687,290 @@ public final class BitsAndBytes {
         return n;
     }
 
-    /** Snake_case alias matching Python transformers / peft. */
+    /** Snake_case alias matching Python bnb. */
     public static int prepare_model_for_kbit_training(TensorVector params) {
         return prepareModelForKbitTraining(params);
     }
 
-    /** Freeze every parameter of a Module (base model for QLoRA). */
-    public static int prepareModelForKbitTraining(Module model) {
+    /**
+     * Prepare a model for k-bit training — the Java equivalent of HuggingFace
+     * Transformers' {@code prepare_model_for_kbit_training}.
+     *
+     * <p>This method:
+     * <ol>
+     *   <li>Freezes all parameters ({@code requires_grad=False})</li>
+     *   <li>Recasts layer-norm modules to fp32 for numerical stability</li>
+     *   <li>Optionally enables gradient checkpointing on modules that support it</li>
+     *   <li>Disables input casting (we don't inject k-bit param wrappers here)</li>
+     * </ol>
+     *
+     * <p>For LoRA/QLoRA injection, prefer {@link #prepareForQLoRA} which combines
+     * quantize→materialize→freeze.
+     *
+     * @param model the model to prepare (may be a leaf or container Module)
+     * @return {@link PreparationResult} with counts and affected module names
+     */
+    public static PreparationResult prepareModelForKbitTraining(Module model) {
+        return prepareModelForKbitTraining(model, true, null);
+    }
+
+    /**
+     * Full-featured model preparation for k-bit training.
+     *
+     * @param model model to prepare
+     * @param gradientCheckpointing whether to call {@code enable_gradient_checkpointing}
+     *                              on modules that support it (recommended for QLoRA)
+     * @param gradientCheckpointingKwargs optional kwargs forwarded to the enable call; may be null
+     * @return preparation result with statistics
+     */
+    public static PreparationResult prepareModelForKbitTraining(Module model,
+                                                                 boolean gradientCheckpointing,
+                                                                 Map<String, Object> gradientCheckpointingKwargs) {
+        if (model == null) return new PreparationResult(0, 0, 0, Collections.emptyList(), Collections.emptyList());
+        int frozen = 0;
+        int lnCast = 0;
+        int gcEnabled = 0;
+        List<String> layerNormModules = new ArrayList<>();
+        List<String> gcModules = new ArrayList<>();
+
+        try (NoGradGuard guard = new NoGradGuard()) {
+            // 1. Freeze all parameters
+            TensorVector params = model.parameters();
+            if (params != null) {
+                for (long i = 0, m = params.size(); i < m; i++) {
+                    Tensor p = params.get((int) i);
+                    if (p != null && !p.isNull() && p.defined()) {
+                        p.requires_grad_(false);
+                        frozen++;
+                    }
+                }
+            }
+
+            // 2. Cast layer-norm-like submodules to fp32 for stability.
+            //    In typical HF models the norm layer is named "norm", "layer_norm",
+            //    "final_layer_norm", or similar.
+            List<String> normNames = List.of("norm", "layer_norm", "final_layer_norm",
+                    "ln_f", "ln_1", "ln_2", "input_layernorm", "post_attention_layernorm",
+                    "resid_dropout", "embed_dropout");
+            castLayerNormsToFp32(model, "", normNames, layerNormModules);
+            lnCast = layerNormModules.size();
+
+            // 3. Gradient checkpointing (memory saving, recommended for QLoRA).
+            if (gradientCheckpointing) {
+                gcEnabled = enableGradientCheckpointingRecursive(model, "", gcModules);
+            }
+        }
+
+        return new PreparationResult(frozen, lnCast, gcEnabled, layerNormModules, gcModules);
+    }
+
+    /** Snake_case alias for {@link #prepareModelForKbitTraining(Module)}. */
+    public static PreparationResult prepare_model_for_kbit_training(Module model) {
+        return prepareModelForKbitTraining(model);
+    }
+
+    /** Snake_case alias for full-featured prepare. */
+    public static PreparationResult prepare_model_for_kbit_training(Module model,
+                                                                     boolean gradientCheckpointing,
+                                                                     Map<String, Object> gradientCheckpointingKwargs) {
+        return prepareModelForKbitTraining(model, gradientCheckpointing, gradientCheckpointingKwargs);
+    }
+
+    // -------------------------------------------------------------------------
+    // PreparationResult
+    // -------------------------------------------------------------------------
+
+    /**
+     * Outcome of {@link #prepareModelForKbitTraining}.
+     * Exposes counts and affected module names for debugging / logging.
+     */
+    public static final class PreparationResult {
+        private final int frozenParamCount;
+        private final int layerNormCastCount;
+        private final int gradientCheckpointingCount;
+        private final List<String> layerNormModules;
+        private final List<String> gcModules;
+
+        public PreparationResult(int frozenParamCount, int layerNormCastCount,
+                                  int gradientCheckpointingCount,
+                                  List<String> layerNormModules,
+                                  List<String> gcModules) {
+            this.frozenParamCount = frozenParamCount;
+            this.layerNormCastCount = layerNormCastCount;
+            this.gradientCheckpointingCount = gradientCheckpointingCount;
+            this.layerNormModules = Collections.unmodifiableList(new ArrayList<>(layerNormModules));
+            this.gcModules = Collections.unmodifiableList(new ArrayList<>(gcModules));
+        }
+
+        public int frozenParamCount() { return frozenParamCount; }
+        public int layerNormCastCount() { return layerNormCastCount; }
+        public int gradientCheckpointingCount() { return gradientCheckpointingCount; }
+        public List<String> layerNormModules() { return layerNormModules; }
+        public List<String> gcModules() { return gcModules; }
+
+        @Override
+        public String toString() {
+            return "PreparationResult{frozen=" + frozenParamCount
+                    + ", ln_cast=" + layerNormCastCount
+                    + ", gc_enabled=" + gradientCheckpointingCount
+                    + ", ln_modules=" + layerNormModules
+                    + ", gc_modules=" + gcModules
+                    + "}";
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Internal helpers
+    // -------------------------------------------------------------------------
+
+    /**
+     * Recursively locate and cast layer-norm named submodules to fp32.
+     * Casts the module's {@code weight} and {@code bias} tensors in-place.
+     */
+    private static int castLayerNormsToFp32(Module module, String prefix,
+                                            List<String> normNames,
+                                            List<String> affected) {
+        if (module == null) return 0;
+        int count = 0;
+        String name = module.getClass().getSimpleName();
+        boolean isNorm = normNames.stream().anyMatch(n ->
+                name.toLowerCase(Locale.ROOT).contains(n));
+        if (isNorm) {
+            try {
+                castModuleToFp32(module);
+                affected.add(prefix.isEmpty() ? name : prefix + "." + name);
+                count++;
+            } catch (Exception ignored) {}
+        }
+        // Recurse into children using SharedModuleVector.Iterator pattern
+        SharedModuleVector.Iterator modBegin = module.modules().begin();
+        SharedModuleVector.Iterator modEnd = module.modules().end();
+        while (!modBegin.equals(modEnd)) {
+            Module child = modBegin.get();
+            if (child != null && !child.isNull() && child != module) {
+                count += castLayerNormsToFp32(child, prefix.isEmpty() ? name : prefix + "." + name,
+                        normNames, affected);
+            }
+            modBegin = modBegin.increment();
+        }
+        return count;
+    }
+
+    /**
+     * Cast a module's parameters to fp32 in-place.
+     * Attempts to cast {@code weight} and {@code bias} tensors.
+     */
+    private static void castModuleToFp32(Module module) {
+        try {
+            java.lang.reflect.Method weightMeth = findMethod(module.getClass(), "weight");
+            if (weightMeth != null) {
+                Object w = weightMeth.invoke(module);
+                if (w instanceof Tensor t && t.defined()) {
+                    t.copy_(t.to(ScalarType.Float));
+                }
+            }
+            java.lang.reflect.Method biasMeth = findMethod(module.getClass(), "bias");
+            if (biasMeth != null) {
+                Object b = biasMeth.invoke(module);
+                if (b instanceof Tensor t && t.defined()) {
+                    t.copy_(t.to(ScalarType.Float));
+                }
+            }
+        } catch (Exception e) {
+            // Not all modules have weight/bias — silently skip
+        }
+    }
+
+    private static java.lang.reflect.Method findMethod(Class<?> cls, String name) {
+        for (java.lang.reflect.Method m : cls.getDeclaredMethods()) {
+            if (m.getName().equals(name) && m.getParameterCount() == 0) {
+                m.setAccessible(true);
+                return m;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Recursively enable gradient checkpointing on modules that expose
+     * {@code enable_gradient_checkpointing} and {@code gradient_checkpointing_enable}.
+     * Returns the number of modules that were successfully configured.
+     */
+    private static int enableGradientCheckpointingRecursive(Module module, String prefix,
+                                                            List<String> affected) {
+        if (module == null) return 0;
+        int count = 0;
+        String simpleName = module.getClass().getSimpleName();
+
+        // Try both naming conventions used by PyTorch modules
+        tryEnableGc(module, "enable_gradient_checkpointing");
+        tryEnableGc(module, "gradient_checkpointing_enable");
+        tryEnableGc(module, "set_gradient_checkpointing");
+
+        boolean wasEnabled = false;
+        try {
+            java.lang.reflect.Method m = findMethod(module.getClass(), "gradient_checkpointing");
+            if (m != null) {
+                Object val = m.invoke(module);
+                if (Boolean.TRUE.equals(val) || "true".equals(String.valueOf(val))) {
+                    wasEnabled = true;
+                }
+            }
+        } catch (Exception ignored) {}
+        if (wasEnabled || isGcMethodFound(module)) {
+            affected.add(prefix.isEmpty() ? simpleName : prefix + "." + simpleName);
+            count++;
+        }
+
+        // Recurse using SharedModuleVector.Iterator pattern
+        SharedModuleVector.Iterator modBegin = module.modules().begin();
+        SharedModuleVector.Iterator modEnd = module.modules().end();
+        while (!modBegin.equals(modEnd)) {
+            Module child = modBegin.get();
+            if (child != null && !child.isNull() && child != module) {
+                count += enableGradientCheckpointingRecursive(
+                        child,
+                        prefix.isEmpty() ? simpleName : prefix + "." + simpleName,
+                        affected);
+            }
+            modBegin = modBegin.increment();
+        }
+        return count;
+    }
+
+    private static void tryEnableGc(Module module, String methodName) {
+        try {
+            java.lang.reflect.Method m = module.getClass().getDeclaredMethod(methodName);
+            m.setAccessible(true);
+            m.invoke(module);
+        } catch (Exception ignored) {}
+    }
+
+    private static boolean isGcMethodFound(Module module) {
+        for (String name : List.of("enable_gradient_checkpointing",
+                "gradient_checkpointing_enable",
+                "set_gradient_checkpointing")) {
+            try {
+                module.getClass().getDeclaredMethod(name);
+                return true;
+            } catch (Exception ignored) {}
+        }
+        return false;
+    }
+
+    // -------------------------------------------------------------------------
+    // Legacy stub (kept for source-level compatibility)
+    // -------------------------------------------------------------------------
+
+    /** @deprecated Use {@link #prepareModelForKbitTraining(Module)} instead. */
+    @Deprecated
+    public static int prepareModelForKbitTraining_old(Module model) {
         if (model == null) return 0;
         try {
             return prepareModelForKbitTraining(model.parameters());
         } catch (Exception e) {
             return 0;
         }
-    }
-
-    /** Snake_case alias for {@link #prepareModelForKbitTraining(Module)}. */
-    public static int prepare_model_for_kbit_training(Module model) {
-        return prepareModelForKbitTraining(model);
     }
 
     /**
