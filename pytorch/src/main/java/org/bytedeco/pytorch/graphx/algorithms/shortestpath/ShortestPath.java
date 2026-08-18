@@ -192,9 +192,12 @@ public final class ShortestPath {
         }
     }
 
-    static final class NodeDist<N> {
+    static final class NodeDist<N> implements Comparable<NodeDist<N>> {
         final N node;
         final double dist;
         NodeDist(N node, double dist) { this.node = node; this.dist = dist; }
+        @Override public int compareTo(NodeDist<N> other) {
+            return Double.compare(this.dist, other.dist);
+        }
     }
 }
