@@ -394,10 +394,11 @@ public final class FFT {
             for (int i = 0; i < n; i++) {
                 sum += x[i] * Math.cos(Math.PI * (i + 0.5) * k / n);
             }
-            y[k] = 2 * sum;
             if (norm) {
-                y[k] *= Math.sqrt(0.5 / n);
-                if (k == 0) y[k] /= Math.sqrt(2);
+                // scipy-like normalization: scale by sqrt(2/n) for k>0, 1/sqrt(n) for k=0
+                y[k] = (k == 0) ? sum / Math.sqrt(n) : sum * Math.sqrt(2.0 / n);
+            } else {
+                y[k] = 2 * sum;
             }
         }
         return y;

@@ -21,6 +21,8 @@
  */
 package org.bytedeco.pytorch.llm.trl.config;
 
+import org.bytedeco.pytorch.llm.trl.trainer.SPOTrainer;
+
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -33,7 +35,7 @@ import java.util.Map;
  *
  * <p>Reference: "Self-Play Preference Optimization (SPO)" (Zhao et al., 2024)
  *
- * @see org.bytedeco.pytorch.llm.trl.SPOTrainer
+ * @see SPOTrainer
  */
 public final class SPOConfig extends TrainerConfig {
     // Core SPO

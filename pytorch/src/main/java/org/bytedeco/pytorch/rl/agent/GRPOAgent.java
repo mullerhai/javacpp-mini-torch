@@ -1,4 +1,5 @@
 package org.bytedeco.pytorch.rl.agent;
+import org.bytedeco.pytorch.llm.trl.trainer.GRPOTrainer;
 import org.bytedeco.pytorch.optim.*;
 
 import org.bytedeco.pytorch.optim.Adam;
@@ -6,22 +7,16 @@ import org.bytedeco.pytorch.optim.options.AdamOptions;
 
 import org.bytedeco.pytorch.Scalar;
 import org.bytedeco.pytorch.ScalarOptional;
-import org.bytedeco.pytorch.ScalarTypeOptional;
 import org.bytedeco.pytorch.Tensor;
 import org.bytedeco.pytorch.distribution.Distribution;
 
 import static org.bytedeco.pytorch.global.torch.*;
 
 import org.bytedeco.pytorch.*;
-import org.bytedeco.pytorch.global.torch;
-import org.bytedeco.pytorch.distribution.Distribution;
 import org.bytedeco.pytorch.rl.ReplayBuffer;
 import org.bytedeco.pytorch.rl.critic.AbstractActorCritic;
 import org.bytedeco.pytorch.rl.critic.ActorCritic;
 import org.bytedeco.pytorch.rl.critic.CartPoleActorCritic;
-
-
-import static org.bytedeco.pytorch.global.torch.*;
 
 /**
  * <b>Guided-Reward PPO</b> (historically mislabeled "GRPO" in this package).
@@ -35,7 +30,7 @@ import static org.bytedeco.pytorch.global.torch.*;
  *       normalization, often critic-free. See
  *       {@link org.bytedeco.pytorch.rl.agent.GroupRelativePPOAgent},
  *       {@link org.bytedeco.pytorch.rl.loss.GRPOLoss},
- *       {@link org.bytedeco.pytorch.llm.trl.GRPOTrainer}.</li>
+ *       {@link GRPOTrainer}.</li>
  * </ul>
  *
  * <p>Prefer the explicit alias {@link GuidedRewardPPOAgent} in new code.

@@ -23,8 +23,8 @@ package org.bytedeco.pytorch.llm.llamafactory.train;
 
 import org.bytedeco.pytorch.llm.llamafactory.hparams.FactoryArgs;
 import org.bytedeco.pytorch.llm.llamafactory.model.ModelLoader.LoadedModel;
-import org.bytedeco.pytorch.llm.trl.BaseTrainer;
-import org.bytedeco.pytorch.llm.trl.SFTTrainer;
+import org.bytedeco.pytorch.llm.trl.trainer.BaseTrainer;
+import org.bytedeco.pytorch.llm.trl.trainer.SFTTrainer;
 import org.bytedeco.pytorch.llm.trl.config.SFTConfig;
 import org.bytedeco.pytorch.optim.Optimizer;
 

@@ -22,13 +22,13 @@
 package org.bytedeco.pytorch.llm.trl.spi;
 
 import org.bytedeco.pytorch.Tensor;
-import org.bytedeco.pytorch.llm.trl.BaseTrainer;
-import org.bytedeco.pytorch.llm.trl.DPOTrainer;
-import org.bytedeco.pytorch.llm.trl.GRPOTrainer;
+import org.bytedeco.pytorch.llm.trl.trainer.BaseTrainer;
+import org.bytedeco.pytorch.llm.trl.trainer.DPOTrainer;
+import org.bytedeco.pytorch.llm.trl.trainer.GRPOTrainer;
 import org.bytedeco.pytorch.llm.trl.LlmForward;
-import org.bytedeco.pytorch.llm.trl.ORPOTrainer;
-import org.bytedeco.pytorch.llm.trl.PPOTrainer;
-import org.bytedeco.pytorch.llm.trl.SFTTrainer;
+import org.bytedeco.pytorch.llm.trl.trainer.ORPOTrainer;
+import org.bytedeco.pytorch.llm.trl.trainer.PPOTrainer;
+import org.bytedeco.pytorch.llm.trl.trainer.SFTTrainer;
 import org.bytedeco.pytorch.llm.trl.config.DPOConfig;
 import org.bytedeco.pytorch.llm.trl.config.GRPOConfig;
 import org.bytedeco.pytorch.llm.trl.config.ORPOConfig;

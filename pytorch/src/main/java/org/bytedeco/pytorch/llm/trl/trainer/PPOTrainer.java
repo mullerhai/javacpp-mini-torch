@@ -19,10 +19,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.bytedeco.pytorch.llm.trl;
+package org.bytedeco.pytorch.llm.trl.trainer;
 import org.bytedeco.pytorch.*;
-import org.bytedeco.pytorch.jit.*;
-import org.bytedeco.pytorch.optim.*;
+import org.bytedeco.pytorch.llm.trl.LogProbUtils;
 
 import org.bytedeco.javacpp.Loader;
 import org.bytedeco.javacpp.annotation.Properties;
@@ -33,8 +32,6 @@ import org.bytedeco.pytorch.optim.Optimizer;
 
 import java.util.Map;
 import java.util.Objects;
-import java.util.function.BiFunction;
-import java.util.function.Function;
 
 import static org.bytedeco.pytorch.global.torch.zeros_like;
 

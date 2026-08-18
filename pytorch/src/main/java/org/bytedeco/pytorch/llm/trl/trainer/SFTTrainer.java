@@ -19,7 +19,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.bytedeco.pytorch.llm.trl;
+package org.bytedeco.pytorch.llm.trl.trainer;
 
 import org.bytedeco.javacpp.Loader;
 import org.bytedeco.javacpp.annotation.Properties;
@@ -30,6 +30,7 @@ import org.bytedeco.pytorch.llm.peft.LoraConfig;
 import org.bytedeco.pytorch.llm.peft.PeftConfig;
 import org.bytedeco.pytorch.llm.peft.PeftModel;
 import org.bytedeco.pytorch.llm.tokenizers.FastTokenizer;
+import org.bytedeco.pytorch.llm.trl.LlmForward;
 import org.bytedeco.pytorch.llm.trl.config.SFTConfig;
 import org.bytedeco.pytorch.llm.trl.loss.SFTLoss;
 import org.bytedeco.pytorch.nn.Module;

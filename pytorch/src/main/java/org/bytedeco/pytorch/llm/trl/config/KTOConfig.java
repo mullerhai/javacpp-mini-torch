@@ -21,6 +21,8 @@
  */
 package org.bytedeco.pytorch.llm.trl.config;
 
+import org.bytedeco.pytorch.llm.trl.trainer.KTOTrainer;
+
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -29,7 +31,7 @@ import java.util.Map;
  *
  * <p>Reference: "KTO: Kahneman-Tversky Optimization" (Meta AI, 2024)
  *
- * @see org.bytedeco.pytorch.llm.trl.KTOTrainer
+ * @see KTOTrainer
  */
 public final class KTOConfig extends TrainerConfig {
     private final double beta;

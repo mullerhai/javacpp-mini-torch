@@ -24,10 +24,8 @@ package org.bytedeco.pytorch.rl.trainer;
 import org.bytedeco.pytorch.Tensor;
 import org.bytedeco.pytorch.rl.ReplayBuffer;
 import org.bytedeco.pytorch.rl.config.AgentConfig;
-import org.bytedeco.pytorch.rl.agent.AbstractRLAgent;
 
 import java.util.Map;
-import java.util.function.Consumer;
 
 /**
  * Unified trainer interface for reinforcement learning.
@@ -45,7 +43,7 @@ import java.util.function.Consumer;
  * </ul>
  *
  * @see PPOTrainer for enterprise PPO implementation
- * @see org.bytedeco.pytorch.llm.trl.PPOTrainer for LLM-specific PPO
+ * @see org.bytedeco.pytorch.llm.trl.trainer.PPOTrainer for LLM-specific PPO
  */
 public interface RLTrainer extends AutoCloseable {
 

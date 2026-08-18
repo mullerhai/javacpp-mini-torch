@@ -32,7 +32,7 @@ import org.bytedeco.pytorch.llm.llamafactory.model.ModelLoader;
 import org.bytedeco.pytorch.llm.llamafactory.model.ModelLoader.LoadedModel;
 import org.bytedeco.pytorch.llm.llamafactory.webui.BoardState;
 import org.bytedeco.pytorch.llm.llamafactory.hparams.FinetuningArgs;
-import org.bytedeco.pytorch.llm.trl.BaseTrainer;
+import org.bytedeco.pytorch.llm.trl.trainer.BaseTrainer;
 
 import java.io.IOException;
 import java.nio.file.Path;

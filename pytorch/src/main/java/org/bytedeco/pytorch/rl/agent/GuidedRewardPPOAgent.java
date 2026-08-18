@@ -1,5 +1,5 @@
 package org.bytedeco.pytorch.rl.agent;
-import org.bytedeco.pytorch.optim.*;
+import org.bytedeco.pytorch.llm.trl.trainer.GRPOTrainer;
 
 import org.bytedeco.pytorch.optim.Optimizer;
 import org.bytedeco.pytorch.rl.ReplayBuffer;
@@ -10,7 +10,7 @@ import org.bytedeco.pytorch.rl.critic.AbstractActorCritic;
  * {@link GRPOAgent}.
  *
  * <p>This is <b>not</b> DeepSeek Group-Relative Policy Optimization — see
- * {@link GroupRelativePPOAgent} / {@link org.bytedeco.pytorch.llm.trl.GRPOTrainer}.
+ * {@link GroupRelativePPOAgent} / {@link GRPOTrainer}.
  *
  * <p>Binary-compatible: subclasses {@link GRPOAgent} with identical behaviour.
  */

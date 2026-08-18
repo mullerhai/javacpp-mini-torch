@@ -88,40 +88,80 @@ public final class Optimize {
 
     /** Scalar minimization using Brent's method */
     public static MinimizeResult minimize_scalar(DoubleUnaryOperator f, double a, double b, double xtol) {
-        // Brent's method
-        double golden = (Math.sqrt(5) - 1) / 2;
-        double xa = a, xb = b;
-        double xc = a + golden * (b - a);
-        double xd = xc;
-        double fa = f.applyAsDouble(xa);
-        double fb = f.applyAsDouble(xb);
-        double fc = f.applyAsDouble(xc);
+        // Brent's method - combines parabolic interpolation with golden section search
+        double c = 0.5 * (3.0 - Math.sqrt(5.0)); // ~0.381966
+        double x = a + c * (b - a);
+        double w = x, v = x;
+        double fx = f.applyAsDouble(x);
+        double fw = fx, fv = fx;
+        double a2 = a, b2 = b;
         int nit = 0;
         boolean converged = false;
-        while (Math.abs(xb - xa) > xtol && nit < 100) {
+        double tol = xtol;
+
+        for (int i = 0; i < 100; i++) {
             nit++;
-            if (fc < fb) {
-                xa = xb; fa = fb;
-                xb = xc; fb = fc;
-                xc = xa + golden * (xb - xa);
-                fc = f.applyAsDouble(xc);
-            } else {
-                if (xa == xc) {
-                    xa = xd; fa = f.applyAsDouble(xa);
-                    xd = xa + (xc - xa) / 2;
-                } else {
-                    xd = xc;
-                    xc = xb;
-                    xb = (xa + xb) / 2;
-                    fc = f.applyAsDouble(xb);
-                }
-            }
-            if (Math.abs(xb - xa) < xtol) {
+            double m = 0.5 * (a2 + b2);
+            double tol1 = tol * Math.abs(x) + tol;
+            double tol2 = 2.0 * tol1;
+
+            // Check convergence
+            if (Math.abs(x - m) <= tol2 - 0.5 * (b2 - a2)) {
                 converged = true;
                 break;
             }
+
+            double step = 0;
+            double u;
+            // Parabolic interpolation or golden section
+            if (Math.abs(x - w) > tol1 && Math.abs(x - v) > tol1) {
+                // Parabolic fit
+                double r = (x - w) * (fx - fv);
+                double q = (x - v) * (fx - fw);
+                double p = (x - v) * q - (x - w) * r;
+                q = 2.0 * (q - r);
+                if (q > 0) p = -p;
+                q = Math.abs(q);
+                step = (x - w) * (x - w) * q - (x - w) * p;
+                if (Math.abs(step) < 1e-10) {
+                    // Fall back to golden section
+                    step = x < m ? x - a2 : b2 - x;
+                }
+                u = x + step;
+                if (u - a2 < tol2 || b2 - u < tol2) {
+                    step = Math.abs(tol1);
+                    step = x < m ? -step : step;
+                }
+            } else {
+                // Golden section
+                step = x < m ? a2 - x : b2 - x;
+                step = c * step;
+                u = x + step;
+            }
+
+            // Evaluate at new point
+            u = x + (Math.abs(step) > tol1 ? step : (step > 0 ? tol1 : -tol1));
+            double fu = f.applyAsDouble(u);
+
+            // Update intervals
+            if (fu <= fx) {
+                if (u >= x) a2 = x;
+                else b2 = x;
+                v = w; fv = fw;
+                w = x; fw = fx;
+                x = u; fx = fu;
+            } else {
+                if (u >= x) b2 = u;
+                else a2 = u;
+                if (fu <= fw || w == x) {
+                    v = w; fv = fw;
+                    w = u; fw = fu;
+                } else if (fu <= fv || v == x || v == w) {
+                    v = u; fv = fu;
+                }
+            }
         }
-        return new MinimizeResult(xb, fb, nit, converged);
+        return new MinimizeResult(x, fx, nit, converged);
     }
 
     /** Default minimize_scalar */
@@ -534,34 +574,38 @@ public final class Optimize {
         int iter = 0;
         while (iter < maxiter) {
             iter++;
-            if (fb * fc > 0) {
+            if (fa * fc > 0) {
                 c = a; fc = fa;
+                double tmp = b; b = a; a = tmp;
+                tmp = fb; fb = fa; fa = tmp;
             }
-            if (Math.abs(fb - fc) > xtol) {
-                double s;
-                double d1 = (c - b) * (fb - fa) / (fa - fb);
-                double d2 = (c - a) * (fb - fc) / (fc - fb);
-                if (Math.abs(d1 - d2) < xtol) {
-                    // Use secant
-                    s = fb * (c - b) / (fb - fc) + c;
-                } else {
-                    s = (fa * (b - c) * fb * d1 - fb * (a - c) * fa * d2) /
-                        ((fa - fb) * (fb - fc) * (fc - fa));
-                }
-                double fs = f.applyAsDouble(new double[]{s});
-                c = b; fc = fb;
-                if (fa * fs < 0) { b = s; fb = fs; } else { a = s; fa = fs; }
-            } else {
-                double s = b - fb * (b - a) / (fb - fa);
-                double fs = f.applyAsDouble(new double[]{s});
-                c = b; fc = fb;
-                if (fa * fs < 0) { b = s; fb = fs; } else { a = s; fa = fs; }
-            }
-            if (Math.abs(fb) < xtol) {
+            double delta = b - a;
+            if (Math.abs(delta) < xtol) {
                 converged = true;
                 break;
             }
-            if (Math.abs(b - a) < xtol) {
+            double s;
+            // Inverse quadratic interpolation
+            if (Math.abs(fa - fb) > xtol && Math.abs(fc - fa) > xtol) {
+                s = a * fb * fc / ((fa - fb) * (fa - fc))
+                         + b * fa * fc / ((fb - fa) * (fb - fc))
+                         + c * fa * fb / ((fc - fa) * (fc - fb));
+                if (s > (3 * a + b) / 4 && s < b) {
+                    // Accept interpolation
+                } else {
+                    s = (a + b) / 2;
+                }
+            } else {
+                s = (a + b) / 2;
+            }
+            double fs = f.applyAsDouble(new double[]{s});
+            c = b; fc = fb;
+            b = s; fb = fs;
+            if (fa * fs < 0) {
+                b = a; fb = fa;
+                a = s; fa = fs;
+            }
+            if (Math.abs(fb) < xtol || Math.abs(b - a) < xtol) {
                 converged = true;
                 break;
             }

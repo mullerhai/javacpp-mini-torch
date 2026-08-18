@@ -1,11 +1,10 @@
 package org.bytedeco.pytorch.rl.agent;
-import org.bytedeco.pytorch.optim.*;
+import org.bytedeco.pytorch.llm.trl.trainer.GRPOTrainer;
 
 import org.bytedeco.pytorch.Scalar;
 import org.bytedeco.pytorch.Tensor;
 import org.bytedeco.pytorch.distribution.Distribution;
 import org.bytedeco.pytorch.llm.trl.loss.GRPOLoss;
-import org.bytedeco.pytorch.llm.trl.loss.PPOLoss;
 import org.bytedeco.pytorch.optim.Adam;
 import org.bytedeco.pytorch.optim.options.AdamOptions;
 import org.bytedeco.pytorch.optim.Optimizer;
@@ -23,7 +22,7 @@ import static org.bytedeco.pytorch.global.torch.*;
  * <em>group-normalized</em> (no learned critic required). A PPO-style clip is
  * applied on the importance sampling ratio. Loss math delegates to
  * {@link GRPOLoss} in {@code llm.trl.loss} (shared with
- * {@link org.bytedeco.pytorch.llm.trl.GRPOTrainer}).
+ * {@link GRPOTrainer}).
  *
  * <p><b>Not</b> the guided-reward agent — that is {@link GuidedRewardPPOAgent}
  * / {@link GRPOAgent}.

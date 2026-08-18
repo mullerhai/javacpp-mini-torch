@@ -23,7 +23,7 @@
 package org.bytedeco.pytorch.llm.trl.spi;
 
 import org.bytedeco.pytorch.Tensor;
-import org.bytedeco.pytorch.llm.trl.BaseTrainer;
+import org.bytedeco.pytorch.llm.trl.trainer.BaseTrainer;
 
 import java.nio.file.Path;
 import java.util.Map;

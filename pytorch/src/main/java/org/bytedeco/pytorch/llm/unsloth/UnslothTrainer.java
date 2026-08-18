@@ -22,7 +22,7 @@
 package org.bytedeco.pytorch.llm.unsloth;
 
 import org.bytedeco.pytorch.Tensor;
-import org.bytedeco.pytorch.llm.trl.SFTTrainer;
+import org.bytedeco.pytorch.llm.trl.trainer.SFTTrainer;
 import org.bytedeco.pytorch.llm.trl.config.SFTConfig;
 import org.bytedeco.pytorch.optim.Optimizer;
 

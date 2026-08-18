@@ -37,7 +37,7 @@ import org.bytedeco.pytorch.llm.llamafactory.data.template.TemplateRegistry;
 import org.bytedeco.pytorch.llm.llamafactory.hparams.DataArgs;
 import org.bytedeco.pytorch.llm.llamafactory.hparams.Stage;
 import org.bytedeco.pytorch.Tensor;
-import org.bytedeco.pytorch.llm.trl.BaseTrainer;
+import org.bytedeco.pytorch.llm.trl.trainer.BaseTrainer;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;

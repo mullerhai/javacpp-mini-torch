@@ -23,8 +23,8 @@ package org.bytedeco.pytorch.llm.llamafactory.train;
 
 import org.bytedeco.pytorch.llm.llamafactory.hparams.FactoryArgs;
 import org.bytedeco.pytorch.llm.llamafactory.model.ModelLoader.LoadedModel;
-import org.bytedeco.pytorch.llm.trl.BaseTrainer;
-import org.bytedeco.pytorch.llm.trl.GRPOTrainer;
+import org.bytedeco.pytorch.llm.trl.trainer.BaseTrainer;
+import org.bytedeco.pytorch.llm.trl.trainer.GRPOTrainer;
 import org.bytedeco.pytorch.llm.trl.LlmForward;
 import org.bytedeco.pytorch.llm.trl.config.GRPOConfig;
 import org.bytedeco.pytorch.optim.Optimizer;

@@ -21,8 +21,8 @@
  */
 package org.bytedeco.pytorch.llm.llamafactory.train;
 
-import org.bytedeco.pytorch.llm.trl.BaseTrainer;
-import org.bytedeco.pytorch.llm.trl.TrainerCallback;
+import org.bytedeco.pytorch.llm.trl.trainer.BaseTrainer;
+import org.bytedeco.pytorch.llm.trl.callback.TrainerCallback;
 
 import java.util.ArrayList;
 import java.util.Collections;

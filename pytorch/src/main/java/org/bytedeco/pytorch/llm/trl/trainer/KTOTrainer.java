@@ -19,12 +19,14 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.bytedeco.pytorch.llm.trl;
+package org.bytedeco.pytorch.llm.trl.trainer;
 
 import org.bytedeco.javacpp.Loader;
 import org.bytedeco.javacpp.annotation.Properties;
 import org.bytedeco.pytorch.*;
 import org.bytedeco.pytorch.global.torch;
+import org.bytedeco.pytorch.llm.trl.LlmForward;
+import org.bytedeco.pytorch.llm.trl.LogProbUtils;
 import org.bytedeco.pytorch.llm.trl.config.KTOConfig;
 import org.bytedeco.pytorch.llm.trl.loss.DPOLoss;
 import org.bytedeco.pytorch.nn.Module;

@@ -22,9 +22,6 @@
  */
 package org.bytedeco.pytorch.rl.trainer;
 
-import org.bytedeco.pytorch.data.transforms.*;
-import org.bytedeco.pytorch.optim.*;
-
 import org.bytedeco.pytorch.Scalar;
 import org.bytedeco.pytorch.Tensor;
 import org.bytedeco.pytorch.distribution.Distribution;
@@ -53,7 +50,7 @@ import static org.bytedeco.pytorch.global.torch.randperm;
  *   <li>Multi-epoch mini-batch updates</li>
  * </ul>
  *
- * <p>For LLM token-level PPO prefer {@link org.bytedeco.pytorch.llm.trl.PPOTrainer}
+ * <p>For LLM token-level PPO prefer {@link org.bytedeco.pytorch.llm.trl.trainer.PPOTrainer}
  * or {@link org.bytedeco.pytorch.rl.agent.LMPPOAgent}.
  */
 public class PPOTrainer implements RLTrainer, AutoCloseable {

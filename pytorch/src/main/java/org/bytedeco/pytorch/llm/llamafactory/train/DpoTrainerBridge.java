@@ -23,8 +23,8 @@ package org.bytedeco.pytorch.llm.llamafactory.train;
 
 import org.bytedeco.pytorch.llm.llamafactory.hparams.FactoryArgs;
 import org.bytedeco.pytorch.llm.llamafactory.model.ModelLoader.LoadedModel;
-import org.bytedeco.pytorch.llm.trl.BaseTrainer;
-import org.bytedeco.pytorch.llm.trl.DPOTrainer;
+import org.bytedeco.pytorch.llm.trl.trainer.BaseTrainer;
+import org.bytedeco.pytorch.llm.trl.trainer.DPOTrainer;
 import org.bytedeco.pytorch.llm.trl.LlmForward;
 import org.bytedeco.pytorch.llm.trl.config.DPOConfig;
 import org.bytedeco.pytorch.nn.Module;

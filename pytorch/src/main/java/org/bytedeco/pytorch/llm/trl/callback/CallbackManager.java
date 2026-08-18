@@ -21,15 +21,12 @@
  * limitations under the License.
  */
 package org.bytedeco.pytorch.llm.trl.callback;
-import org.bytedeco.pytorch.optim.schedulers.*;
 
-import org.bytedeco.pytorch.llm.trl.BaseTrainer;
-import org.bytedeco.pytorch.llm.trl.TrainerCallback;
+import org.bytedeco.pytorch.llm.trl.trainer.BaseTrainer;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.BiConsumer;
-import java.util.function.Predicate;
 
 /**
  * Enterprise callback system for training monitoring and control.

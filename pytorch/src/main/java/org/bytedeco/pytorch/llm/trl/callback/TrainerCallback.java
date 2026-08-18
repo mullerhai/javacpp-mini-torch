@@ -19,7 +19,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.bytedeco.pytorch.llm.trl;
+package org.bytedeco.pytorch.llm.trl.callback;
+
+import org.bytedeco.pytorch.llm.trl.trainer.BaseTrainer;
 
 import java.util.Map;
 

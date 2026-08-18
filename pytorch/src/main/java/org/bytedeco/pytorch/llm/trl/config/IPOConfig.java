@@ -21,6 +21,8 @@
  */
 package org.bytedeco.pytorch.llm.trl.config;
 
+import org.bytedeco.pytorch.llm.trl.trainer.IPOTrainer;
+
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -34,7 +36,7 @@ import java.util.Map;
  * <p>Reference: "A Theoretical Analysis of Identity Preference Optimization (IPO)"
  * (Azar et al., 2024)
  *
- * @see org.bytedeco.pytorch.llm.trl.IPOTrainer
+ * @see IPOTrainer
  */
 public final class IPOConfig extends TrainerConfig {
     private final double beta;

@@ -24,8 +24,8 @@ package org.bytedeco.pytorch.llm.llamafactory.train;
 import org.bytedeco.pytorch.llm.llamafactory.hparams.FactoryArgs;
 import org.bytedeco.pytorch.llm.llamafactory.model.ModelLoader.LoadedModel;
 import org.bytedeco.pytorch.llm.llamafactory.data.collator.KtoCollator;
-import org.bytedeco.pytorch.llm.trl.BaseTrainer;
-import org.bytedeco.pytorch.llm.trl.SFTTrainer;
+import org.bytedeco.pytorch.llm.trl.trainer.BaseTrainer;
+import org.bytedeco.pytorch.llm.trl.trainer.SFTTrainer;
 
 import java.util.logging.Logger;
 
@@ -48,7 +48,7 @@ public final class KtoTrainerBridge {
     public static BaseTrainer create(FactoryArgs args, LoadedModel loaded, int maxSteps) {
         // Reflective prefer real KTO when merged into trl
         try {
-            Class<?> cls = Class.forName("org.bytedeco.pytorch.llm.trl.KTOTrainer");
+            Class<?> cls = Class.forName("org.bytedeco.pytorch.llm.trl.trainer.KTOTrainer");
             // Prefer TrainerFactory path which already documents the SFT fallback
             BaseTrainer t = TrainerFactory.create(args, loaded, maxSteps);
             if (cls.isInstance(t)) {

@@ -15,7 +15,7 @@ import org.bytedeco.pytorch.llm.peft.LoraConfig;
 import org.bytedeco.pytorch.llm.peft.PeftModel;
 import org.bytedeco.pytorch.llm.quantization.BitsAndBytesConfig;
 import org.bytedeco.pytorch.llm.tokenizers.FastTokenizer;
-import org.bytedeco.pytorch.llm.trl.SFTTrainer;
+import org.bytedeco.pytorch.llm.trl.trainer.SFTTrainer;
 import org.bytedeco.pytorch.llm.trl.config.SFTConfig;
 import org.bytedeco.pytorch.llm.transformers.AutoTokenizer;
 import org.bytedeco.pytorch.llm.transformers.CausalLM;

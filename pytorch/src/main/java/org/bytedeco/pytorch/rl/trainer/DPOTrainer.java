@@ -26,8 +26,6 @@
  */
 package org.bytedeco.pytorch.rl.trainer;
 
-import org.bytedeco.pytorch.optim.*;
-
 import org.bytedeco.javacpp.PointerScope;
 import org.bytedeco.pytorch.NoGradGuard;
 import org.bytedeco.pytorch.Tensor;
@@ -43,7 +41,7 @@ import java.util.Objects;
  * Enterprise-grade DPO trainer with full resource management.
  *
  * <p>For LLM preference tuning prefer
- * {@link org.bytedeco.pytorch.llm.trl.DPOTrainer}.
+ * {@link org.bytedeco.pytorch.llm.trl.trainer.DPOTrainer}.
  */
 public class DPOTrainer implements RLTrainer, AutoCloseable {
     private static final String VERSION = "2.0";

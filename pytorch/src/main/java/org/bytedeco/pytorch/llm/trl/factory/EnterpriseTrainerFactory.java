@@ -21,6 +21,8 @@
  */
 package org.bytedeco.pytorch.llm.trl.factory;
 
+import org.bytedeco.pytorch.llm.trl.callback.TrainerCallback;
+import org.bytedeco.pytorch.llm.trl.trainer.*;
 import org.bytedeco.pytorch.nn.Module;
 import org.bytedeco.pytorch.optim.*;
 import org.bytedeco.pytorch.llm.trl.*;
@@ -406,15 +408,15 @@ public final class EnterpriseTrainerFactory {
         private BaseTrainer createPPOTrainer() {
             // PPOTrainer needs PolicyValueForward, not LlmForward
             // Use precomputed mode or adapt LlmForward to PolicyValueForward
-            org.bytedeco.pytorch.llm.trl.PPOTrainer.PolicyValueForward pvForward = null;
+            PPOTrainer.PolicyValueForward pvForward = null;
             if (policyForward != null) {
                 final LlmForward fwd = policyForward;
                 pvForward = (inputIds, attentionMask) -> {
                     var output = fwd.forward(inputIds, attentionMask);
-                    return new org.bytedeco.pytorch.llm.trl.PPOTrainer.PolicyValueOutput(output, null);
+                    return new PPOTrainer.PolicyValueOutput(output, null);
                 };
             }
-            return new org.bytedeco.pytorch.llm.trl.PPOTrainer(
+            return new PPOTrainer(
                     policy, pvForward, optimizer,
                     config instanceof PPOConfig ? (PPOConfig) config : PPOConfig.builder().build());
         }

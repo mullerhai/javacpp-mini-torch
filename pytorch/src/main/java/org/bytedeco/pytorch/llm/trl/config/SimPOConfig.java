@@ -21,6 +21,8 @@
  */
 package org.bytedeco.pytorch.llm.trl.config;
 
+import org.bytedeco.pytorch.llm.trl.trainer.SimPOTrainer;
+
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -33,7 +35,7 @@ import java.util.Map;
  * <p>Reference: "SimPO: Simple Preference Optimization" (Meng et al., 2024)
  * <a href="https://arxiv.org/abs/2405.14734">arXiv:2405.14734</a>
  *
- * @see org.bytedeco.pytorch.llm.trl.SimPOTrainer
+ * @see SimPOTrainer
  */
 public final class SimPOConfig extends TrainerConfig {
     // SimPO-specific

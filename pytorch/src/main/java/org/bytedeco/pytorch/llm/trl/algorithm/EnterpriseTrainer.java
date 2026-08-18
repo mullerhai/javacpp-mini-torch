@@ -24,11 +24,9 @@ package org.bytedeco.pytorch.llm.trl.algorithm;
 import org.bytedeco.pytorch.Tensor;
 import org.bytedeco.pytorch.nn.Module;
 import org.bytedeco.pytorch.optim.Optimizer;
-import org.bytedeco.pytorch.llm.trl.BaseTrainer;
 import org.bytedeco.pytorch.llm.trl.config.TrainerConfig;
 
 import java.util.Map;
-import java.util.function.Supplier;
 
 /**
  * Enterprise unified trainer interface for all RLHF/alignment algorithms.
