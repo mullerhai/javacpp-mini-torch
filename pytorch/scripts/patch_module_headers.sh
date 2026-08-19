@@ -83,6 +83,8 @@ patch_embedding_from_pretrained() {
 #     is untouched and new slots only extend the end of the vtable.
 #   - non-virtual Tensor forward(...) wrappers + javacpp_module_object_id()
 #     -> public section before apply() (no vtable impact).
+#   - NEVER add a virtual named forward(...) — JavaCPP then treats derived
+#     non-virtual BatchNorm/InstanceNorm::forward as a vtable override.
 #
 patch_module_h() {
     local h="$API/nn/module.h"
@@ -164,6 +166,15 @@ PY2
 ' "$h"
     fi
 
+    # Migration: a previous patch added virtual Module::forward(vector/OrderedDict).
+    # Those must stay virtual (default body so *Impl subclasses need not
+    # implement them) but MUST NOT be named forward — JavaCPP then treats
+    # derived non-virtual BatchNorm/InstanceNorm::forward as a vtable override.
+    if grep -q 'virtual std::vector<Tensor> forward(const std::vector<Tensor>& inputs)' "$h"; then
+        sedinplace '/virtual std::vector<Tensor> forward(const std::vector<Tensor>& inputs)/d' "$h"
+        sedinplace '/virtual std::vector<Tensor> forward(const torch::OrderedDict<std::string, Tensor>& inputs)/d' "$h"
+    fi
+
     # Virtual forward_tensor* AFTER clone_ (last stock virtual) - ABI-safe.
     if ! grep -q 'virtual Tensor forward_tensor(const Tensor& input)' "$h"; then
         sedinplace '/virtual void clone_(Module& other, const std::optional<Device>& device);/a\
@@ -187,6 +198,18 @@ PY2
   virtual std::tuple<Tensor, Tensor> forward_tuple_tensor_tensor3(const Tensor\& input1, const Tensor\& input2, const Tensor\& input3) { TORCH_CHECK(false, "Module::forward_tuple_tensor_tensor3(input1, input2, input3) is not implemented for ", name()); }\
   virtual std::tuple<Tensor, Tensor> forward_tuple_tensor_tensor_opt(const Tensor\& input, std::optional<std::tuple<Tensor, Tensor>> hx_opt) { TORCH_CHECK(false, "Module::forward_tuple_tensor_tensor_opt(input, hx_opt) is not implemented for ", name()); }\
   virtual std::tuple<Tensor, Tensor> forward_tuple_tensor_tensor_attn(const Tensor\& query, const Tensor\& key, const Tensor\& value, const Tensor\& key_padding_mask, bool need_weights, const Tensor\& attn_mask, bool average_attn_weights) { TORCH_CHECK(false, "Module::forward_tuple_tensor_tensor_attn(query, key, value, ...) is not implemented for ", name()); }\
+  virtual std::vector<Tensor> forward_tensor_vector(const std::vector<Tensor>\& inputs) { TORCH_CHECK(false, "Module::forward_tensor_vector(inputs) is not implemented for ", name()); }\
+  virtual std::vector<Tensor> forward_tensor_dict(const torch::OrderedDict<std::string, Tensor>\& inputs) { TORCH_CHECK(false, "Module::forward_tensor_dict(inputs) is not implemented for ", name()); }\
+' "$h"
+    fi
+
+    # Migration for already-patched trees that have forward_tensor* but still
+    # lack the renamed vector/dict virtuals (or still have the old forward() name).
+    if grep -q 'virtual Tensor forward_tensor(const Tensor& input)' "$h" \
+       && ! grep -q 'virtual std::vector<Tensor> forward_tensor_vector' "$h"; then
+        sedinplace '/virtual std::tuple<Tensor, Tensor> forward_tuple_tensor_tensor_attn(/a\
+  virtual std::vector<Tensor> forward_tensor_vector(const std::vector<Tensor>\& inputs) { TORCH_CHECK(false, "Module::forward_tensor_vector(inputs) is not implemented for ", name()); }\
+  virtual std::vector<Tensor> forward_tensor_dict(const torch::OrderedDict<std::string, Tensor>\& inputs) { TORCH_CHECK(false, "Module::forward_tensor_dict(inputs) is not implemented for ", name()); }\
 ' "$h"
     fi
 
