@@ -1007,37 +1007,30 @@ public final class Special {
     public static double y0(double x) {
         if (x <= 0) return Double.NaN;
         if (x < 8.0) {
-            // Rational approximation from Abramowitz & Stegun for x < 8
-            double y = x * x;
-            // Rational approximation for J0(x) first
-            double t = -y * 0.000002911077;
-            double j0 = ((((t + 0.000046293999) * t - 0.00078825286) * t + 0.006078826) * t - 0.043062953) * t + 0.99998193;
-            t = y * 0.000000690705;
-            j0 = j0 * ((t - 0.0000319661) * t + 0.000785526) * t + 1.0;
-            // Now compute Y0 using continued fraction-like expansion
-            double p = 0.636619772; // 2/pi
-            double w = 0.5772156649015329; // Euler-Mascheroni
-            double sum = 0, term = 1;
-            for (int k = 1; k <= 20; k++) {
-                term *= y / (k * k);
-                if (k % 2 == 0) {
-                    sum += term / k;
-                }
+            // Series expansion for Y0(x)
+            // Y0(x) = -(gamma + ln(x/2)) * J0(x) + (2/x) * sum_{k=1}^inf ((-1)^{k+1} * (x/2)^{2k} / (k!)^2 * H_k)
+            double gamma = 0.5772156649015329;
+            double j0_x = j0(x);
+            double log_half = Math.log(x / 2);
+            double base = -(gamma + log_half) * j0_x;
+            // Series: S = sum_{k=1}^inf ((-1)^{k+1} * (x/2)^{2k} / (k!)^2 * H_k)
+            double t = x * x / 4.0; // (x/2)^2
+            double series = 0.0;
+            double factorial = 1.0;
+            double harmonic = 0.0;
+            double t_power = 1.0;
+            for (int k = 1; k <= 30; k++) {
+                factorial *= k;
+                harmonic += 1.0 / k;
+                t_power *= t;
+                double sign = (k % 2 == 1) ? 1.0 : -1.0;
+                series += sign * t_power / (factorial * factorial) * harmonic;
             }
-            double logx = Math.log(x);
-            // Use Hankel asymptotic expansion
-            double b0 = 1.0, b1 = -0.001098628627, b2 = 0.0000425012249, b3 = -0.00000162885269;
-            double z = 8.0 / x;
-            double zz = z * z;
-            double ans = b0 + zz * (b1 + zz * (b2 + zz * b3));
-            double xx = x - 0.7853981633974483; // pi/4
-            double sqrt_term = Math.sqrt(p / x);
-            return sqrt_term * (ans * Math.sin(xx) + z * 0.636455528 * Math.cos(xx));
+            return base + (2.0 / x) * series;
         }
-        // For x >= 8, use asymptotic expansion
+        // Asymptotic expansion for large x
         double z = 8.0 / x;
         double zz = z * z;
-        // More terms for better accuracy
         double b0 = 1.0, b1 = -0.001098628627, b2 = 0.0000425012249, b3 = -0.00000162885269;
         double c1 = 0.636455528, c2 = -0.0000321087972, c3 = 0.00000069450866;
         double ans = b0 + zz * (b1 + zz * (b2 + zz * b3));

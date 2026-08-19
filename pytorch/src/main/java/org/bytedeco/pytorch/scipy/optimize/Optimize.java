@@ -99,7 +99,7 @@ public final class Optimize {
         boolean converged = false;
         double tol = xtol;
 
-        for (int i = 0; i < 1000; i++) {
+        for (int i = 0; i < 5000; i++) {
             nit++;
             double m = 0.5 * (a2 + b2);
             double tol1 = tol * Math.abs(x) + tol;
@@ -166,7 +166,7 @@ public final class Optimize {
 
     /** Default minimize_scalar */
     public static MinimizeResult minimize_scalar(DoubleUnaryOperator f, double a, double b) {
-        return minimize_scalar(f, a, b, 1e-8);
+        return minimize_scalar(f, a, b, 1e-10);
     }
 
     /** fminbound */

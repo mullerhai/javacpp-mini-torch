@@ -399,7 +399,8 @@ public final class FFT {
                 // scipy-like normalization: scale by sqrt(2/n) for k>0, 1/sqrt(n) for k=0
                 y[k] = (k == 0) ? sum / Math.sqrt(n) : sum * Math.sqrt(2.0 / n);
             } else {
-                y[k] = 2 * sum;
+                // No normalization: y[k] = sum for all k
+                y[k] = sum;
             }
         }
         return y;
