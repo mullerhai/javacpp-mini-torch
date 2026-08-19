@@ -224,26 +224,10 @@ public class IndexHNSWFlat extends Index {
         // ef-beam on layer 0
         MinMaxHeap w = searchLayer(query, curr, ef, 0);
 
-        // Export internal array directly (already sorted best→worst by MinMaxHeap layout).
-        int got = Math.min(k, w.size);
-        // The MinMaxHeap stores worst-at-end (lowerIsBetter) or best-at-start depending on layout.
-        // Easiest path: copy the prefix if best-at-start, else reverse.
-        int[] idxs = scratchInt(got);
-        float[] dists = scratchFloat(got);
-        int sz = w.size;
-        if (lowerIsBetter) {
-            // array is best→worst
-            for (int i = 0; i < sz; i++) { idxs[i] = w.ids[i]; dists[i] = w.dist[i]; }
-        } else {
-            // array is worst→best (since worst is at start for higher-is-better); reverse.
-            for (int i = 0; i < sz; i++) {
-                int j = sz - 1 - i;
-                idxs[i] = w.ids[j]; dists[i] = w.dist[j];
-            }
-        }
-        int copy = Math.min(got, k);
-        System.arraycopy(dists, 0, outD, 0, copy);
-        System.arraycopy(idxs, 0, outI, 0, copy);
+        // MinMaxHeap is always best→worst (worst at end). Cannot arraycopy int[] → long[].
+        int copy = Math.min(k, w.size);
+        System.arraycopy(w.dist, 0, outD, 0, copy);
+        for (int i = 0; i < copy; i++) outI[i] = w.ids[i];
         if (copy < k) {
             float fill = lowerIsBetter ? Float.POSITIVE_INFINITY : Float.NEGATIVE_INFINITY;
             Arrays.fill(outD, copy, k, fill);

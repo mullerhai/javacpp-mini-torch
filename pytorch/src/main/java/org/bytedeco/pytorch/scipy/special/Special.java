@@ -927,13 +927,15 @@ public final class Special {
                 y * (6.781684e-06 + y * (-6.781684e-08)))));
             return ans;
         }
+        // Numerical Recipes asymptotic expansion for J_0(x)
         double z = 8.0 / ax;
         double y = z * z;
-        double ans = 1.0 + y * (-0.1098628627e-2 + y * (0.2734510407e-4 +
+        double ans1 = 1.0 + y * (-0.1098628627e-2 + y * (0.2734510407e-4 +
             y * (-0.2073370639e-5 + y * 0.2093887211e-6)));
+        double ans2 = -0.1562499995e-1 + y * (0.1430488765e-3 + y * (-0.6911147651e-5 +
+            y * (0.7621095161e-6 + y * (-0.934935152e-7))));
         double xx = ax - 0.785398164;
-        ans = Math.sqrt(0.636619772 / ax) * (Math.cos(xx) * ans - z * Math.sin(xx) * ans);
-        return ans;
+        return Math.sqrt(0.636619772 / ax) * (Math.cos(xx) * ans1 - z * Math.sin(xx) * ans2);
     }
 
     /** J_1(x) */
@@ -945,12 +947,15 @@ public final class Special {
                 y * (-0.0000263194 + y * (3.15077e-07 - y * 2.72656e-09)))));
             return ans;
         }
+        // Numerical Recipes asymptotic expansion for J_1(x)
         double z = 8.0 / ax;
         double y = z * z;
-        double ans = 1.0 + y * (0.183105e-2 + y * (-0.3516396496e-4 +
+        double ans1 = 1.0 + y * (0.183105e-2 + y * (-0.3516396496e-4 +
             y * (0.2457520174e-5 + y * (-0.240337019e-6))));
+        double ans2 = 0.04687499995 + y * (-0.2002690873e-3 + y * (0.8449199096e-5 +
+            y * (-0.88228987e-6 + y * 0.105787412e-6)));
         double xx = ax - 2.356194491;
-        ans = Math.sqrt(0.636619772 / ax) * (Math.cos(xx) * ans - z * Math.sin(xx) * ans);
+        double ans = Math.sqrt(0.636619772 / ax) * (Math.cos(xx) * ans1 - z * Math.sin(xx) * ans2);
         return (x < 0) ? -ans : ans;
     }
 
@@ -1007,14 +1012,14 @@ public final class Special {
     public static double y0(double x) {
         if (x <= 0) return Double.NaN;
         if (x < 8.0) {
-            // Series expansion for Y0(x)
-            // Y0(x) = -(gamma + ln(x/2)) * J0(x) + (2/x) * sum_{k=1}^inf ((-1)^{k+1} * (x/2)^{2k} / (k!)^2 * H_k)
+            // Series expansion for Y0(x):
+            // Y0(x) = (2/pi) * (ln(x/2) + gamma) * J0(x) - (2/pi) * sum_{k=1}^inf ((-1)^k * H_k * (x/2)^{2k} / (k!)^2)
+            // Verified: gives Y0(1) = +0.0883 matching scipy
             double gamma = 0.5772156649015329;
             double j0_x = j0(x);
             double log_half = Math.log(x / 2);
-            double base = -(gamma + log_half) * j0_x;
-            // Series: S = sum_{k=1}^inf ((-1)^{k+1} * (x/2)^{2k} / (k!)^2 * H_k)
-            double t = x * x / 4.0; // (x/2)^2
+            double base = (2.0 / Math.PI) * (log_half + gamma) * j0_x;
+            double t = x * x / 4.0;
             double series = 0.0;
             double factorial = 1.0;
             double harmonic = 0.0;
@@ -1023,27 +1028,27 @@ public final class Special {
                 factorial *= k;
                 harmonic += 1.0 / k;
                 t_power *= t;
-                double sign = (k % 2 == 1) ? 1.0 : -1.0;
+                double sign = (k % 2 == 1) ? -1.0 : 1.0;
                 series += sign * t_power / (factorial * factorial) * harmonic;
             }
-            return base + (2.0 / x) * series;
+            return base - (2.0 / Math.PI) * series;
         }
         // Asymptotic expansion for large x
         double z = 8.0 / x;
-        double zz = z * z;
-        double b0 = 1.0, b1 = -0.001098628627, b2 = 0.0000425012249, b3 = -0.00000162885269;
-        double c1 = 0.636455528, c2 = -0.0000321087972, c3 = 0.00000069450866;
-        double ans = b0 + zz * (b1 + zz * (b2 + zz * b3));
-        double cos_part = c1 + zz * (c2 + zz * c3);
-        double xx = x - 0.7853981633974483;
-        return Math.sqrt(0.636619772 / x) * (ans * Math.sin(xx) + z * cos_part * Math.cos(xx));
+        double y = z * z;
+        double ans1 = 1.0 + y * (-0.1098628627e-2 + y * (0.2734510407e-4 +
+            y * (-0.2073370639e-5 + y * 0.2093887211e-6)));
+        double ans2 = -0.1562499995e-1 + y * (0.1430488765e-3 + y * (-0.6911147651e-5 +
+            y * (0.7621095161e-6 + y * (-0.934935152e-7))));
+        double xx = x - 0.785398164;
+        return Math.sqrt(0.636619772 / x) * (Math.sin(xx) * ans1 + z * Math.cos(xx) * ans2);
     }
 
     /** Y_1(x) - Bessel function of second kind, order 1 */
     public static double y1(double x) {
         if (x <= 0) return Double.NaN;
         if (x < 8.0) {
-            // Rational approximation from Numerical Recipes for x < 8
+            // Numerical Recipes rational approximation for Y_1(x), x < 8
             double y = x * x;
             double ans1 = -0.4900604943e13 + y * (0.1275274390e13 + y * (-0.5153438139e11 +
                 y * (0.7349264551e9 + y * (-0.4237922726e7 + y * 0.8511937935e4))));
@@ -1051,13 +1056,15 @@ public final class Special {
                 y * (0.1732889953e8 + y * (0.4238554745e5 + y))));
             return x * ans1 / ans2 + 0.636619772 * (j1(x) * Math.log(x) - 1.0 / x);
         }
-        // Asymptotic expansion for large x
+        // Asymptotic expansion for large x (Numerical Recipes)
         double z = 8.0 / x;
         double y = z * z;
-        double ans = 1.0 + y * (0.183105e-2 + y * (-0.3516396496e-4 +
+        double ans1 = 1.0 + y * (0.183105e-2 + y * (-0.3516396496e-4 +
             y * (0.2457520174e-5 + y * (-0.240337019e-6))));
+        double ans2 = 0.04687499995 + y * (-0.2002690873e-3 + y * (0.8449199096e-5 +
+            y * (-0.88228987e-6 + y * 0.105787412e-6)));
         double xx = x - 2.356194491;
-        return Math.sqrt(0.636619772 / x) * (Math.cos(xx) * ans - z * Math.sin(xx) * 0.0);
+        return Math.sqrt(0.636619772 / x) * (Math.sin(xx) * ans1 + z * Math.cos(xx) * ans2);
     }
 
     /** Y_n(x) for integer n */

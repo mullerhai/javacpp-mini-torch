@@ -316,7 +316,31 @@ patch_any_sequential() {
     fi
 }
 
+# JNI inlines header-defined BatchNormImplBase::forward / InstanceNormImpl::forward.
+# those bodies do this->_check_input_dim() via the vtable. Extra Module virtuals
+# (even appended, even renamed) shift that slot vs libtorch_cpu, so JNI jumps
+# into the next class's typeinfo. Qualify through Derived to emit a direct call
+# to the T-exported *Impl::_check_input_dim symbol instead.
+patch_norm_qualified_check() {
+    local bn="$API/nn/modules/batchnorm.h"
+    local in="$API/nn/modules/instancenorm.h"
+    if [[ -f "$bn" ]] && grep -q 'this->_check_input_dim(input);' "$bn"; then
+        sedinplace 's/this->_check_input_dim(input);/static_cast<Derived*>(this)->Derived::_check_input_dim(input);/' "$bn"
+    fi
+    if [[ -f "$in" ]] && grep -q 'this->_check_input_dim(input);' "$in"; then
+        sedinplace 's/this->_check_input_dim(input);/static_cast<Derived*>(this)->Derived::_check_input_dim(input);/' "$in"
+    fi
+    # Derived::_check_input_dim is protected on the leaf *Impl classes; the CRTP
+    # base cannot name it unless it is public in the header used to compile JNI.
+    # Access in libtorch_cpu.so is unchanged (already compiled).
+    for h in "$bn" "$in"; do
+        [[ -f "$h" ]] || continue
+        perl -i -0pe 's/(class TORCH_API (?:BatchNorm|InstanceNorm)[123]dImpl[\s\S]*?)\n protected:\n  void _check_input_dim\(const Tensor& input\) override;/$1\n public:\n  void _check_input_dim(const Tensor\& input) override;/g' "$h"
+    done
+}
+
 patch_embedding_from_pretrained
 patch_module_h
 patch_any_sequential
+patch_norm_qualified_check
 echo "Patched headers under $ROOT"

@@ -277,4 +277,87 @@ diff --git a/torch/csrc/api/include/torch/nn/modules/container/moduledict.h b/to
 + public:
    /// Private `OrderedDict` holding the key-Module pairs.
    torch::OrderedDict<std::string, std::shared_ptr<Module>> modules_;
- 
+diff --git a/torch/csrc/api/include/torch/nn/modules/batchnorm.h b/torch/csrc/api/include/torch/nn/modules/batchnorm.h
+--- a/torch/csrc/api/include/torch/nn/modules/batchnorm.h
++++ b/torch/csrc/api/include/torch/nn/modules/batchnorm.h
+@@ -99,7 +99,10 @@
+   using NormImplBase<D, Derived, BatchNormOptions>::NormImplBase;
+
+   Tensor forward(const Tensor& input) {
+-    this->_check_input_dim(input);
++    // JNI inlines this header. Extra Module virtuals shift the vtable slot of
++    // _check_input_dim vs libtorch_cpu; qualify through Derived so the call is
++    // a direct T-exported *Impl::_check_input_dim, not call *0x118.
++    static_cast<Derived*>(this)->Derived::_check_input_dim(input);
+     double exponential_average_factor = 0.0;
+     if (this->options.momentum().has_value()) {
+       exponential_average_factor = this->options.momentum().value();
+@@ -167,7 +170,7 @@
+ /// model(BatchNorm1dOptions(4).eps(0.5).momentum(0.1).affine(false).track_running_stats(true));
+ /// ```
+ class TORCH_API BatchNorm1dImpl : public BatchNormImplBase<1, BatchNorm1dImpl> {
+- protected:
++ public:
+   void _check_input_dim(const Tensor& input) override;
+
+   public:
+@@ -197,7 +200,7 @@
+ /// model(BatchNorm2dOptions(4).eps(0.5).momentum(0.1).affine(false).track_running_stats(true));
+ /// ```
+ class TORCH_API BatchNorm2dImpl : public BatchNormImplBase<2, BatchNorm2dImpl> {
+- protected:
++ public:
+   void _check_input_dim(const Tensor& input) override;
+
+   public:
+@@ -227,7 +230,7 @@
+ /// model(BatchNorm3dOptions(4).eps(0.5).momentum(0.1).affine(false).track_running_stats(true));
+ /// ```
+ class TORCH_API BatchNorm3dImpl : public BatchNormImplBase<3, BatchNorm3dImpl> {
+- protected:
++ public:
+   void _check_input_dim(const Tensor& input) override;
+
+   public:
+diff --git a/torch/csrc/api/include/torch/nn/modules/instancenorm.h b/torch/csrc/api/include/torch/nn/modules/instancenorm.h
+--- a/torch/csrc/api/include/torch/nn/modules/instancenorm.h
++++ b/torch/csrc/api/include/torch/nn/modules/instancenorm.h
+@@ -32,7 +32,10 @@
+   using torch::nn::NormImplBase<D, Derived, InstanceNormOptions>::NormImplBase;
+
+   Tensor forward(const Tensor& input) {
+-    this->_check_input_dim(input);
++    // JNI inlines this header. Extra Module virtuals shift the vtable slot of
++    // _check_input_dim vs libtorch_cpu; qualify through Derived so the call is
++    // a direct T-exported *Impl::_check_input_dim, not call *0x118.
++    static_cast<Derived*>(this)->Derived::_check_input_dim(input);
+
+     // For InstanceNorm1D, 2D is unbatched and 3D is batched
+     // For InstanceNorm2D, 3D is unbatched and 4D is batched
+@@ -76,7 +79,7 @@
+ /// ```
+ class TORCH_API InstanceNorm1dImpl
+     : public InstanceNormImpl<1, InstanceNorm1dImpl> {
+- protected:
++ public:
+   void _check_input_dim(const Tensor& input) override;
+
+   public:
+@@ -107,7 +110,7 @@
+ /// ```
+ class TORCH_API InstanceNorm2dImpl
+     : public InstanceNormImpl<2, InstanceNorm2dImpl> {
+- protected:
++ public:
+   void _check_input_dim(const Tensor& input) override;
+
+   public:
+@@ -138,7 +141,7 @@
+ /// ```
+ class TORCH_API InstanceNorm3dImpl
+     : public InstanceNormImpl<3, InstanceNorm3dImpl> {
+- protected:
++ public:
+   void _check_input_dim(const Tensor& input) override;
+
+   public:

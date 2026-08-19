@@ -48,6 +48,21 @@ public final class GenerationConfig {
     public final List<Integer> eosTokenIds;
     public final Integer padTokenId;
     public final Integer bosTokenId;
+    // -------- Extended generation parameters (HF GenerationConfig parity) --------
+    public final int numBeams;
+    public final int numReturnSequences;
+    public final double lengthPenalty;
+    public final boolean earlyStopping;
+    public final int noRepeatNgramSize;
+    public final List<List<Integer>> badWordsIds;
+    public final List<List<Integer>> forceWordsIds;
+    public final boolean renormalizeLogits;
+    public final boolean useCache;
+    public final double minP;
+    public final double typicalP;
+    public final double epsilon;
+    public final double eta;
+    public final int encoderNoRepeatNgramSize;
 
     private GenerationConfig(Builder b) {
         this.doSample = b.doSample;
@@ -60,6 +75,22 @@ public final class GenerationConfig {
         this.eosTokenIds = Collections.unmodifiableList(new ArrayList<>(b.eosTokenIds));
         this.padTokenId = b.padTokenId;
         this.bosTokenId = b.bosTokenId;
+        this.numBeams = b.numBeams;
+        this.numReturnSequences = b.numReturnSequences;
+        this.lengthPenalty = b.lengthPenalty;
+        this.earlyStopping = b.earlyStopping;
+        this.noRepeatNgramSize = b.noRepeatNgramSize;
+        this.badWordsIds = b.badWordsIds == null ? null
+                : Collections.unmodifiableList(new ArrayList<>(b.badWordsIds));
+        this.forceWordsIds = b.forceWordsIds == null ? null
+                : Collections.unmodifiableList(new ArrayList<>(b.forceWordsIds));
+        this.renormalizeLogits = b.renormalizeLogits;
+        this.useCache = b.useCache;
+        this.minP = b.minP;
+        this.typicalP = b.typicalP;
+        this.epsilon = b.epsilon;
+        this.eta = b.eta;
+        this.encoderNoRepeatNgramSize = b.encoderNoRepeatNgramSize;
     }
 
     public static Builder builder() {
@@ -95,6 +126,18 @@ public final class GenerationConfig {
         else if (m.containsKey("max_length")) b.maxNewTokens(asInt(m.get("max_length")));
         if (m.containsKey("pad_token_id") && m.get("pad_token_id") != null) b.padTokenId(asInt(m.get("pad_token_id")));
         if (m.containsKey("bos_token_id") && m.get("bos_token_id") != null) b.bosTokenId(asInt(m.get("bos_token_id")));
+        if (m.containsKey("num_beams")) b.numBeams(asInt(m.get("num_beams")));
+        if (m.containsKey("num_return_sequences")) b.numReturnSequences(asInt(m.get("num_return_sequences")));
+        if (m.containsKey("length_penalty")) b.lengthPenalty(asDouble(m.get("length_penalty")));
+        if (m.containsKey("early_stopping")) b.earlyStopping(asBool(m.get("early_stopping")));
+        if (m.containsKey("no_repeat_ngram_size")) b.noRepeatNgramSize(asInt(m.get("no_repeat_ngram_size")));
+        if (m.containsKey("encoder_no_repeat_ngram_size")) b.encoderNoRepeatNgramSize(asInt(m.get("encoder_no_repeat_ngram_size")));
+        if (m.containsKey("renormalize_logits")) b.renormalizeLogits(asBool(m.get("renormalize_logits")));
+        if (m.containsKey("use_cache")) b.useCache(asBool(m.get("use_cache")));
+        if (m.containsKey("min_p")) b.minP(asDouble(m.get("min_p")));
+        if (m.containsKey("typical_p")) b.typicalP(asDouble(m.get("typical_p")));
+        if (m.containsKey("epsilon")) b.epsilon(asDouble(m.get("epsilon")));
+        if (m.containsKey("eta")) b.eta(asDouble(m.get("eta")));
         Object eos = m.get("eos_token_id");
         if (eos instanceof Number) {
             b.eosTokenId(asInt(eos));
@@ -112,6 +155,17 @@ public final class GenerationConfig {
         m.put("top_p", topP);
         m.put("repetition_penalty", repetitionPenalty);
         m.put("max_new_tokens", maxNewTokens);
+        if (numBeams > 1) m.put("num_beams", numBeams);
+        if (numReturnSequences > 1) m.put("num_return_sequences", numReturnSequences);
+        if (lengthPenalty != 1.0) m.put("length_penalty", lengthPenalty);
+        if (earlyStopping) m.put("early_stopping", true);
+        if (noRepeatNgramSize > 0) m.put("no_repeat_ngram_size", noRepeatNgramSize);
+        if (renormalizeLogits) m.put("renormalize_logits", true);
+        if (useCache) m.put("use_cache", true);
+        if (minP > 0) m.put("min_p", minP);
+        if (typicalP > 0) m.put("typical_p", typicalP);
+        if (epsilon > 0) m.put("epsilon", epsilon);
+        if (eta > 0) m.put("eta", eta);
         if (padTokenId != null) m.put("pad_token_id", padTokenId);
         if (bosTokenId != null) m.put("bos_token_id", bosTokenId);
         if (eosTokenIds.size() == 1) m.put("eos_token_id", eosTokenIds.get(0));
@@ -122,7 +176,12 @@ public final class GenerationConfig {
     public Builder toBuilder() {
         Builder b = builder()
                 .doSample(doSample).temperature(temperature).topK(topK).topP(topP)
-                .repetitionPenalty(repetitionPenalty).maxNewTokens(maxNewTokens).eosStop(eosStop);
+                .repetitionPenalty(repetitionPenalty).maxNewTokens(maxNewTokens).eosStop(eosStop)
+                .numBeams(numBeams).numReturnSequences(numReturnSequences).lengthPenalty(lengthPenalty)
+                .earlyStopping(earlyStopping).noRepeatNgramSize(noRepeatNgramSize)
+                .renormalizeLogits(renormalizeLogits).useCache(useCache)
+                .minP(minP).typicalP(typicalP).epsilon(epsilon).eta(eta)
+                .encoderNoRepeatNgramSize(encoderNoRepeatNgramSize);
         for (int id : eosTokenIds) b.eosTokenId(id);
         if (padTokenId != null) b.padTokenId(padTokenId);
         if (bosTokenId != null) b.bosTokenId(bosTokenId);
@@ -155,6 +214,21 @@ public final class GenerationConfig {
         private final List<Integer> eosTokenIds = new ArrayList<>();
         private Integer padTokenId;
         private Integer bosTokenId;
+        // Extended fields
+        private int numBeams = 1;
+        private int numReturnSequences = 1;
+        private double lengthPenalty = 1.0;
+        private boolean earlyStopping = false;
+        private int noRepeatNgramSize = 0;
+        private List<List<Integer>> badWordsIds = null;
+        private List<List<Integer>> forceWordsIds = null;
+        private boolean renormalizeLogits = false;
+        private boolean useCache = true;
+        private double minP = 0.0;
+        private double typicalP = 0.0;
+        private double epsilon = 0.0;
+        private double eta = 0.0;
+        private int encoderNoRepeatNgramSize = 0;
 
         public Builder doSample(boolean v) { this.doSample = v; return this; }
         public Builder temperature(double v) { this.temperature = v; return this; }
@@ -171,6 +245,20 @@ public final class GenerationConfig {
         }
         public Builder padTokenId(int id) { this.padTokenId = id; return this; }
         public Builder bosTokenId(int id) { this.bosTokenId = id; return this; }
+        public Builder numBeams(int v) { this.numBeams = v; return this; }
+        public Builder numReturnSequences(int v) { this.numReturnSequences = v; return this; }
+        public Builder lengthPenalty(double v) { this.lengthPenalty = v; return this; }
+        public Builder earlyStopping(boolean v) { this.earlyStopping = v; return this; }
+        public Builder noRepeatNgramSize(int v) { this.noRepeatNgramSize = v; return this; }
+        public Builder badWordsIds(List<List<Integer>> v) { this.badWordsIds = v; return this; }
+        public Builder forceWordsIds(List<List<Integer>> v) { this.forceWordsIds = v; return this; }
+        public Builder renormalizeLogits(boolean v) { this.renormalizeLogits = v; return this; }
+        public Builder useCache(boolean v) { this.useCache = v; return this; }
+        public Builder minP(double v) { this.minP = v; return this; }
+        public Builder typicalP(double v) { this.typicalP = v; return this; }
+        public Builder epsilon(double v) { this.epsilon = v; return this; }
+        public Builder eta(double v) { this.eta = v; return this; }
+        public Builder encoderNoRepeatNgramSize(int v) { this.encoderNoRepeatNgramSize = v; return this; }
 
         public GenerationConfig build() {
             return new GenerationConfig(this);

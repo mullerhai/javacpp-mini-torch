@@ -60,6 +60,28 @@ public final class ModelRegistry {
         register("mistral", LlamaForCausalLM::fromConfig, WeightMaps.mistral());
         register("glm", GlmForCausalLM::fromConfig, WeightMaps.glm());
         register("chatglm", GlmForCausalLM::fromConfig, WeightMaps.glm());
+        // -------------------------------------------------------------------
+        // Gemma family (Gemma / Gemma2 / Gemma3): share LlamaForCausalLM since
+        // Gemma-2 onwards uses the same RMSNorm + SwiGLU layout with separate
+        // q/k/v/o projections. tied embeddings default to true for Gemma.
+        // -------------------------------------------------------------------
+        register("gemma", LlamaForCausalLM::fromConfig, WeightMaps.identity());
+        register("gemma2", LlamaForCausalLM::fromConfig, WeightMaps.identity());
+        register("gemma3", LlamaForCausalLM::fromConfig, WeightMaps.identity());
+        register("gemma3_text", LlamaForCausalLM::fromConfig, WeightMaps.identity());
+        // -------------------------------------------------------------------
+        // Phi3 / Phi-3 family: fused QKV, separate q_proj/k_proj/v_proj, GELU MLP.
+        // We use LlamaForCausalLM as a structural template; attention_bias=true
+        // is the default for Phi3.
+        // -------------------------------------------------------------------
+        register("phi3", LlamaForCausalLM::fromConfig, WeightMaps.identity());
+        register("phi", LlamaForCausalLM::fromConfig, WeightMaps.identity());
+        register("starcoder2", LlamaForCausalLM::fromConfig, WeightMaps.identity());
+        register("falcon", LlamaForCausalLM::fromConfig, WeightMaps.identity());
+        register("bloom", LlamaForCausalLM::fromConfig, WeightMaps.identity());
+        register("mpt", LlamaForCausalLM::fromConfig, WeightMaps.identity());
+        register("deepseek", LlamaForCausalLM::fromConfig, WeightMaps.identity());
+        register("mixtral", LlamaForCausalLM::fromConfig, WeightMaps.identity());
         // GPT-2 / generic fall back to the original CausalLM teaching model
         register("gpt2", CausalLM::fromConfig, WeightMaps.gpt2());
         register("gpt", CausalLM::fromConfig, WeightMaps.gpt2());
@@ -92,6 +114,16 @@ public final class ModelRegistry {
             if (a.contains("glm") || a.contains("chatglm")) return must("glm");
             if (a.contains("llama")) return must("llama");
             if (a.contains("mistral")) return must("mistral");
+            if (a.contains("gemma3")) return must("gemma3");
+            if (a.contains("gemma")) return must("gemma");
+            if (a.contains("phi3")) return must("phi3");
+            if (a.contains("phi")) return must("phi");
+            if (a.contains("mixtral")) return must("mixtral");
+            if (a.contains("deepseek")) return must("deepseek");
+            if (a.contains("falcon")) return must("falcon");
+            if (a.contains("bloom")) return must("bloom");
+            if (a.contains("mpt")) return must("mpt");
+            if (a.contains("starcoder2")) return must("starcoder2");
             if (a.contains("gpt2")) return must("gpt2");
         }
         // Prefer flattened model_type string from extra (qwen3_vl_text etc.)
@@ -104,6 +136,9 @@ public final class ModelRegistry {
                 if (s.contains("vl")) return must("qwen3_vl");
                 return must("qwen3");
             }
+            if (s.contains("gemma3")) return must("gemma3");
+            if (s.contains("gemma2")) return must("gemma2");
+            if (s.contains("gemma")) return must("gemma");
         }
         if (config.isQwen3()) {
             Object vl = config.extra().get("vl_model_type");

@@ -86,73 +86,76 @@ public final class Optimize {
     // Scalar Minimization
     // =========================================================================
 
-    /** Scalar minimization using Brent's method */
+    /** Scalar minimization using Brent's method (scipy-like) */
     public static MinimizeResult minimize_scalar(DoubleUnaryOperator f, double a, double b, double xtol) {
         // Brent's method - combines parabolic interpolation with golden section search
-        double c = 0.5 * (3.0 - Math.sqrt(5.0)); // ~0.381966
-        double x = a + c * (b - a);
+        // Based on scipy's implementation
+        if (a > b) {
+            double tmp = a; a = b; b = tmp;
+        }
+        double x = 0.5 * (a + b);
         double w = x, v = x;
         double fx = f.applyAsDouble(x);
         double fw = fx, fv = fx;
-        double a2 = a, b2 = b;
+        double d = 0, e = 0;
         int nit = 0;
         boolean converged = false;
         double tol = xtol;
 
-        for (int i = 0; i < 5000; i++) {
+        for (int iter = 0; iter < 500; iter++) {
             nit++;
-            double m = 0.5 * (a2 + b2);
-            double tol1 = tol * Math.abs(x) + tol;
+            double m = 0.5 * (a + b);
+            double tol1 = tol * Math.abs(x) + 1e-12;
             double tol2 = 2.0 * tol1;
 
             // Check convergence
-            if (Math.abs(x - m) <= tol2 - 0.5 * (b2 - a2)) {
+            if (Math.abs(x - m) <= tol2 - 0.5 * (b - a)) {
                 converged = true;
                 break;
             }
 
-            double step = 0;
             double u;
-            // Parabolic interpolation or golden section
-            if (Math.abs(x - w) > tol1 && Math.abs(x - v) > tol1) {
-                // Parabolic fit
+            if (Math.abs(e) > tol1) {
+                // Parabolic fit through (x, fx), (w, fw), (v, fv)
                 double r = (x - w) * (fx - fv);
                 double q = (x - v) * (fx - fw);
                 double p = (x - v) * q - (x - w) * r;
                 q = 2.0 * (q - r);
-                if (q > 0) p = -p;
-                q = Math.abs(q);
-                step = (x - w) * (x - w) * q - (x - w) * p;
-                if (Math.abs(step) < 1e-10) {
-                    // Fall back to golden section
-                    step = x < m ? x - a2 : b2 - x;
-                }
-                u = x + step;
-                if (u - a2 < tol2 || b2 - u < tol2) {
-                    step = Math.abs(tol1);
-                    step = x < m ? -step : step;
+                if (q != 0) {
+                    if (q > 0) p = -p;
+                    else q = -q;
+                    double minstep = Math.abs(e);
+                    e = d;
+                    if (Math.abs(p) < Math.abs(0.5 * q * minstep) && p > q * (a - x) && p < q * (b - x)) {
+                        d = p / q;
+                        u = x + d;
+                        if (u - a < tol2 || b - u < tol2) {
+                            d = (x < m) ? tol1 : -tol1;
+                        }
+                    } else {
+                        e = (x < m) ? b - x : a - x;
+                        d = 0.381966 * e;
+                    }
+                } else {
+                    e = (x < m) ? b - x : a - x;
+                    d = 0.381966 * e;
                 }
             } else {
-                // Golden section
-                step = x < m ? a2 - x : b2 - x;
-                step = c * step;
-                u = x + step;
+                e = (x < m) ? b - x : a - x;
+                d = 0.381966 * e;
             }
-
-            // Evaluate at new point
-            u = x + (Math.abs(step) > tol1 ? step : (step > 0 ? tol1 : -tol1));
+            u = x + (Math.abs(d) > tol1 ? d : (d > 0 ? tol1 : -tol1));
             double fu = f.applyAsDouble(u);
 
-            // Update intervals
             if (fu <= fx) {
-                if (u >= x) a2 = x;
-                else b2 = x;
+                if (u >= x) a = x;
+                else b = x;
                 v = w; fv = fw;
                 w = x; fw = fx;
                 x = u; fx = fu;
             } else {
-                if (u >= x) b2 = u;
-                else a2 = u;
+                if (u < x) a = u;
+                else b = u;
                 if (fu <= fw || w == x) {
                     v = w; fv = fw;
                     w = u; fw = fu;

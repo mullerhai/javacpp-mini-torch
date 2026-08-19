@@ -55,6 +55,101 @@ public final class Generator {
         return generate(model, promptIds, gen, maxContext, null);
     }
 
+    /**
+     * Generate with a {@link List} of pre-tokenized prompts (batched). Returns a list of
+     * generated token sequences including the original prompt.
+     */
+    public static List<int[]> generateBatch(List<int[]> promptIdsList, Module model,
+                                           GenerationConfig gen, int maxContext,
+                                           IntConsumer onToken) {
+        Objects.requireNonNull(promptIdsList, "promptIdsList");
+        List<int[]> results = new ArrayList<>();
+        for (int[] promptIds : promptIdsList) {
+            results.add(generate(model, promptIds, gen, maxContext, onToken));
+        }
+        return results;
+    }
+
+    /**
+     * Stream-style generation: invoke the callback for each generated token id.
+     */
+    public static int[] generateStreaming(Module model, int[] promptIds, GenerationConfig gen,
+                                          int maxContext, IntConsumer onToken) {
+        return generate(model, promptIds, gen, maxContext, onToken);
+    }
+
+    /**
+     * Compute perplexity score over a tokenized sequence.
+     *
+     * <p>Perplexity = exp(average negative log-likelihood) over all positions.
+     */
+    public static double computePerplexity(Module model, int[] tokens, int stride) {
+        if (tokens == null || tokens.length == 0) return Double.NaN;
+        if (stride <= 0) stride = tokens.length;
+        double totalNll = 0.0;
+        long totalCount = 0;
+        try {
+            for (int end = stride; end <= tokens.length; end += stride) {
+                int start = Math.max(0, end - stride);
+                int[] chunk = new int[end - start];
+                System.arraycopy(tokens, start, chunk, 0, chunk.length);
+                long[][] inputB = new long[1][Math.max(0, chunk.length - 1)];
+                long[][] labelB = new long[1][Math.max(0, chunk.length - 1)];
+                for (int i = 0; i < chunk.length - 1; i++) {
+                    inputB[0][i] = chunk[i];
+                    labelB[0][i] = chunk[i + 1];
+                }
+                if (inputB[0].length == 0) continue;
+                Tensor input = tensor(inputB);
+                Tensor output = model.forward(input);
+                long V = output.size(output.dim() - 1);
+                Tensor reshaped = output.view(-1, V);
+                Tensor labelT = tensor(labelB).view(-1);
+                Tensor loss = org.bytedeco.pytorch.global.torch.cross_entropy_loss(reshaped, labelT);
+                totalNll += loss.item_double() * inputB[0].length;
+                totalCount += inputB[0].length;
+                input.close();
+                output.close();
+                reshaped.close();
+                labelT.close();
+                loss.close();
+            }
+        } catch (Exception e) {
+            return Double.NaN;
+        }
+        return totalCount > 0 ? Math.exp(totalNll / totalCount) : Double.NaN;
+    }
+
+    /**
+     * Compute next-token loss over a sequence (input = tokens[0..N-2], labels = tokens[1..N-1]).
+     */
+    public static double computeLoss(Module model, int[] tokens) {
+        if (tokens == null || tokens.length < 2) return 0.0;
+        long[][] inputB = new long[1][tokens.length - 1];
+        long[][] labelB = new long[1][tokens.length - 1];
+        for (int i = 0; i < tokens.length - 1; i++) {
+            inputB[0][i] = tokens[i];
+            labelB[0][i] = tokens[i + 1];
+        }
+        try {
+            Tensor input = tensor(inputB);
+            Tensor output = model.forward(input);
+            long V = output.size(output.dim() - 1);
+            Tensor reshaped = output.view(-1, V);
+            Tensor labelT = tensor(labelB).view(-1);
+            Tensor loss = org.bytedeco.pytorch.global.torch.cross_entropy_loss(reshaped, labelT);
+            double v = loss.item_double();
+            input.close();
+            output.close();
+            reshaped.close();
+            labelT.close();
+            loss.close();
+            return v;
+        } catch (Exception e) {
+            return Double.NaN;
+        }
+    }
+
     public static int[] generate(Module model, int[] promptIds, GenerationConfig gen,
                                  int maxContext, IntConsumer onToken) {
         Objects.requireNonNull(model, "model");

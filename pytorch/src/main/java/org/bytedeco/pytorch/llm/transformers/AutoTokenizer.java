@@ -87,8 +87,63 @@ public final class AutoTokenizer {
         if (tik != null) return tik;
         Path p = Path.of(modelIdOrPath);
         if (Files.isDirectory(p)) return fromDirectory(p);
-        throw new IOException("Not a local directory and not a known tiktoken encoding/model: "
+        if (Files.exists(p)) {
+            // single tokenizer.json file
+            if (p.getFileName().toString().equals("tokenizer.json")) {
+                return fromDirectory(p.getParent());
+            }
+        }
+        throw new IOException("Not a local directory/path and not a known tiktoken encoding/model: "
                 + modelIdOrPath + " (pass HfHub for Hub models)");
+    }
+
+    /**
+     * Convenience: load from a local path (directory or tokenizer.json file).
+     * Equivalent to {@link #fromPretrained(String)} but with a clearer name.
+     */
+    public static FastTokenizer fromLocal(String localPath) throws IOException {
+        return fromPretrained(localPath);
+    }
+
+    /**
+     * Convenience: load from a local directory.
+     */
+    public static FastTokenizer fromLocalDirectory(Path dir) throws IOException {
+        return fromDirectory(dir);
+    }
+
+    /**
+     * Convenience: load from a local directory path String.
+     */
+    public static FastTokenizer fromLocalDirectory(String dirPath) throws IOException {
+        return fromDirectory(Path.of(dirPath));
+    }
+
+    /**
+     * Load tokenizer with default Hub settings (no HfHub argument required).
+     * Uses {@link HfHub#fromEnv()} to discover cached credentials/mirror.
+     */
+    public static FastTokenizer fromPretrainedDefault(String modelId) throws IOException {
+        HfHub hub = HfHub.fromEnv();
+        return fromPretrained(modelId, hub);
+    }
+
+    /**
+     * Convenience: load by HF model id with revision (commit hash, branch, or tag).
+     */
+    public static FastTokenizer fromPretrained(String modelId, String revision) throws IOException {
+        HfHub hub = HfHub.fromEnv();
+        return fromPretrained(modelId, revision, hub);
+    }
+
+    /**
+     * Convenience: load by HF model id with revision and explicit hub.
+     */
+    public static FastTokenizer fromPretrained(String modelId, String revision, HfHub hub) throws IOException {
+        FastTokenizer tik = tryTiktoken(modelId);
+        if (tik != null) return tik;
+        Path snap = hub.snapshotDownload(modelId, revision, "models", TOKENIZER_ONLY_FILES);
+        return fromDirectory(snap);
     }
 
     public static FastTokenizer fromDirectory(Path dir) throws IOException {

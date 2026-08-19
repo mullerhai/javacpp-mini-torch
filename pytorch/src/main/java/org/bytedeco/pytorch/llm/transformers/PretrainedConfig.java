@@ -42,7 +42,10 @@ import java.util.Map;
 public final class PretrainedConfig {
 
     public enum ModelType {
-        GPT2, LLAMA, QWEN, MISTRAL, GLM, BERT, GENERIC
+        GPT2, LLAMA, QWEN, QWEN3, MISTRAL, GLM, BERT,
+        GEMMA, GEMMA2, GEMMA3,
+        PHI, PHI3, STARCODER2, FALCON, BLOOM, MPT, DEEPSEEK, MIXTRAL,
+        GENERIC
     }
 
     private final ModelType modelType;
@@ -65,6 +68,54 @@ public final class PretrainedConfig {
     private final int padTokenId;
     private final String torchDtype;
     private final Map<String, Object> extra;
+
+    // ------------------------------------------------------------------------
+    // Gemma-specific fields (also reused by other architectures when applicable)
+    // ------------------------------------------------------------------------
+
+    /** Hidden activation function (e.g. "gelu_pytorch_tanh" for Gemma). */
+    private final String hiddenActivation;
+
+    /** Attention dropout probability (Gemma / Phi3). */
+    private final double attentionDropout;
+
+    /** Logit softcap for attention scores (Gemma). 0 = disabled. */
+    private final double attnLogitSoftcap;
+
+    /** Logit softcap for the final output projection (Gemma). 0 = disabled. */
+    private final double finalLogitSoftcap;
+
+    /** Multiplier for the attention dimension (Gemma3). */
+    private final int queryPreAttnScalar;
+
+    /** Whether to use bidirectional attention (Gemma). */
+    private final boolean useBidirectionalAttention;
+
+    /** Sliding-window size (Gemma3 / Mistral). 0 = disabled. */
+    private final int slidingWindow;
+
+    /** Per-layer attention type pattern (e.g. ["sliding_attention", "full_attention"] for Gemma3). */
+    private final List<String> layerTypes;
+
+    /** RoPE scaling configuration (e.g. {"type": "linear", "factor": 8.0}). */
+    private final Map<String, Object> ropeScaling;
+
+    /** Initializer range for weight initialization (Gemma). */
+    private final double initializerRange;
+
+    /** Number of experts for MoE models (Mixtral, DeepSeek). 0 = dense. */
+    private final int numLocalExperts;
+
+    /** Number of experts to route to per token (MoE). */
+    private final int numExpertsPerTok;
+
+    /** Sliding-window pattern (Mistral). */
+    private final boolean useSlidingWindow;
+
+    /** Mamba intermediate size (for hybrid models like Jamba/Zephyr). */
+    private final int mambaDConv;
+    private final int mambaDState;
+    private final int mambaExpand;
 
     private PretrainedConfig(Builder b) {
         this.modelType = b.modelType;
@@ -89,6 +140,24 @@ public final class PretrainedConfig {
         this.eosTokenId = b.eosTokenId;
         this.padTokenId = b.padTokenId;
         this.torchDtype = b.torchDtype;
+        this.hiddenActivation = b.hiddenActivation;
+        this.attentionDropout = b.attentionDropout;
+        this.attnLogitSoftcap = b.attnLogitSoftcap;
+        this.finalLogitSoftcap = b.finalLogitSoftcap;
+        this.queryPreAttnScalar = b.queryPreAttnScalar;
+        this.useBidirectionalAttention = b.useBidirectionalAttention;
+        this.slidingWindow = b.slidingWindow;
+        this.layerTypes = b.layerTypes == null ? null
+                : Collections.unmodifiableList(new java.util.ArrayList<>(b.layerTypes));
+        this.ropeScaling = b.ropeScaling == null ? null
+                : Collections.unmodifiableMap(new LinkedHashMap<>(b.ropeScaling));
+        this.initializerRange = b.initializerRange;
+        this.numLocalExperts = b.numLocalExperts;
+        this.numExpertsPerTok = b.numExpertsPerTok;
+        this.useSlidingWindow = b.useSlidingWindow;
+        this.mambaDConv = b.mambaDConv;
+        this.mambaDState = b.mambaDState;
+        this.mambaExpand = b.mambaExpand;
         this.extra = Collections.unmodifiableMap(new LinkedHashMap<>(b.extra));
         // Only enforce divisibility when headDim was derived (not explicit).
         if (b.headDim <= 0 && numAttentionHeads > 0 && hiddenSize % numAttentionHeads != 0) {
@@ -183,6 +252,135 @@ public final class PretrainedConfig {
                 .build();
     }
 
+    /** Tiny Gemma (Gemma-2B family) — RMSNorm, SwiGLU MLP, qk-norm, logit softcap. */
+    public static PretrainedConfig tinyGemma() {
+        return builder()
+                .modelType(ModelType.GEMMA)
+                .vocabSize(256)
+                .hiddenSize(64)
+                .intermediateSize(128)
+                .numHiddenLayers(2)
+                .numAttentionHeads(4)
+                .numKeyValueHeads(1)
+                .headDim(16)
+                .maxPositionEmbeddings(256)
+                .rmsNormEps(1e-6)
+                .ropeTheta(10000.0)
+                .attentionBias(false)
+                .tieWordEmbeddings(true)
+                .hiddenActivation("gelu_pytorch_tanh")
+                .attnLogitSoftcap(0.0)
+                .finalLogitSoftcap(0.0)
+                .attentionDropout(0.0)
+                .initializerRange(0.02)
+                .bosTokenId(2).eosTokenId(1).padTokenId(0)
+                .build();
+    }
+
+    /** Tiny Gemma2 (Gemma-2 family) — sliding-window attention and stronger softcap. */
+    public static PretrainedConfig tinyGemma2() {
+        java.util.ArrayList<String> layerTypes = new java.util.ArrayList<>();
+        layerTypes.add("sliding_attention");
+        layerTypes.add("full_attention");
+        return builder()
+                .modelType(ModelType.GEMMA2)
+                .vocabSize(256)
+                .hiddenSize(64)
+                .intermediateSize(128)
+                .numHiddenLayers(2)
+                .numAttentionHeads(4)
+                .numKeyValueHeads(1)
+                .headDim(16)
+                .maxPositionEmbeddings(512)
+                .rmsNormEps(1e-6)
+                .ropeTheta(10000.0)
+                .attentionBias(false)
+                .tieWordEmbeddings(true)
+                .hiddenActivation("gelu_pytorch_tanh")
+                .attnLogitSoftcap(50.0)
+                .finalLogitSoftcap(30.0)
+                .attentionDropout(0.0)
+                .slidingWindow(256)
+                .layerTypes(layerTypes)
+                .bosTokenId(2).eosTokenId(1).padTokenId(0)
+                .build();
+    }
+
+    /** Tiny Gemma3 (Gemma-3 family) — alternating sliding-window and full attention. */
+    public static PretrainedConfig tinyGemma3() {
+        java.util.ArrayList<String> layerTypes = new java.util.ArrayList<>();
+        for (int i = 0; i < 2; i++) {
+            layerTypes.add("sliding_attention");
+            layerTypes.add("full_attention");
+        }
+        java.util.LinkedHashMap<String, Object> ropeScaling = new java.util.LinkedHashMap<>();
+        ropeScaling.put("type", "linear");
+        ropeScaling.put("factor", 8.0);
+        return builder()
+                .modelType(ModelType.GEMMA3)
+                .vocabSize(256)
+                .hiddenSize(64)
+                .intermediateSize(128)
+                .numHiddenLayers(4)
+                .numAttentionHeads(4)
+                .numKeyValueHeads(1)
+                .headDim(256)
+                .queryPreAttnScalar(256)
+                .maxPositionEmbeddings(1024)
+                .rmsNormEps(1e-6)
+                .ropeTheta(1000000.0)
+                .attentionBias(false)
+                .tieWordEmbeddings(true)
+                .hiddenActivation("gelu_pytorch_tanh")
+                .attnLogitSoftcap(0.0)
+                .finalLogitSoftcap(0.0)
+                .slidingWindow(512)
+                .layerTypes(layerTypes)
+                .ropeScaling(ropeScaling)
+                .bosTokenId(2).eosTokenId(1).padTokenId(0)
+                .build();
+    }
+
+    /** Tiny Phi3 (Microsoft Phi-3 family) — fused QKV, qkv_proj linear. */
+    public static PretrainedConfig tinyPhi3() {
+        return builder()
+                .modelType(ModelType.PHI3)
+                .vocabSize(256)
+                .hiddenSize(64)
+                .intermediateSize(128)
+                .numHiddenLayers(2)
+                .numAttentionHeads(4)
+                .numKeyValueHeads(1)
+                .headDim(16)
+                .maxPositionEmbeddings(256)
+                .rmsNormEps(1e-5)
+                .ropeTheta(10000.0)
+                .attentionBias(true)
+                .tieWordEmbeddings(false)
+                .bosTokenId(1).eosTokenId(2).padTokenId(0)
+                .build();
+    }
+
+    /** Tiny Mixtral (MoE) — 4 experts per layer, 2 active per token. */
+    public static PretrainedConfig tinyMixtral() {
+        return builder()
+                .modelType(ModelType.MIXTRAL)
+                .vocabSize(256)
+                .hiddenSize(64)
+                .intermediateSize(128)
+                .numHiddenLayers(2)
+                .numAttentionHeads(4)
+                .numKeyValueHeads(2)
+                .headDim(16)
+                .maxPositionEmbeddings(256)
+                .rmsNormEps(1e-5)
+                .ropeTheta(10000.0)
+                .numLocalExperts(4)
+                .numExpertsPerTok(2)
+                .bosTokenId(1).eosTokenId(2).padTokenId(0)
+                .build();
+    }
+
     public static PretrainedConfig fromMap(Map<String, Object> m) {
         Builder b = builder();
         if (m.containsKey("model_type")) {
@@ -236,6 +434,37 @@ public final class PretrainedConfig {
         if (m.containsKey("torch_dtype") && m.get("torch_dtype") != null) {
             b.torchDtype(String.valueOf(m.get("torch_dtype")));
         }
+        // ----- Gemma / Gemma2 / Gemma3 specific fields -----
+        if (m.containsKey("hidden_activation")) b.hiddenActivation(String.valueOf(m.get("hidden_activation")));
+        if (m.containsKey("attention_dropout")) b.attentionDropout(asDouble(m.get("attention_dropout")));
+        if (m.containsKey("attn_logit_softcap")) b.attnLogitSoftcap(asDouble(m.get("attn_logit_softcap")));
+        if (m.containsKey("final_logit_softcap")) b.finalLogitSoftcap(asDouble(m.get("final_logit_softcap")));
+        if (m.containsKey("query_pre_attn_scalar")) b.queryPreAttnScalar(asInt(m.get("query_pre_attn_scalar")));
+        if (m.containsKey("use_bidirectional_attention")) {
+            b.useBidirectionalAttention(asBool(m.get("use_bidirectional_attention")));
+        }
+        if (m.containsKey("sliding_window")) b.slidingWindow(asInt(m.get("sliding_window")));
+        if (m.containsKey("layer_types") && m.get("layer_types") instanceof List<?>) {
+            @SuppressWarnings("unchecked")
+            List<Object> raw = (List<Object>) m.get("layer_types");
+            List<String> types = new java.util.ArrayList<>();
+            for (Object o : raw) types.add(String.valueOf(o));
+            b.layerTypes(types);
+        }
+        if (m.containsKey("rope_scaling") && m.get("rope_scaling") instanceof Map<?, ?>) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> raw = (Map<String, Object>) m.get("rope_scaling");
+            b.ropeScaling(raw);
+        }
+        if (m.containsKey("initializer_range")) b.initializerRange(asDouble(m.get("initializer_range")));
+        if (m.containsKey("use_sliding_window")) b.useSlidingWindow(asBool(m.get("use_sliding_window")));
+        // ----- MoE fields (Mixtral, DeepSeek, etc.) -----
+        if (m.containsKey("num_local_experts")) b.numLocalExperts(asInt(m.get("num_local_experts")));
+        if (m.containsKey("num_experts_per_tok")) b.numExpertsPerTok(asInt(m.get("num_experts_per_tok")));
+        // ----- Mamba / hybrid (Jamba / Zephyr) -----
+        if (m.containsKey("mamba_d_conv")) b.mambaDConv(asInt(m.get("mamba_d_conv")));
+        if (m.containsKey("mamba_d_state")) b.mambaDState(asInt(m.get("mamba_d_state")));
+        if (m.containsKey("mamba_expand")) b.mambaExpand(asInt(m.get("mamba_expand")));
         for (Map.Entry<String, Object> e : m.entrySet()) {
             b.extra(e.getKey(), e.getValue());
         }
@@ -321,6 +550,22 @@ public final class PretrainedConfig {
         m.put("eos_token_id", eosTokenId);
         m.put("pad_token_id", padTokenId);
         m.put("torch_dtype", torchDtype);
+        if (hiddenActivation != null) m.put("hidden_activation", hiddenActivation);
+        if (attentionDropout != 0.0) m.put("attention_dropout", attentionDropout);
+        if (attnLogitSoftcap != 0.0) m.put("attn_logit_softcap", attnLogitSoftcap);
+        if (finalLogitSoftcap != 0.0) m.put("final_logit_softcap", finalLogitSoftcap);
+        if (queryPreAttnScalar > 0) m.put("query_pre_attn_scalar", queryPreAttnScalar);
+        if (useBidirectionalAttention) m.put("use_bidirectional_attention", true);
+        if (slidingWindow > 0) m.put("sliding_window", slidingWindow);
+        if (layerTypes != null && !layerTypes.isEmpty()) m.put("layer_types", layerTypes);
+        if (ropeScaling != null && !ropeScaling.isEmpty()) m.put("rope_scaling", ropeScaling);
+        if (initializerRange != 0.02) m.put("initializer_range", initializerRange);
+        if (useSlidingWindow) m.put("use_sliding_window", true);
+        if (numLocalExperts > 0) m.put("num_local_experts", numLocalExperts);
+        if (numExpertsPerTok > 0) m.put("num_experts_per_tok", numExpertsPerTok);
+        if (mambaDConv > 0) m.put("mamba_d_conv", mambaDConv);
+        if (mambaDState > 0) m.put("mamba_d_state", mambaDState);
+        if (mambaExpand > 0) m.put("mamba_expand", mambaExpand);
         m.putAll(extra);
         return m;
     }
@@ -350,6 +595,24 @@ public final class PretrainedConfig {
     public String torchDtype() { return torchDtype; }
     public Map<String, Object> extra() { return extra; }
 
+    // ---- Gemma-specific getters ----
+    public String hiddenActivation() { return hiddenActivation; }
+    public double attentionDropout() { return attentionDropout; }
+    public double attnLogitSoftcap() { return attnLogitSoftcap; }
+    public double finalLogitSoftcap() { return finalLogitSoftcap; }
+    public int queryPreAttnScalar() { return queryPreAttnScalar; }
+    public boolean useBidirectionalAttention() { return useBidirectionalAttention; }
+    public int slidingWindow() { return slidingWindow; }
+    public List<String> layerTypes() { return layerTypes; }
+    public Map<String, Object> ropeScaling() { return ropeScaling; }
+    public double initializerRange() { return initializerRange; }
+    public boolean useSlidingWindow() { return useSlidingWindow; }
+    public int numLocalExperts() { return numLocalExperts; }
+    public int numExpertsPerTok() { return numExpertsPerTok; }
+    public int mambaDConv() { return mambaDConv; }
+    public int mambaDState() { return mambaDState; }
+    public int mambaExpand() { return mambaExpand; }
+
     /** True when config looks like Qwen3 (model_type=qwen3 or architectures contain Qwen3). */
     public boolean isQwen3() {
         Object mt = extra.get("model_type");
@@ -363,15 +626,72 @@ public final class PretrainedConfig {
         return false;
     }
 
+    /** True when config looks like Gemma (any flavor). */
+    public boolean isGemma() {
+        return modelType == ModelType.GEMMA || modelType == ModelType.GEMMA2 || modelType == ModelType.GEMMA3;
+    }
+
+    /** True when model_type is Gemma (v1). */
+    public boolean isGemma1() {
+        return modelType == ModelType.GEMMA;
+    }
+
+    /** True when model_type is Gemma2. */
+    public boolean isGemma2() {
+        return modelType == ModelType.GEMMA2;
+    }
+
+    /** True when model_type is Gemma3. */
+    public boolean isGemma3() {
+        return modelType == ModelType.GEMMA3;
+    }
+
+    /** True when model_type is Phi3 family. */
+    public boolean isPhi3() {
+        return modelType == ModelType.PHI3;
+    }
+
+    /** True when model is MoE (Mixtral, DeepSeek-MoE, etc.). */
+    public boolean isMoE() {
+        return numLocalExperts > 0;
+    }
+
+    /** True when explicit per-layer attention types are configured (Gemma3). */
+    public boolean hasLayerTypes() {
+        return layerTypes != null && !layerTypes.isEmpty();
+    }
+
+    /** True when sliding-window attention is configured. */
+    public boolean hasSlidingWindow() {
+        return slidingWindow > 0 || useSlidingWindow;
+    }
+
+    /** True when RoPE scaling is configured (extended context). */
+    public boolean hasRopeScaling() {
+        return ropeScaling != null && !ropeScaling.isEmpty();
+    }
+
     private static ModelType parseType(String s) {
         if (s == null) return ModelType.GENERIC;
         String t = s.toLowerCase(Locale.ROOT);
         if (t.contains("gpt2") || t.equals("gpt")) return ModelType.GPT2;
         if (t.contains("llama")) return ModelType.LLAMA;
+        if (t.contains("qwen3")) return ModelType.QWEN3;
         if (t.contains("qwen")) return ModelType.QWEN;
-        if (t.contains("mistral") || t.contains("mixtral")) return ModelType.MISTRAL;
+        if (t.contains("mistral")) return ModelType.MISTRAL;
+        if (t.contains("mixtral")) return ModelType.MIXTRAL;
         if (t.contains("glm") || t.contains("chatglm")) return ModelType.GLM;
         if (t.contains("bert")) return ModelType.BERT;
+        if (t.contains("gemma3")) return ModelType.GEMMA3;
+        if (t.contains("gemma2")) return ModelType.GEMMA2;
+        if (t.contains("gemma")) return ModelType.GEMMA;
+        if (t.contains("phi3")) return ModelType.PHI3;
+        if (t.contains("phi")) return ModelType.PHI;
+        if (t.contains("starcoder2")) return ModelType.STARCODER2;
+        if (t.contains("falcon")) return ModelType.FALCON;
+        if (t.contains("bloom")) return ModelType.BLOOM;
+        if (t.contains("mpt")) return ModelType.MPT;
+        if (t.contains("deepseek")) return ModelType.DEEPSEEK;
         try {
             return ModelType.valueOf(t.toUpperCase(Locale.ROOT));
         } catch (Exception e) {
@@ -420,6 +740,23 @@ public final class PretrainedConfig {
         private int padTokenId = 50256;
         private String torchDtype = "float32";
         private final Map<String, Object> extra = new LinkedHashMap<>();
+        // Gemma / advanced fields
+        private String hiddenActivation = null;
+        private double attentionDropout = 0.0;
+        private double attnLogitSoftcap = 0.0;
+        private double finalLogitSoftcap = 0.0;
+        private int queryPreAttnScalar = 0;
+        private boolean useBidirectionalAttention = false;
+        private int slidingWindow = 0;
+        private List<String> layerTypes = null;
+        private Map<String, Object> ropeScaling = null;
+        private double initializerRange = 0.02;
+        private int numLocalExperts = 0;
+        private int numExpertsPerTok = 0;
+        private boolean useSlidingWindow = false;
+        private int mambaDConv = 0;
+        private int mambaDState = 0;
+        private int mambaExpand = 0;
 
         public Builder modelType(ModelType modelType) { this.modelType = modelType; return this; }
         public Builder vocabSize(int vocabSize) { this.vocabSize = vocabSize; return this; }
@@ -440,6 +777,22 @@ public final class PretrainedConfig {
         public Builder padTokenId(int padTokenId) { this.padTokenId = padTokenId; return this; }
         public Builder torchDtype(String torchDtype) { this.torchDtype = torchDtype; return this; }
         public Builder extra(String k, Object v) { this.extra.put(k, v); return this; }
+        public Builder hiddenActivation(String v) { this.hiddenActivation = v; return this; }
+        public Builder attentionDropout(double v) { this.attentionDropout = v; return this; }
+        public Builder attnLogitSoftcap(double v) { this.attnLogitSoftcap = v; return this; }
+        public Builder finalLogitSoftcap(double v) { this.finalLogitSoftcap = v; return this; }
+        public Builder queryPreAttnScalar(int v) { this.queryPreAttnScalar = v; return this; }
+        public Builder useBidirectionalAttention(boolean v) { this.useBidirectionalAttention = v; return this; }
+        public Builder slidingWindow(int v) { this.slidingWindow = v; return this; }
+        public Builder layerTypes(List<String> v) { this.layerTypes = v; return this; }
+        public Builder ropeScaling(Map<String, Object> v) { this.ropeScaling = v; return this; }
+        public Builder initializerRange(double v) { this.initializerRange = v; return this; }
+        public Builder numLocalExperts(int v) { this.numLocalExperts = v; return this; }
+        public Builder numExpertsPerTok(int v) { this.numExpertsPerTok = v; return this; }
+        public Builder useSlidingWindow(boolean v) { this.useSlidingWindow = v; return this; }
+        public Builder mambaDConv(int v) { this.mambaDConv = v; return this; }
+        public Builder mambaDState(int v) { this.mambaDState = v; return this; }
+        public Builder mambaExpand(int v) { this.mambaExpand = v; return this; }
 
         public PretrainedConfig build() {
             return new PretrainedConfig(this);

@@ -25,6 +25,9 @@ import org.bytedeco.javacpp.Loader;
 import org.bytedeco.javacpp.annotation.Properties;
 import org.bytedeco.pytorch.LongOptional;
 import org.bytedeco.pytorch.Tensor;
+import org.bytedeco.pytorch.TensorVector;
+import org.bytedeco.pytorch.llm.peft.LoraConfig;
+import org.bytedeco.pytorch.llm.peft.LoraLinear;
 import org.bytedeco.pytorch.nn.Module;
 import org.bytedeco.pytorch.nn.modules.EmbeddingImpl;
 import org.bytedeco.pytorch.nn.modules.LinearImpl;
@@ -34,8 +37,11 @@ import org.bytedeco.pytorch.llm.transformers.generation.GenerationConfig;
 import org.bytedeco.pytorch.llm.transformers.generation.Generator;
 
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 
 import static org.bytedeco.pytorch.global.torch.cross_entropy;
 
@@ -53,6 +59,9 @@ public class LlamaForCausalLM extends Module {
     private final PretrainedConfig config;
     private final LlamaModel model;
     private final LinearImpl lm_head;
+    /** LoRA adapters attached via {@link #attachLora(String, LoraConfig)}. */
+    private final java.util.LinkedHashMap<String, LoraLinear> loraAdapters =
+            new java.util.LinkedHashMap<>();
 
     public LlamaForCausalLM(PretrainedConfig config) {
         super("LlamaForCausalLM");
@@ -90,6 +99,11 @@ public class LlamaForCausalLM extends Module {
     /**
      * Cache-aware causal LM forward for incremental decode serving.
      *
+     * <p><b>Note:</b> This path does <b>not</b> apply LoRA adapters. It is intended
+     * for production inference where the LoRA weights have been merged
+     * ({@link LoraLinear#merge()}) or where no LoRA is active. Do not call this
+     * method when unmerged LoRA adapters are attached — the result will be incorrect.
+     *
      * @param inputIds       [B,T] token ids
      * @param positionOffset RoPE start position
      * @param pastKs         [numLayers] past K
@@ -98,6 +112,12 @@ public class LlamaForCausalLM extends Module {
      */
     public CachedForwardResult forwardCached(Tensor inputIds, long positionOffset,
                                               Tensor[] pastKs, Tensor[] pastVs) {
+        if (!loraAdapters.isEmpty()) {
+            throw new IllegalStateException(
+                    "forwardCached() cannot be used when unmerged LoRA adapters are active. "
+                    + "Call LoraLinear.merge() on all adapters before using this path, "
+                    + "or use forward(Tensor) instead.");
+        }
         Tensor ids = inputIds.dim() == 1 ? inputIds.unsqueeze(0) : inputIds;
         long T = ids.size(1);
         if (positionOffset + T > config.maxPositionEmbeddings()) {
@@ -119,6 +139,16 @@ public class LlamaForCausalLM extends Module {
                 .contiguous();
         long V = logits.size(2);
         return cross_entropy(shiftLogits.reshape(-1, V), shiftLabels.reshape(-1));
+    }
+
+    /** View of all LoRA adapters attached to this model. */
+    public java.util.Map<String, LoraLinear> loraAdapters() {
+        return java.util.Collections.unmodifiableMap(loraAdapters);
+    }
+
+    /** True if any LoRA adapters have been attached. */
+    public boolean hasLoraAdapters() {
+        return !loraAdapters.isEmpty();
     }
 
     public int[] generate(int[] promptIds, int maxNewTokens) {
@@ -222,6 +252,9 @@ public class LlamaForCausalLM extends Module {
         public final ModelingAttention self_attn;
         public final RMSNorm post_attention_layernorm;
         public final ModelingMlp.SwiGLU mlp;
+        /** Per-name LoRA adapters for this layer. Updated by LlamaForCausalLM.attachLora. */
+        private final java.util.LinkedHashMap<String, LoraLinear> loraAdapters =
+                new java.util.LinkedHashMap<>();
 
         public LlamaDecoderLayer(PretrainedConfig cfg, int layerIdx) {
             super("LlamaDecoderLayer" + layerIdx);
@@ -239,12 +272,79 @@ public class LlamaForCausalLM extends Module {
 
         @Override
         public Tensor forward(Tensor x) {
-            x = x.add(self_attn.forward(input_layernorm.forward(x)));
-            x = x.add(mlp.forward(post_attention_layernorm.forward(x)));
+            Tensor h = input_layernorm.forward(x);
+            // LoRA-aware Q/K/V projections
+            Tensor q = applyProj(self_attn.q_proj, "q_proj", h);
+            Tensor k = applyProj(self_attn.k_proj, "k_proj", h);
+            Tensor v = applyProj(self_attn.v_proj, "v_proj", h);
+            // Compute attention with the (Q,K,V) tensors
+            Tensor attnOut = self_attn.forwardFromQKV(q, k, v);
+            // LoRA-aware O projection
+            Tensor o = applyProj(self_attn.o_proj, "o_proj", attnOut);
+            x = x.add(o);
+            // LoRA-aware MLP: gate_proj and up_proj are LoRA-aware; down_proj is not
+            Tensor mh = post_attention_layernorm.forward(x);
+            Tensor gate = applyProj(mlp.gate_proj, "gate_proj", mh);
+            Tensor up   = applyProj(mlp.up_proj,   "up_proj",   mh);
+            x = x.add(mlp.forwardWithGateUp(gate, up));
             return x;
         }
 
-        /** Cache-aware layer forward. {out [B,T,C], newK, newV}. */
+        /**
+         * Apply a projection layer with optional LoRA overlay.
+         * When a LoRA adapter is attached to the given target name, its output
+         * (scaled: B @ A * scaling) is added to the base projection output.
+         * When the adapter is merged, only the base (now containing ΔW) is used.
+         *
+         * @param base      the underlying {@link LinearImpl} (q_proj, k_proj, …)
+         * @param targetKey the LoRA adapter key ({@code "q_proj"}, {@code "gate_proj"}, …)
+         * @param input     the input tensor
+         * @return base(input) [+ ΔW·input] with LoRA
+         */
+        private Tensor applyProj(LinearImpl base, String targetKey, Tensor input) {
+            LoraLinear lora = loraAdapters.get(targetKey);
+            Tensor baseOut = base.forward(input);
+            if (lora != null && !lora.isMerged()) {
+                return baseOut.add(lora.forward(input));
+            }
+            return baseOut;
+        }
+
+        /**
+         * Attach a LoRA adapter to this layer. {@code name} should be one of
+         * {@code q_proj}, {@code k_proj}, {@code v_proj}, {@code o_proj},
+         * {@code gate_proj}, {@code up_proj}, or {@code down_proj}.
+         * Returns the adapter, or {@code null} if {@code name} is not a known target.
+         */
+        public LoraLinear attachLora(String name, LoraConfig cfg) {
+            if (name == null || cfg == null) return null;
+            LinearImpl base = null;
+            switch (name) {
+                case "q_proj":  base = self_attn.q_proj; break;
+                case "k_proj":  base = self_attn.k_proj; break;
+                case "v_proj":  base = self_attn.v_proj; break;
+                case "o_proj":  base = self_attn.o_proj; break;
+                case "gate_proj": base = mlp.gate_proj; break;
+                case "up_proj":  base = mlp.up_proj; break;
+                case "down_proj": base = mlp.down_proj; break;
+                default: return null;
+            }
+            LoraLinear adapter = LoraLinear.borrowBase(base, cfg);
+            loraAdapters.put(name, adapter);
+            return adapter;
+        }
+
+        public java.util.Map<String, LoraLinear> loraAdapters() {
+            return java.util.Collections.unmodifiableMap(loraAdapters);
+        }
+
+        /**
+         * Cache-aware layer forward for inference serving.
+         *
+         * <p>Note: this method does <b>not</b> apply LoRA adapters. It is used
+         * exclusively for KV-cache decode paths where LoRA overhead is undesirable.
+         * For training (and for correct LoRA inference) use {@link #forward(Tensor)}.
+         */
         public Tensor[] forwardCached(Tensor x, long positionOffset, Tensor pastK, Tensor pastV) {
             Tensor h = input_layernorm.forward(x);
             Tensor[] attOut = self_attn.forwardCached(h, positionOffset, pastK, pastV);
@@ -252,5 +352,148 @@ public class LlamaForCausalLM extends Module {
             out = out.add(mlp.forward(post_attention_layernorm.forward(out)));
             return new Tensor[]{out, attOut[1], attOut[2]};
         }
+    }
+
+    // ---------------------------------------------------------------------
+    // PEFT integration: attachLora, quantizableLinears, namedLinears
+    // ---------------------------------------------------------------------
+
+    /** Returns all named Linear children matching the HF prefix structure. */
+    public java.util.LinkedHashMap<String, LinearImpl> namedLinears() {
+        java.util.LinkedHashMap<String, LinearImpl> m = new java.util.LinkedHashMap<>();
+        for (int i = 0; i < model.layers.size(); i++) {
+            LlamaDecoderLayer layer = model.layers.get(i);
+            String p = "model.layers." + i;
+            m.put(p + ".self_attn.q_proj", layer.self_attn.q_proj);
+            m.put(p + ".self_attn.k_proj", layer.self_attn.k_proj);
+            m.put(p + ".self_attn.v_proj", layer.self_attn.v_proj);
+            m.put(p + ".self_attn.o_proj", layer.self_attn.o_proj);
+            m.put(p + ".mlp.gate_proj", layer.mlp.gate_proj);
+            m.put(p + ".mlp.up_proj", layer.mlp.up_proj);
+            m.put(p + ".mlp.down_proj", layer.mlp.down_proj);
+        }
+        return m;
+    }
+
+    /** Returns all named Linear children excluding lm_head (for QLoRA). */
+    public java.util.LinkedHashMap<String, LinearImpl> quantizableLinears() {
+        return namedLinears();
+    }
+
+    /**
+     * Attach a LoRA adapter to every Q/K/V/O projection and every MLP projection
+     * in every decoder layer. After calling this method, the LoRA ΔW contributions
+     * are applied during forward passes via the layer-level adapter dispatch.
+     *
+     * <p>The adapters are attached to the following targets per layer:
+     * {@code q_proj}, {@code k_proj}, {@code v_proj}, {@code o_proj},
+     * {@code gate_proj}, {@code up_proj}, {@code down_proj}.
+     *
+     * <p>After attaching, call {@link #freezeBaseModelParameters()} to freeze all
+     * base-model weights so that only the LoRA A/B matrices remain trainable.
+     *
+     * @param config the LoRA configuration (rank, alpha, dropout, target modules)
+     * @return the list of adapters created, one per (layer, target) pair
+     */
+    public java.util.List<LoraLinear> attachLora(LoraConfig config) {
+        if (config == null) throw new IllegalArgumentException("config is null");
+        java.util.List<LoraLinear> adapters = new java.util.ArrayList<>();
+        java.util.Set<String> targets = config.targetModules() != null
+                ? new java.util.HashSet<>(config.targetModules())
+                : java.util.Collections.emptySet();
+        String[] allTargets = {"q_proj", "k_proj", "v_proj", "o_proj",
+                "gate_proj", "up_proj", "down_proj"};
+        for (int i = 0; i < model.layers.size(); i++) {
+            LlamaDecoderLayer layer = model.layers.get(i);
+            for (String target : allTargets) {
+                if (targets.isEmpty() || targets.contains(target)) {
+                    LoraLinear adapter = layer.attachLora(target, config);
+                    if (adapter != null) {
+                        String fullName = "model.layers." + i + "." + target;
+                        loraAdapters.put(fullName, adapter);
+                        adapters.add(adapter);
+                    }
+                }
+            }
+        }
+        return adapters;
+    }
+
+    /**
+     * Attach a single LoRA adapter to a named linear layer. Returns null if
+     * {@code name} is not found.
+     */
+    public LoraLinear attachLora(String name, LoraConfig config) {
+        if (config == null) throw new IllegalArgumentException("config is null");
+        Objects.requireNonNull(name, "name");
+        LinearImpl lin = namedLinears().get(name);
+        if (lin == null) return null;
+        LoraLinear adapter = LoraLinear.borrowBase(lin, config);
+        loraAdapters.put(name, adapter);
+        // Parse "model.layers.{idx}.{target}" and wire the layer-level adapter
+        if (name.startsWith("model.layers.")) {
+            String after = name.substring("model.layers.".length());
+            int lastDot = after.lastIndexOf('.');
+            if (lastDot > 0) {
+                try {
+                    int layerIdx = Integer.parseInt(after.substring(0, lastDot));
+                    String target = after.substring(lastDot + 1);
+                    if (layerIdx >= 0 && layerIdx < model.layers.size()) {
+                        model.layers.get(layerIdx).attachLora(target, config);
+                    }
+                } catch (NumberFormatException ignored) {}
+            }
+        }
+        return adapter;
+    }
+
+    /**
+     * Freeze all base-model parameters so that only LoRA adapter parameters
+     * remain trainable.
+     *
+     * <p>This is the standard QLoRA preparation step: after attaching LoRA adapters
+     * via {@link #attachLora(LoraConfig)}, call this to freeze every base-model
+     * parameter returned by {@link #parameters()}. Because LoRA adapters created with
+     * {@link LoraLinear#borrowBase} are not registered as children of this module,
+     * their A/B weight matrices are <b>not</b> traversed by {@link #parameters()}
+     * and therefore remain trainable.
+     *
+     * <p>Calling this method is equivalent to the Python idiom:
+     * <pre>
+     *   for name, param in model.named_parameters():
+     *       if 'lora_' not in name:
+     *           param.requires_grad = False
+     * </pre>
+     *
+     * @see #attachLora(LoraConfig)
+     * @see #attachLora(String, LoraConfig)
+     */
+    public void freezeBaseModelParameters() {
+        TensorVector params = parameters();
+        for (int i = 0; i < params.size(); i++) {
+            Tensor p = params.get(i);
+            if (p != null && p.defined()) p.set_requires_grad(false);
+        }
+    }
+
+    /**
+     * @deprecated Use {@link #freezeBaseModelParameters()} instead.
+     *             This method name is misleading: it does not enable PyTorch
+     *             activation checkpointing (which requires
+     *             {@code torch.utils.checkpoint}) but freezes base-model parameters.
+     */
+    @Deprecated
+    public void enable_gradient_checkpointing() {
+        freezeBaseModelParameters();
+    }
+
+    /**
+     * Override ugly Module#toString for cleaner logging.
+     */
+    @Override
+    public String toString() {
+        return "LlamaForCausalLM(config=" + config
+                + ", layers=" + model.layers.size()
+                + ", hidden=" + config.hiddenSize() + ")";
     }
 }

@@ -363,9 +363,9 @@ public final class FFT {
         }
     }
 
-    /** Default DCT (type 2) */
+    /** Default DCT (type 2) - scipy backward normalization (no ortho) */
     public static double[] dct(double[] x) {
-        return dct2(x, true);
+        return dct2(x, false);
     }
 
     private static double[] dct1(double[] x, boolean norm) {
@@ -396,11 +396,11 @@ public final class FFT {
                 sum += x[i] * Math.cos(Math.PI * (i + 0.5) * k / n);
             }
             if (norm) {
-                // scipy-like normalization: scale by sqrt(2/n) for k>0, 1/sqrt(n) for k=0
+                // scipy ortho normalization: k=0 -> 1/sqrt(n), k>0 -> sqrt(2/n)
                 y[k] = (k == 0) ? sum / Math.sqrt(n) : sum * Math.sqrt(2.0 / n);
             } else {
-                // No normalization: y[k] = sum for all k
-                y[k] = sum;
+                // scipy backward: y[k] = 2 * sum for k>0, sum for k=0
+                y[k] = (k == 0) ? sum : 2 * sum;
             }
         }
         return y;

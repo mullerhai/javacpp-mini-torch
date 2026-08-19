@@ -149,6 +149,32 @@ public class ModelingAttention extends Module {
         Tensor q = q_proj.forward(x).view(B, T, nHeads, headDim);
         Tensor k = k_proj.forward(x).view(B, T, nKvHeads, headDim);
         Tensor v = v_proj.forward(x).view(B, T, nKvHeads, headDim);
+        return forwardFromQKV(q, k, v);
+    }
+
+    /**
+     * Attention forward given already-projected Q, K, V tensors.
+     *
+     * <p>This is the second half of the standard forward. Use this when you need to
+     * inject LoRA adapters before each Q/K/V projection: compute the Q/K/V
+     * projections externally (with LoRA overlaid), then call this method to run the
+     * RoPE → attention → O-projection part.
+     *
+     * <p>Expected shapes:
+     * <ul>
+     *   <li>q: [B, T, nHeads, headDim]</li>
+     *   <li>k: [B, T, nKvHeads, headDim]</li>
+     *   <li>v: [B, T, nKvHeads, headDim]</li>
+     * </ul>
+     *
+     * @param q projected query tensor
+     * @param k projected key tensor
+     * @param v projected value tensor
+     * @return final output [B, T, hiddenSize]
+     */
+    public Tensor forwardFromQKV(Tensor q, Tensor k, Tensor v) {
+        long B = q.size(0);
+        long T = q.size(1);
 
         // Qwen3: RMSNorm over last dim (head_dim) before transpose
         if (useQkNorm) {

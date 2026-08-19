@@ -399,14 +399,16 @@ public final class Stats {
             double df_half = df / 2.0;
             double z_sq = z * z;
             double x_beta = df / (df + z_sq);
-            // Correct formula for Student-t CDF
-            // F(t) = 0.5 + t * betainc(df/2, 0.5, df/(df+t^2))  for t >= 0
-            // F(t) = 0.5 - |t| * betainc(df/2, 0.5, df/(df+t^2)) for t < 0
-            double half_beta = 0.5 * org.bytedeco.pytorch.scipy.special.Special.betainc(df_half, 0.5, x_beta);
+            // scipy formula: F(t) = 1 - 0.5 * I_x(nu/2, 1/2) for t > 0
+            //                  F(t) = 0.5 * I_x(nu/2, 1/2) for t < 0
+            // Combined: F(t) = 0.5 + 0.5 * sign(t) * (1 - I_x)
+            // Or simpler: F(t) = 1 - 0.5 * betainc(df/2, 0.5, df/(df+t^2)) when t>0
+            //                F(t) = 0.5 * betainc(df/2, 0.5, df/(df+t^2)) when t<0
+            double beta = org.bytedeco.pytorch.scipy.special.Special.betainc(df_half, 0.5, x_beta);
             if (z >= 0) {
-                return 0.5 + z * half_beta;
+                return 1.0 - 0.5 * beta;
             } else {
-                return 0.5 - (-z) * half_beta;
+                return 0.5 * beta;
             }
         }
 

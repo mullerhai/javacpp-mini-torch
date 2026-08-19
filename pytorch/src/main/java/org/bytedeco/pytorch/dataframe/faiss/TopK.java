@@ -120,24 +120,13 @@ public final class TopK {
         return new SearchResult(D, I);
     }
 
-    // ---- thread-local pool to avoid per-query allocation ----
-
-    private static final ThreadLocal<TopK[]> POOL = new ThreadLocal<>();
-
-    /** Borrow a TopK sized to (k, lowerIsBetter) from a thread-local pool. */
+    /**
+     * Allocate a fresh collector. Must NOT be keyed only by {@code k}:
+     * batch knn does {@code heaps[q] = borrow(k)} for every query, so a
+     * per-k singleton would alias all queries onto one heap and collapse
+     * recall to ~0 (Flat GT, IVFPQ, VectorCpu backend).
+     */
     public static TopK borrow(int k, boolean lowerIsBetter) {
-        TopK[] pool = POOL.get();
-        if (pool == null || pool.length < k) {
-            pool = new TopK[Math.max(k, 16)];
-            POOL.set(pool);
-        }
-        TopK h = pool[k - 1];
-        if (h == null) {
-            h = new TopK(k, lowerIsBetter);
-            pool[k - 1] = h;
-        } else {
-            h.reset();
-        }
-        return h;
+        return new TopK(k, lowerIsBetter);
     }
 }

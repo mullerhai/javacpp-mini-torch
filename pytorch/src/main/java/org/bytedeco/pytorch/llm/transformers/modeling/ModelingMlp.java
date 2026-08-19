@@ -70,6 +70,21 @@ public final class ModelingMlp {
         public Tensor forward(Tensor x) {
             return down_proj.forward(silu(gate_proj.forward(x)).mul(up_proj.forward(x)));
         }
+
+        /**
+         * SwiGLU forward given already-projected gate and up tensors.
+         *
+         * <p>Use this when you need to inject LoRA adapters before {@code gate_proj} or
+         * {@code up_proj}: compute those projections externally (with LoRA overlaid),
+         * then call this method to finish with SiLU × up → down.
+         *
+         * @param gate pre-projected gate tensor [*, intermediateSize]
+         * @param up   pre-projected up tensor   [*, intermediateSize]
+         * @return final output [*, hiddenSize]
+         */
+        public Tensor forwardWithGateUp(Tensor gate, Tensor up) {
+            return down_proj.forward(silu(gate).mul(up));
+        }
     }
 
     /**

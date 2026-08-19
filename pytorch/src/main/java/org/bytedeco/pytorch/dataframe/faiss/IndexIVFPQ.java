@@ -189,18 +189,21 @@ public class IndexIVFPQ extends Index {
         for (int q = 0; q < nq; q++) {
             System.arraycopy(xq, q * d, query, 0, d);
 
-            // Build per-sub distance table from query_sub vs each codebook centroid.
-            for (int sub = 0; sub < m; sub++) {
-                float[] cb = codebooks[sub];
-                int qOff = sub * dsub;
-                for (int c = 0; c < ksub; c++) {
-                    baseTable[sub][c] = l2
-                        ? DistanceKernel.l2Row(query, qOff, cb, c * dsub, dsub)
-                        : DistanceKernel.ipRow(query, qOff, cb, c * dsub, dsub);
+            // IP ADC table is independent of the probed list:
+            //   query · (centroid + pq) = query·centroid + Σ query_sub·codebook[code]
+            // L2 residual table depends on the centroid and is rebuilt per list below.
+            if (!l2) {
+                for (int sub = 0; sub < m; sub++) {
+                    float[] cb = codebooks[sub];
+                    int qOff = sub * dsub;
+                    for (int c = 0; c < ksub; c++) {
+                        baseTable[sub][c] = DistanceKernel.ipRow(query, qOff, cb, c * dsub, dsub);
+                    }
                 }
             }
 
             TopK heap = heaps[q];
+            float[] residual = l2 ? new float[d] : null;
 
             // Walk probed lists.
             for (int p = 0; p < probe; p++) {
@@ -209,28 +212,20 @@ public class IndexIVFPQ extends Index {
                 int list = (int) listId;
                 int cst = list * d;
 
-                // Constant offset to convert "query-vs-codebook" table values into
-                // "residual-vs-codebook" distances for this specific list:
-                //   For L2:  ||qres_sub - c||^2 = ||q_sub||^2 + ||c_sub||^2 - 2 q_sub·c_sub
-                //                   = baseTable + (||c_sub||^2 - 2 q_sub·c_sub)
-                //   Summed across subs: offset = ||c||^2 - 2 q·c
-                //   For IP:  qres_sub · c = q_sub·c - ||c_sub||^2  → offset = -||c||^2
                 float listOffset = 0f;
                 if (l2) {
-                    float centSq = 0f, qDotC = 0f;
-                    for (int j = 0; j < d; j++) {
-                        float cj = centroids[cst + j];
-                        centSq += cj * cj;
-                        qDotC += query[j] * cj;
+                    for (int j = 0; j < d; j++) residual[j] = query[j] - centroids[cst + j];
+                    for (int sub = 0; sub < m; sub++) {
+                        float[] cb = codebooks[sub];
+                        int qOff = sub * dsub;
+                        for (int c = 0; c < ksub; c++) {
+                            baseTable[sub][c] = DistanceKernel.l2Row(residual, qOff, cb, c * dsub, dsub);
+                        }
                     }
-                    listOffset = centSq - 2f * qDotC;
                 } else {
-                    float centSq = 0f;
-                    for (int j = 0; j < d; j++) {
-                        float cj = centroids[cst + j];
-                        centSq += cj * cj;
-                    }
-                    listOffset = -centSq;
+                    float qDotC = 0f;
+                    for (int j = 0; j < d; j++) qDotC += query[j] * centroids[cst + j];
+                    listOffset = qDotC;
                 }
 
                 InvList inv = invlists.get(list);

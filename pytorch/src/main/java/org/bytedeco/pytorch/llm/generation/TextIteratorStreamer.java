@@ -22,9 +22,14 @@ public final class TextIteratorStreamer {
     private final List<String> chunks = new CopyOnWriteArrayList<>();
     private final Consumer<String> onChunk;
     private boolean ended = false;
+    private long startTimeMillis = 0L;
+    private long endTimeMillis = 0L;
 
     public TextIteratorStreamer() { this(null); }
-    public TextIteratorStreamer(Consumer<String> onChunk) { this.onChunk = onChunk; }
+    public TextIteratorStreamer(Consumer<String> onChunk) {
+        this.onChunk = onChunk;
+        this.startTimeMillis = System.currentTimeMillis();
+    }
 
     public synchronized void put(int tokenId) {
         // The decoder is owned by the model wrapper; we just append raw placeholder text.
@@ -53,11 +58,60 @@ public final class TextIteratorStreamer {
 
     public synchronized void end() {
         ended = true;
+        endTimeMillis = System.currentTimeMillis();
         notifyAll();
     }
 
     public synchronized boolean isEnded() {
         return ended;
+    }
+
+    /**
+     * Mark the streamer as ended with explicit wall-clock timestamp.
+     * Useful for tests / deterministic metrics.
+     */
+    public synchronized void markEnd(long tsMillis) {
+        ended = true;
+        endTimeMillis = tsMillis;
+        notifyAll();
+    }
+
+    public synchronized long startTimeMillis() {
+        return startTimeMillis == 0L ? System.currentTimeMillis() : startTimeMillis;
+    }
+
+    public synchronized long endTimeMillis() {
+        return endTimeMillis;
+    }
+
+    public synchronized long elapsedMillis() {
+        long end = endTimeMillis == 0L ? System.currentTimeMillis() : endTimeMillis;
+        long start = startTimeMillis == 0L ? end : startTimeMillis;
+        return Math.max(0L, end - start);
+    }
+
+    /**
+     * Reset all state so the same streamer can be reused for a new turn.
+     * Callers must ensure no other thread is mid-{@code put}/{@code awaitEnd}.
+     */
+    public synchronized void reset() {
+        sb.setLength(0);
+        chunks.clear();
+        ended = false;
+        startTimeMillis = System.currentTimeMillis();
+        endTimeMillis = 0L;
+    }
+
+    /**
+     * Alias for {@link #end()} kept for consistency with the Web Demo plan.
+     */
+    public void markEnd() {
+        end();
+    }
+
+    /** How many chunks have been produced in this turn (since the last reset). */
+    public synchronized int addedChunks() {
+        return chunks.size();
     }
 
     public synchronized String awaitEnd(long timeoutMs) throws InterruptedException {
