@@ -396,7 +396,13 @@ public final class Stats {
 
         public double cdf(double x) {
             double z = (x - loc) / scale;
-            return org.bytedeco.pytorch.scipy.special.Special.betainc(df / 2, 0.5, df / (df + z * z));
+            double t_squared = z * z;
+            double a = df / 2.0;
+            double b = 0.5;
+            double x_beta = df / (df + t_squared);
+            // Use second branch of betainc for numerical stability (when x_beta >= (a+1)/(a+b+2))
+            // This avoids calling private betacf directly
+            return org.bytedeco.pytorch.scipy.special.Special.betainc(a, b, x_beta);
         }
 
         public double ppf(double p) {

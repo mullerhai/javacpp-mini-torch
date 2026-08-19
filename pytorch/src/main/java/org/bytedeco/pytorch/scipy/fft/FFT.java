@@ -376,12 +376,13 @@ public final class FFT {
             for (int i = 0; i < n; i++) {
                 sum += x[i] * Math.cos(Math.PI * i * k / (n - 1));
             }
-            y[k] = 2 * sum;
-        }
-        if (norm) {
-            y[0] /= 2;
-            y[n - 1] /= 2;
-            for (int k = 0; k < n; k++) y[k] *= Math.sqrt(0.5 / (n - 1));
+            if (norm) {
+                double scale = (k == 0 || k == n - 1) ? 1.0 : 2.0;
+                y[k] = scale * sum * Math.sqrt(1.0 / (2 * (n - 1)));
+            } else {
+                double scale = (k == 0 || k == n - 1) ? 1.0 : 2.0;
+                y[k] = scale * sum;
+            }
         }
         return y;
     }

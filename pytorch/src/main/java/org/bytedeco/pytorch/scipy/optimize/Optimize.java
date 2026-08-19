@@ -99,7 +99,7 @@ public final class Optimize {
         boolean converged = false;
         double tol = xtol;
 
-        for (int i = 0; i < 100; i++) {
+        for (int i = 0; i < 1000; i++) {
             nit++;
             double m = 0.5 * (a2 + b2);
             double tol1 = tol * Math.abs(x) + tol;

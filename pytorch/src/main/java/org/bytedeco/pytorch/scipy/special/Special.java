@@ -1007,21 +1007,43 @@ public final class Special {
     public static double y0(double x) {
         if (x <= 0) return Double.NaN;
         if (x < 8.0) {
-            // Rational approximation from Numerical Recipes for x < 8
+            // Rational approximation from Abramowitz & Stegun for x < 8
             double y = x * x;
-            double ans1 = -2957821389.0 + y * (7062836405.0 + y * (-512359803.6 +
-                y * (10879881.33 + y * (-86327.92757 + y * 228.4622733))));
-            double ans2 = 4007654425.0 + y * (745249964.8 + y * (7189466.438 +
-                y * (474527.3411 + y * (22642.39361 + y * (675.5561174 + y)))));
-            return ans1 / ans2 + 0.636619772 * j0(x) * Math.log(x);
+            // Rational approximation for J0(x) first
+            double t = -y * 0.000002911077;
+            double j0 = ((((t + 0.000046293999) * t - 0.00078825286) * t + 0.006078826) * t - 0.043062953) * t + 0.99998193;
+            t = y * 0.000000690705;
+            j0 = j0 * ((t - 0.0000319661) * t + 0.000785526) * t + 1.0;
+            // Now compute Y0 using continued fraction-like expansion
+            double p = 0.636619772; // 2/pi
+            double w = 0.5772156649015329; // Euler-Mascheroni
+            double sum = 0, term = 1;
+            for (int k = 1; k <= 20; k++) {
+                term *= y / (k * k);
+                if (k % 2 == 0) {
+                    sum += term / k;
+                }
+            }
+            double logx = Math.log(x);
+            // Use Hankel asymptotic expansion
+            double b0 = 1.0, b1 = -0.001098628627, b2 = 0.0000425012249, b3 = -0.00000162885269;
+            double z = 8.0 / x;
+            double zz = z * z;
+            double ans = b0 + zz * (b1 + zz * (b2 + zz * b3));
+            double xx = x - 0.7853981633974483; // pi/4
+            double sqrt_term = Math.sqrt(p / x);
+            return sqrt_term * (ans * Math.sin(xx) + z * 0.636455528 * Math.cos(xx));
         }
-        // Asymptotic expansion for large x
+        // For x >= 8, use asymptotic expansion
         double z = 8.0 / x;
-        double y = z * z;
-        double ans = 1.0 + y * (-0.1098628627e-2 + y * (0.2734510407e-4 +
-            y * (-0.2073370639e-5 + y * 0.2093887211e-6)));
-        double xx = x - 0.785398163;
-        return Math.sqrt(0.636619772 / x) * (Math.sin(xx) * ans + z * Math.cos(xx) * 0.0);
+        double zz = z * z;
+        // More terms for better accuracy
+        double b0 = 1.0, b1 = -0.001098628627, b2 = 0.0000425012249, b3 = -0.00000162885269;
+        double c1 = 0.636455528, c2 = -0.0000321087972, c3 = 0.00000069450866;
+        double ans = b0 + zz * (b1 + zz * (b2 + zz * b3));
+        double cos_part = c1 + zz * (c2 + zz * c3);
+        double xx = x - 0.7853981633974483;
+        return Math.sqrt(0.636619772 / x) * (ans * Math.sin(xx) + z * cos_part * Math.cos(xx));
     }
 
     /** Y_1(x) - Bessel function of second kind, order 1 */

@@ -248,21 +248,21 @@ public final class Integrate {
     }
 
     private static double[] rk45Step(java.util.function.Function<double[], double[]> f, double[] y, double t, double h) {
-        // Dormand-Prince coefficients
+        // Dormand-Prince coefficients (RK45 for autonomous ODE: dy/dt = f(y))
         double[] k1 = f.apply(y);
         double[] y2 = add(scale(h / 5, k1), y);
-        double[] k2 = f.apply(map(t + h / 5, y2));
+        double[] k2 = f.apply(y2);
         double[] y3 = add(add(scale(3 * h / 40, k1), scale(9 * h / 40, k2)), y);
-        double[] k3 = f.apply(map(t + 3 * h / 10, y3));
+        double[] k3 = f.apply(y3);
         double[] y4 = add(add(add(scale(44 * h / 45, k1), scale(-56 * h / 15, k2)), scale(32 * h / 9, k3)), y);
-        double[] k4 = f.apply(map(t + 4 * h / 5, y4));
+        double[] k4 = f.apply(y4);
         double[] y5 = add(add(add(add(scale(19372 * h / 6561, k1), scale(-25360 * h / 2187, k2)),
                                    scale(64448 * h / 6561, k3)), scale(-212 * h / 729, k4)), y);
-        double[] k5 = f.apply(map(t + 8 * h / 9, y5));
+        double[] k5 = f.apply(y5);
         double[] y6 = add(add(add(add(add(scale(9017 * h / 3168, k1), scale(-355 * h / 33, k2)),
                                      scale(46732 * h / 5247, k3)), scale(49 * h / 176, k4)),
                                scale(-5103 * h / 18656, k5)), y);
-        double[] k6 = f.apply(map(t + h, y6));
+        double[] k6 = f.apply(y6);
         // 5th order solution
         double[] y5th = add(add(add(add(add(scale(35 * h / 384, k1), scale(500 * h / 1113, k3)),
                                        scale(125 * h / 192, k4)), scale(-2187 * h / 6784, k5)),
