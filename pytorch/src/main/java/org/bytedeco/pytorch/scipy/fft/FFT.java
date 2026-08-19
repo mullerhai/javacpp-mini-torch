@@ -374,7 +374,7 @@ public final class FFT {
         for (int k = 0; k < n; k++) {
             double sum = 0;
             for (int i = 0; i < n; i++) {
-                sum += x[i] * Math.cos(Math.PI * (i) * k / (n - 1));
+                sum += x[i] * Math.cos(Math.PI * i * k / (n - 1));
             }
             y[k] = 2 * sum;
         }

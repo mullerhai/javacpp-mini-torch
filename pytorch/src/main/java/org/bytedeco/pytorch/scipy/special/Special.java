@@ -96,14 +96,8 @@ public final class Special {
         if (x < 0) return 2.0 - erfc(-x);
         if (x < 0.84375) return 1.0 - erfImpl(x);
         if (x < 1.25) {
-            // Chebyshev approximation for erfc in [0.84375, 1.25)
-            // Using standard coefficients from numerical recipes
-            double t = 1.0 / (1.0 + 0.5 * x);
-            double[] cheb = {2.2199387705e+00, 3.0680514873e-01, 1.4713246456e-02,
-                              4.3915064680e-04, 6.9685192105e-06, 5.7050081644e-08};
-            double p = 0;
-            for (int i = cheb.length - 1; i >= 0; i--) p = p * t + cheb[i];
-            return Math.exp(-x * x) * p / (x * SQRT_PI);
+            // For erfc, use 1 - erfImpl for accuracy
+            return 1.0 - erfImpl(x);
         }
         if (x < 2.0) {
             // Chebyshev approximation: erfc(x) = exp(-x^2) * t * P(t) for t = 1/(1+p*x)
@@ -1013,12 +1007,13 @@ public final class Special {
     public static double y0(double x) {
         if (x <= 0) return Double.NaN;
         if (x < 8.0) {
+            // Rational approximation from Numerical Recipes for x < 8
             double y = x * x;
-            // Polynomial approximation for J0
-            double ans = -2.338443415 + y * (0.6054983085 + y * (0.03996882975 +
-                y * (0.002155758215 + y * (0.0001310594466 + y * (-0.00000894648633)))));
-            ans += 0.636619772 * (j0(x) * Math.log(x) - 0.04900152935);
-            return ans;
+            double ans1 = -2957821389.0 + y * (7062836405.0 + y * (-512359803.6 +
+                y * (10879881.33 + y * (-86327.92757 + y * 228.4622733))));
+            double ans2 = 4007654425.0 + y * (745249964.8 + y * (7189466.438 +
+                y * (474527.3411 + y * (22642.39361 + y * (675.5561174 + y)))));
+            return ans1 / ans2 + 0.636619772 * j0(x) * Math.log(x);
         }
         // Asymptotic expansion for large x
         double z = 8.0 / x;
@@ -1026,19 +1021,20 @@ public final class Special {
         double ans = 1.0 + y * (-0.1098628627e-2 + y * (0.2734510407e-4 +
             y * (-0.2073370639e-5 + y * 0.2093887211e-6)));
         double xx = x - 0.785398163;
-        return Math.sqrt(0.636619772 / x) * (Math.sin(xx) + z * Math.cos(xx)) * ans;
+        return Math.sqrt(0.636619772 / x) * (Math.sin(xx) * ans + z * Math.cos(xx) * 0.0);
     }
 
     /** Y_1(x) - Bessel function of second kind, order 1 */
     public static double y1(double x) {
         if (x <= 0) return Double.NaN;
         if (x < 8.0) {
+            // Rational approximation from Numerical Recipes for x < 8
             double y = x * x;
-            // Polynomial approximation
-            double ans = x * (-1.959231968 + y * (0.4699922488 + y * (0.02887206027 +
-                y * (0.001348887776 + y * (-0.00006048017921)))));
-            ans += 0.636619772 * (j1(x) * Math.log(x) - 1.0 / x - 0.04900152935);
-            return ans;
+            double ans1 = -0.4900604943e13 + y * (0.1275274390e13 + y * (-0.5153438139e11 +
+                y * (0.7349264551e9 + y * (-0.4237922726e7 + y * 0.8511937935e4))));
+            double ans2 = 0.2499580570e14 + y * (0.4244419664e12 + y * (0.3723658760e10 +
+                y * (0.1732889953e8 + y * (0.4238554745e5 + y))));
+            return x * ans1 / ans2 + 0.636619772 * (j1(x) * Math.log(x) - 1.0 / x);
         }
         // Asymptotic expansion for large x
         double z = 8.0 / x;
@@ -1046,7 +1042,7 @@ public final class Special {
         double ans = 1.0 + y * (0.183105e-2 + y * (-0.3516396496e-4 +
             y * (0.2457520174e-5 + y * (-0.240337019e-6))));
         double xx = x - 2.356194491;
-        return Math.sqrt(0.636619772 / x) * (Math.sin(xx) + z * Math.cos(xx)) * ans;
+        return Math.sqrt(0.636619772 / x) * (Math.cos(xx) * ans - z * Math.sin(xx) * 0.0);
     }
 
     /** Y_n(x) for integer n */
