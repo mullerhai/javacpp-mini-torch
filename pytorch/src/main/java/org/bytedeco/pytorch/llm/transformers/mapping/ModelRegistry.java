@@ -24,8 +24,10 @@ package org.bytedeco.pytorch.llm.transformers.mapping;
 import org.bytedeco.pytorch.nn.Module;
 import org.bytedeco.pytorch.llm.transformers.CausalLM;
 import org.bytedeco.pytorch.llm.transformers.PretrainedConfig;
+import org.bytedeco.pytorch.llm.transformers.modeling.DeepSeekForCausalLM;
 import org.bytedeco.pytorch.llm.transformers.modeling.GlmForCausalLM;
 import org.bytedeco.pytorch.llm.transformers.modeling.LlamaForCausalLM;
+import org.bytedeco.pytorch.llm.transformers.modeling.MistralForCausalLM;
 import org.bytedeco.pytorch.llm.transformers.modeling.Qwen2ForCausalLM;
 import org.bytedeco.pytorch.llm.transformers.modeling.Qwen3ForCausalLM;
 
@@ -57,7 +59,8 @@ public final class ModelRegistry {
         register("qwen3_vl_text", Qwen3ForCausalLM::fromConfig, WeightMaps.qwen3Vl());
         register("qwen3_vl", Qwen3ForCausalLM::fromConfig, WeightMaps.qwen3Vl());
         register("llama", LlamaForCausalLM::fromConfig, WeightMaps.llama());
-        register("mistral", LlamaForCausalLM::fromConfig, WeightMaps.mistral());
+        register("mistral", MistralForCausalLM::fromConfig, WeightMaps.mistral());
+        register("mixtral", DeepSeekForCausalLM::fromConfig, WeightMaps.identity());
         register("glm", GlmForCausalLM::fromConfig, WeightMaps.glm());
         register("chatglm", GlmForCausalLM::fromConfig, WeightMaps.glm());
         // -------------------------------------------------------------------
@@ -80,8 +83,9 @@ public final class ModelRegistry {
         register("falcon", LlamaForCausalLM::fromConfig, WeightMaps.identity());
         register("bloom", LlamaForCausalLM::fromConfig, WeightMaps.identity());
         register("mpt", LlamaForCausalLM::fromConfig, WeightMaps.identity());
-        register("deepseek", LlamaForCausalLM::fromConfig, WeightMaps.identity());
-        register("mixtral", LlamaForCausalLM::fromConfig, WeightMaps.identity());
+        register("deepseek", DeepSeekForCausalLM::fromConfig, WeightMaps.identity());
+        register("deepseek_v2", DeepSeekForCausalLM::fromConfig, WeightMaps.identity());
+        register("deepseek_v3", DeepSeekForCausalLM::fromConfig, WeightMaps.identity());
         // GPT-2 / generic fall back to the original CausalLM teaching model
         register("gpt2", CausalLM::fromConfig, WeightMaps.gpt2());
         register("gpt", CausalLM::fromConfig, WeightMaps.gpt2());
