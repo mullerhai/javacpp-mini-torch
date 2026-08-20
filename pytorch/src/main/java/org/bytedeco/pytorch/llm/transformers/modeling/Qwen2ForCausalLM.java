@@ -25,6 +25,9 @@ import org.bytedeco.javacpp.Loader;
 import org.bytedeco.javacpp.annotation.Properties;
 import org.bytedeco.pytorch.LongOptional;
 import org.bytedeco.pytorch.Tensor;
+import org.bytedeco.pytorch.TensorVector;
+import org.bytedeco.pytorch.llm.peft.LoraConfig;
+import org.bytedeco.pytorch.llm.peft.LoraLinear;
 import org.bytedeco.pytorch.nn.Module;
 import org.bytedeco.pytorch.nn.modules.EmbeddingImpl;
 import org.bytedeco.pytorch.nn.modules.LinearImpl;
@@ -34,10 +37,13 @@ import org.bytedeco.pytorch.llm.transformers.generation.GenerationConfig;
 import org.bytedeco.pytorch.llm.transformers.generation.Generator;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 
 import static org.bytedeco.pytorch.global.torch.cross_entropy;
+import static org.bytedeco.pytorch.global.torch.silu;
 
 /**
  * Qwen2 causal LM with <b>HuggingFace-identical parameter names</b>:
@@ -60,6 +66,8 @@ public class Qwen2ForCausalLM extends Module {
     private final PretrainedConfig config;
     private final Qwen2Model model;
     private final LinearImpl lm_head;
+    /** LoRA adapters attached via {@link #attachLora(LoraConfig)}. */
+    private final LinkedHashMap<String, LoraLinear> loraAdapters = new LinkedHashMap<>();
 
     public Qwen2ForCausalLM(PretrainedConfig config) {
         super("Qwen2ForCausalLM");
@@ -147,6 +155,12 @@ public class Qwen2ForCausalLM extends Module {
      */
     public CachedForwardResult forwardCached(Tensor inputIds, long positionOffset,
                                               Tensor[] pastKs, Tensor[] pastVs) {
+        if (!loraAdapters.isEmpty()) {
+            throw new IllegalStateException(
+                    "forwardCached() cannot be used when unmerged LoRA adapters are active. "
+                    + "Call LoraLinear.merge() on all adapters before using this path, "
+                    + "or use forward(Tensor) instead.");
+        }
         Tensor ids = inputIds.dim() == 1 ? inputIds.unsqueeze(0) : inputIds;
         long T = ids.size(1);
         if (positionOffset + T > config.maxPositionEmbeddings()) {
@@ -222,6 +236,7 @@ public class Qwen2ForCausalLM extends Module {
         public final ModelingAttention self_attn;
         public final RMSNorm post_attention_layernorm;
         public final ModelingMlp.SwiGLU mlp;
+        private final LinkedHashMap<String, LoraLinear> loraAdapters = new LinkedHashMap<>();
 
         public Qwen2DecoderLayer(PretrainedConfig cfg, int layerIdx) {
             super("Qwen2DecoderLayer" + layerIdx);
@@ -238,9 +253,53 @@ public class Qwen2ForCausalLM extends Module {
 
         @Override
         public Tensor forward(Tensor x) {
-            x = x.add(self_attn.forward(input_layernorm.forward(x)));
-            x = x.add(mlp.forward(post_attention_layernorm.forward(x)));
-            return x;
+            Tensor h = input_layernorm.forward(x);
+            long B = h.size(0);
+            long T = h.size(1);
+            int nHeads = self_attn.nHeads();
+            int nKv = self_attn.nKvHeads();
+            int hd = self_attn.headDim();
+            Tensor q = applyProj(self_attn.q_proj, "q_proj", h).view(B, T, nHeads, hd);
+            Tensor k = applyProj(self_attn.k_proj, "k_proj", h).view(B, T, nKv, hd);
+            Tensor v = applyProj(self_attn.v_proj, "v_proj", h).view(B, T, nKv, hd);
+            Tensor attnInner = self_attn.attendFromQKV(q, k, v);
+            Tensor o = applyProj(self_attn.o_proj, "o_proj", attnInner);
+            x = x.add(o);
+            Tensor mh = post_attention_layernorm.forward(x);
+            Tensor gate = applyProj(mlp.gate_proj, "gate_proj", mh);
+            Tensor up   = applyProj(mlp.up_proj,   "up_proj",   mh);
+            Tensor down = applyProj(mlp.down_proj, "down_proj", silu(gate).mul(up));
+            return x.add(down);
+        }
+
+        private Tensor applyProj(LinearImpl base, String targetKey, Tensor input) {
+            LoraLinear lora = loraAdapters.get(targetKey);
+            if (lora != null) {
+                return lora.forward(input);
+            }
+            return base.forward(input);
+        }
+
+        public LoraLinear attachLora(String name, LoraConfig cfg) {
+            if (name == null || cfg == null) return null;
+            LinearImpl base = null;
+            switch (name) {
+                case "q_proj":  base = self_attn.q_proj; break;
+                case "k_proj":  base = self_attn.k_proj; break;
+                case "v_proj":  base = self_attn.v_proj; break;
+                case "o_proj":  base = self_attn.o_proj; break;
+                case "gate_proj": base = mlp.gate_proj; break;
+                case "up_proj":  base = mlp.up_proj; break;
+                case "down_proj": base = mlp.down_proj; break;
+                default: return null;
+            }
+            LoraLinear adapter = LoraLinear.borrowBase(base, cfg);
+            loraAdapters.put(name, adapter);
+            return adapter;
+        }
+
+        public Map<String, LoraLinear> loraAdapters() {
+            return java.util.Collections.unmodifiableMap(loraAdapters);
         }
 
         /** Cache-aware layer forward. {out [B,T,C], newK, newV}. */
@@ -250,6 +309,102 @@ public class Qwen2ForCausalLM extends Module {
             Tensor out = x.add(attOut[0]);
             out = out.add(mlp.forward(post_attention_layernorm.forward(out)));
             return new Tensor[]{out, attOut[1], attOut[2]};
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // PEFT integration: attachLora, quantizableLinears, namedLinears
+    // ---------------------------------------------------------------------
+
+    public LinkedHashMap<String, LinearImpl> namedLinears() {
+        LinkedHashMap<String, LinearImpl> m = new LinkedHashMap<>();
+        for (int i = 0; i < model.layers.size(); i++) {
+            Qwen2DecoderLayer layer = model.layers.get(i);
+            String p = "model.layers." + i;
+            m.put(p + ".self_attn.q_proj", layer.self_attn.q_proj);
+            m.put(p + ".self_attn.k_proj", layer.self_attn.k_proj);
+            m.put(p + ".self_attn.v_proj", layer.self_attn.v_proj);
+            m.put(p + ".self_attn.o_proj", layer.self_attn.o_proj);
+            m.put(p + ".mlp.gate_proj", layer.mlp.gate_proj);
+            m.put(p + ".mlp.up_proj", layer.mlp.up_proj);
+            m.put(p + ".mlp.down_proj", layer.mlp.down_proj);
+        }
+        return m;
+    }
+
+    public LinkedHashMap<String, LinearImpl> quantizableLinears() {
+        return namedLinears();
+    }
+
+    public Map<String, LoraLinear> loraAdapters() {
+        return java.util.Collections.unmodifiableMap(loraAdapters);
+    }
+
+    public boolean hasLora() {
+        return !loraAdapters.isEmpty();
+    }
+
+    /**
+     * Attach LoRA to every matching linear in every decoder layer. Same contract
+     * as {@link LlamaForCausalLM#attachLora(LoraConfig)}: the live adapter stored
+     * on the layer is the same object tracked here for save/load.
+     */
+    public List<LoraLinear> attachLora(LoraConfig config) {
+        if (config == null) throw new IllegalArgumentException("config is null");
+        List<LoraLinear> adapters = new ArrayList<>();
+        Map<String, LinearImpl> named = namedLinears();
+        for (int i = 0; i < model.layers.size(); i++) {
+            Qwen2DecoderLayer layer = model.layers.get(i);
+            for (Map.Entry<String, LinearImpl> e : named.entrySet()) {
+                String fullName = e.getKey();
+                if (org.bytedeco.pytorch.llm.peft.PeftModelHelper.parseLayerIndex(fullName) != i) continue;
+                if (config.isExcluded(fullName)
+                        || config.isExcluded(org.bytedeco.pytorch.llm.peft.PeftModelHelper.leafName(fullName))) {
+                    continue;
+                }
+                if (!config.shouldTransformLayer(fullName, i)) continue;
+                boolean hit = config.isAllLinear()
+                        || org.bytedeco.pytorch.llm.peft.PeftModelHelper.matchesTarget(fullName, config);
+                if (!hit) continue;
+                String leaf = org.bytedeco.pytorch.llm.peft.PeftModelHelper.leafName(fullName);
+                LoraLinear adapter = layer.attachLora(leaf, config);
+                if (adapter != null) {
+                    loraAdapters.put(fullName, adapter);
+                    adapters.add(adapter);
+                }
+            }
+        }
+        return adapters;
+    }
+
+    public LoraLinear attachLora(String name, LoraConfig config) {
+        if (config == null) throw new IllegalArgumentException("config is null");
+        Objects.requireNonNull(name, "name");
+        LinearImpl lin = namedLinears().get(name);
+        if (lin == null) return null;
+        LlamaForCausalLM.ParsedLayerName parsed = LlamaForCausalLM.parseLayerLinearName(name);
+        if (parsed != null && parsed.layerIdx >= 0 && parsed.layerIdx < model.layers.size()) {
+            LoraLinear adapter = model.layers.get(parsed.layerIdx).attachLora(parsed.leaf, config);
+            if (adapter != null) {
+                loraAdapters.put(name, adapter);
+            }
+            return adapter;
+        }
+        LoraLinear adapter = LoraLinear.borrowBase(lin, config);
+        loraAdapters.put(name, adapter);
+        return adapter;
+    }
+
+    /**
+     * Freeze every parameter returned by {@link #parameters()}. LoRA A/B created
+     * via {@link LoraLinear#borrowBase} are not children of this module, so they
+     * stay trainable.
+     */
+    public void freezeBaseModelParameters() {
+        TensorVector params = parameters();
+        for (int i = 0; i < params.size(); i++) {
+            Tensor p = params.get(i);
+            if (p != null && p.defined()) p.set_requires_grad(false);
         }
     }
 }

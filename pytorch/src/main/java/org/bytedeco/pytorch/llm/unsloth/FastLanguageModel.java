@@ -214,6 +214,18 @@ public final class FastLanguageModel {
         return loss;
     }
 
+    /** HuggingFace / Unsloth {@code model.print_trainable_parameters()}. */
+    public void printTrainableParameters() {
+        long train = trainableParameters();
+        long total = totalParameters();
+        double pct = total == 0 ? 0.0 : 100.0 * train / (double) total;
+        System.out.printf(java.util.Locale.US,
+                "trainable params: %,d || all params: %,d || trainable%%: %.4f%n",
+                train, total, pct);
+    }
+
+    public void print_trainable_parameters() { printTrainableParameters(); }
+
     public long trainableParameters() {
         long n = 0;
         for (LoraLinear ll : adapters) {

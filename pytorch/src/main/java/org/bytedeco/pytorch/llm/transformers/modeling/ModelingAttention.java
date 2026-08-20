@@ -153,12 +153,7 @@ public class ModelingAttention extends Module {
     }
 
     /**
-     * Attention forward given already-projected Q, K, V tensors.
-     *
-     * <p>This is the second half of the standard forward. Use this when you need to
-     * inject LoRA adapters before each Q/K/V projection: compute the Q/K/V
-     * projections externally (with LoRA overlaid), then call this method to run the
-     * RoPE → attention → O-projection part.
+     * Attention forward given already-projected Q, K, V tensors, including {@code o_proj}.
      *
      * <p>Expected shapes:
      * <ul>
@@ -167,12 +162,24 @@ public class ModelingAttention extends Module {
      *   <li>v: [B, T, nKvHeads, headDim]</li>
      * </ul>
      *
-     * @param q projected query tensor
-     * @param k projected key tensor
-     * @param v projected value tensor
+     * <p>When LoRA is welded onto {@code o_proj}, call {@link #attendFromQKV} instead
+     * and apply {@code o_proj} (or its {@code LoraLinear}) at the decoder-layer site
+     * so the output projection runs exactly once.
+     *
      * @return final output [B, T, hiddenSize]
      */
     public Tensor forwardFromQKV(Tensor q, Tensor k, Tensor v) {
+        return o_proj.forward(attendFromQKV(q, k, v));
+    }
+
+    /**
+     * RoPE → scaled-dot-product attention, <em>without</em> {@code o_proj}.
+     *
+     * <p>Returns {@code [B, T, nHeads * headDim]} so a LoRA-aware layer can apply
+     * {@code o_proj} / {@code LoraLinear} exactly once. Non-LoRA callers should
+     * keep using {@link #forwardFromQKV}.
+     */
+    public Tensor attendFromQKV(Tensor q, Tensor k, Tensor v) {
         long B = q.size(0);
         long T = q.size(1);
 
@@ -199,8 +206,7 @@ public class ModelingAttention extends Module {
         att = att.add(causalMask(T));
         att = softmax(att, -1L);
         Tensor y = matmul(att, v);
-        y = y.transpose(1, 2).contiguous().view(B, T, (long) nHeads * headDim);
-        return o_proj.forward(y);
+        return y.transpose(1, 2).contiguous().view(B, T, (long) nHeads * headDim);
     }
 
     private static Tensor causalMask(long T) {

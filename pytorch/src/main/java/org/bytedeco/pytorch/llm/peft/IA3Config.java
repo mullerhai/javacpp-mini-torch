@@ -51,6 +51,10 @@ public final class IA3Config extends PeftConfig {
         return initIa3Weights;
     }
 
+    public int fanInFanOut() {
+        return 0; // Not used in IA3 config, placeholder
+    }
+
     public static Builder builder() {
         return new Builder();
     }

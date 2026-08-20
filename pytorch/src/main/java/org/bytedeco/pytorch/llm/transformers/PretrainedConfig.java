@@ -526,6 +526,27 @@ public final class PretrainedConfig {
         return fromJson(Files.readString(path, StandardCharsets.UTF_8));
     }
 
+    /**
+     * Load config.json from a model directory (mirrors HF {@code PretrainedConfig.from_pretrained}).
+     *
+     * <p>Searches for {@code config.json} directly under the directory or inside
+     * a {@code model} or {@code model_name} subdirectory.
+     */
+    public static PretrainedConfig fromDirectory(Path dir) throws IOException {
+        Path resolved = resolveConfigJson(dir);
+        return fromFile(resolved);
+    }
+
+    private static Path resolveConfigJson(Path dir) throws IOException {
+        Path direct = dir.resolve("config.json");
+        if (Files.exists(direct)) return direct;
+        for (String sub : new String[]{"model", "model_name", "model_dir"}) {
+            Path nested = dir.resolve(sub).resolve("config.json");
+            if (Files.exists(nested)) return nested;
+        }
+        throw new IOException("config.json not found under " + dir);
+    }
+
     public String toJson() {
         return Json.encode(toMap());
     }

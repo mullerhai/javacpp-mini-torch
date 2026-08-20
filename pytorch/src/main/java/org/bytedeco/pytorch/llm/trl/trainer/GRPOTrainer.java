@@ -20,6 +20,7 @@
  * limitations under the License.
  */
 package org.bytedeco.pytorch.llm.trl.trainer;
+import org.bytedeco.pytorch.optim.options.*;
 import org.bytedeco.pytorch.*;
 import org.bytedeco.pytorch.llm.trl.LlmForward;
 import org.bytedeco.pytorch.llm.trl.LogProbUtils;
@@ -99,6 +100,36 @@ public final class GRPOTrainer extends BaseTrainer {
     public GRPOTrainer(Module policy, LlmForward policyForward, Optimizer optimizer, GRPOConfig config) {
         this(policy, policyForward, null, null, optimizer, config);
     }
+
+    /**
+     * HuggingFace TRL {@code GRPOTrainer(model=, args=, train_dataset=, reward_funcs=, processing_class=)}.
+     */
+    public static GRPOTrainer fromArgs(org.bytedeco.pytorch.nn.Module model,
+                                       GRPOConfig args,
+                                       org.bytedeco.pytorch.llm.datasets.HfDataset trainDataset,
+                                       org.bytedeco.pytorch.llm.trl.RewardFunc rewardFunc,
+                                       org.bytedeco.pytorch.llm.tokenizers.FastTokenizer tokenizer) {
+        Objects.requireNonNull(model, "model");
+        Objects.requireNonNull(args, "args");
+        LlmForward fw = (ids, mask) -> model.forward(ids);
+        org.bytedeco.pytorch.optim.options.AdamWOptions optOpts =
+                new org.bytedeco.pytorch.optim.options.AdamWOptions(args.learningRate());
+        org.bytedeco.pytorch.optim.Optimizer opt =
+                new org.bytedeco.pytorch.optim.AdamW(model.parameters(), optOpts);
+        GRPOTrainer trainer = new GRPOTrainer(model, fw, opt, args);
+        trainer.rewardFunc = rewardFunc;
+        trainer.trainDataset = trainDataset;
+        trainer.tokenizer = tokenizer;
+        return trainer;
+    }
+
+    private org.bytedeco.pytorch.llm.trl.RewardFunc rewardFunc;
+    private org.bytedeco.pytorch.llm.datasets.HfDataset trainDataset;
+    private org.bytedeco.pytorch.llm.tokenizers.FastTokenizer tokenizer;
+
+    public org.bytedeco.pytorch.llm.trl.RewardFunc rewardFunc() { return rewardFunc; }
+    public org.bytedeco.pytorch.llm.datasets.HfDataset trainDataset() { return trainDataset; }
+    public org.bytedeco.pytorch.llm.tokenizers.FastTokenizer tokenizer() { return tokenizer; }
 
     public Module policy() { return policy; }
     public Module reference() { return reference; }

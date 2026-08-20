@@ -32,7 +32,12 @@ import org.bytedeco.pytorch.llm.peft.PeftModel;
 import org.bytedeco.pytorch.llm.tokenizers.FastTokenizer;
 import org.bytedeco.pytorch.llm.trl.LlmForward;
 import org.bytedeco.pytorch.llm.trl.config.SFTConfig;
+import org.bytedeco.pytorch.llm.trl.data.DataCollatorForChatAssistant;
+import org.bytedeco.pytorch.llm.trl.data.TrlDataCollator;
 import org.bytedeco.pytorch.llm.trl.loss.SFTLoss;
+import org.bytedeco.pytorch.llm.datasets.HfDataset;
+import org.bytedeco.pytorch.llm.transformers.AutoModelForCausalLM;
+import org.bytedeco.pytorch.llm.transformers.hub.HfApi;
 import org.bytedeco.pytorch.nn.Module;
 import org.bytedeco.pytorch.optim.Adam;
 import org.bytedeco.pytorch.optim.AdamW;
@@ -121,10 +126,7 @@ public final class SFTTrainer extends BaseTrainer {
     }
 
     private static LlmForward defaultForwardFor(Module model) {
-        return (ids, mask) -> {
-            if (mask != null) return model.forward(ids, mask);
-            return model.forward(ids);
-        };
+        return (ids, mask) -> model.forward(ids);
     }
 
     public SFTTrainer(Module model, PeftModel peftModel, LoraConfig loraConfig, LlmForward forward,
@@ -185,10 +187,7 @@ public final class SFTTrainer extends BaseTrainer {
         Objects.requireNonNull(sftConfig, "sftConfig");
         Objects.requireNonNull(trainData, "trainData");
 
-        LlmForward fw = (ids, mask) -> {
-            if (mask != null) return model.forward(ids, mask);
-            return model.forward(ids);
-        };
+        LlmForward fw = (ids, mask) -> model.forward(ids);
 
         PeftModel peft = null;
         if (loraConfig != null) {
@@ -203,6 +202,103 @@ public final class SFTTrainer extends BaseTrainer {
             trainer.setTrainBatchSupplier(buildBatchSupplier(trainData, sftConfig, textField));
         }
         return trainer;
+    }
+
+    /**
+     * HuggingFace TRL {@code SFTTrainer(model=, args=, train_dataset=, eval_dataset=,
+     * processing_class=, peft_config=, data_collator=)}.
+     *
+     * @param model {@code String} Hub id / local path, {@code Module}, or
+     *              {@link AutoModelForCausalLM.Bundle}
+     * @param processingClass tokenizer ({@code processing_class=} in TRL ≥0.16)
+     */
+    public static SFTTrainer fromArgs(Object model, SFTConfig args,
+                                      HfDataset trainDataset, HfDataset evalDataset,
+                                      FastTokenizer processingClass, LoraConfig peftConfig,
+                                      TrlDataCollator collator) {
+        Objects.requireNonNull(args, "args");
+        Module resolved;
+        FastTokenizer tok = processingClass;
+        try {
+            if (model instanceof String id) {
+                AutoModelForCausalLM.Bundle b = AutoModelForCausalLM.fromPretrainedDefault(id);
+                resolved = b.model();
+                if (tok == null) tok = b.tokenizer();
+            } else if (model instanceof AutoModelForCausalLM.Bundle b) {
+                resolved = b.model();
+                if (tok == null) tok = b.tokenizer();
+            } else if (model instanceof Module m) {
+                resolved = m;
+            } else {
+                throw new IllegalArgumentException("model must be String, Module or AutoModelForCausalLM.Bundle, got "
+                        + (model == null ? "null" : model.getClass().getName()));
+            }
+        } catch (java.io.IOException e) {
+            throw new IllegalStateException("Failed to load model: " + model, e);
+        }
+
+        boolean skipPrepare = false;
+        Map<String, Object> dkw = args.datasetKwargs();
+        if (dkw != null && Boolean.TRUE.equals(dkw.get("skip_prepare_dataset"))) {
+            skipPrepare = true;
+        }
+        TrlDataCollator effective = collator;
+        if (effective == null && tok != null && !skipPrepare
+                && (args.assistantOnlyLoss() || (trainDataset != null && hasMessages(trainDataset)))) {
+            effective = new DataCollatorForChatAssistant(tok, args.maxLength(), args.ignoreIndex(), false);
+        }
+
+        LlmForward fw = (ids, mask) -> resolved.forward(ids);
+        PeftModel peft = peftConfig != null ? PeftModel.getPeftModel(resolved, peftConfig) : null;
+        Optimizer opt = buildOptimizer(args, resolved, peft);
+        SFTTrainer trainer = new SFTTrainer(resolved, peft, peftConfig, fw, peftConfig, tok, opt, args);
+
+        if (trainDataset != null) {
+            trainer.setTrainBatchSupplier(datasetSupplier(trainDataset, args, tok, effective, true));
+        }
+        trainer.evalDataset = evalDataset;
+        trainer.evalCollator = effective;
+        return trainer;
+    }
+
+    public static SFTTrainer fromArgs(Object model, SFTConfig args,
+                                      HfDataset trainDataset, HfDataset evalDataset,
+                                      FastTokenizer processingClass, LoraConfig peftConfig) {
+        return fromArgs(model, args, trainDataset, evalDataset, processingClass, peftConfig, null);
+    }
+
+    private static boolean hasMessages(HfDataset ds) {
+        if (ds == null || ds.size() == 0) return false;
+        Map<String, Object> row = ds.get(0);
+        return row != null && row.containsKey("messages");
+    }
+
+    private static BatchSupplier datasetSupplier(HfDataset ds, SFTConfig cfg, FastTokenizer tok,
+                                                 TrlDataCollator collator, boolean shuffle) {
+        int batchSize = Math.max(1, cfg.perDeviceTrainBatchSize());
+        int n = ds.size();
+        int[] order = new int[n];
+        for (int i = 0; i < n; i++) order[i] = i;
+        if (shuffle && cfg.shuffleDataset()) {
+            Random rng = new Random(cfg.seed());
+            for (int i = n - 1; i > 0; i--) {
+                int j = rng.nextInt(i + 1);
+                int t = order[i]; order[i] = order[j]; order[j] = t;
+            }
+        }
+        return new BatchSupplier() {
+            private int idx = 0;
+            @Override
+            public Map<String, Tensor> next() {
+                if (idx >= n) return null;
+                int end = Math.min(n, idx + batchSize);
+                List<Map<String, Object>> slice = new ArrayList<>(end - idx);
+                for (int i = idx; i < end; i++) slice.add(ds.get(order[i]));
+                idx = end;
+                if (collator != null) return collator.collate(slice);
+                return buildBatchSupplier(slice, cfg, cfg.datasetTextField()).next();
+            }
+        };
     }
 
     // -------------------------------------------------------------------------
@@ -317,10 +413,17 @@ public final class SFTTrainer extends BaseTrainer {
         if (optim == null) optim = "adamw_torch";
 
         switch (optim.toLowerCase()) {
+            case "paged_adamw_8bit":
             case "paged_adamw_32bit":
             case "paged_adamw":
+            case "adamw_torch_fused":
             case "adamw_torch":
             case "adamw":
+                if (optim.toLowerCase().contains("paged")) {
+                    // bitsandbytes 8/32-bit paged AdamW is not bound; fall back to AdamW
+                    // while honouring the pagedOptimizer flag for logging / config dump.
+                    System.out.println("[SFTTrainer] " + optim + " → AdamW (paged kernel not bound)");
+                }
                 return buildAdamW(params, lr, wd, config);
             case "adamw_bit":
             case "bitsandbytes":
@@ -368,6 +471,8 @@ public final class SFTTrainer extends BaseTrainer {
 
     private volatile BatchSupplier trainBatchSupplier;
     private final Random shuffleRng = new Random();
+    private HfDataset evalDataset;
+    private TrlDataCollator evalCollator;
 
     public SFTTrainer setTrainBatchSupplier(BatchSupplier supplier) {
         this.trainBatchSupplier = supplier;
@@ -606,16 +711,8 @@ public final class SFTTrainer extends BaseTrainer {
             logits = applyNeftune(logits);
         }
 
-        // Apply ignore_index masking if loss_type supports it.
-        Tensor maskedLabels = labels;
-        long ignore = sftConfig.ignoreIndex();
-        if (ignore != 0L) {
-            // Replace ignored positions with a safe label (0) for CE; downstream
-            // masking uses ignore_index directly inside SFTLoss.
-            maskedLabels = labels.clamp_min(new Scalar(0.0));
-        }
-
-        Tensor loss = SFTLoss.compute(logits, maskedLabels);
+        // Ignore-index masking is applied inside SFTLoss (nn.CrossEntropyLoss).
+        Tensor loss = SFTLoss.compute(logits, labels, sftConfig.ignoreIndex());
 
         // Loss-type variants (nll | chunked_nll | dft).
         loss = applyLossType(loss, logits, labels);
@@ -771,8 +868,75 @@ public final class SFTTrainer extends BaseTrainer {
     /** Placeholder evaluation that just toggles to eval-mode. */
     public void evaluate() {
         evaluationMode();
-        // Real evaluation runs the eval BatchSupplier here. We leave the loop
-        // generic so subclasses can override.
+        if (evalDataset == null || evalDataset.size() == 0) return;
+        TrlDataCollator c = evalCollator;
+        if (c == null && tokenizer != null) {
+            c = new DataCollatorForChatAssistant(tokenizer, sftConfig.maxLength(), sftConfig.ignoreIndex(), false);
+        }
+        if (c == null) return;
+        int bs = Math.max(1, sftConfig.perDeviceEvalBatchSize());
+        double total = 0;
+        int n = 0;
+        for (int i = 0; i < evalDataset.size(); i += bs) {
+            int end = Math.min(evalDataset.size(), i + bs);
+            List<Map<String, Object>> slice = new ArrayList<>(end - i);
+            for (int j = i; j < end; j++) slice.add(evalDataset.get(j));
+            Map<String, Tensor> batch = c.collate(slice);
+            Tensor loss = computeLoss(batch);
+            total += loss.item_double();
+            n++;
+        }
+        if (n > 0) {
+            System.out.printf("[SFTTrainer] eval loss=%.4f over %d batches%n", total / n, n);
+        }
+    }
+
+    /**
+     * HuggingFace {@code trainer.save_model(output_dir)}.
+     * PEFT adapters go through {@link PeftModel#savePretrained}; the tokenizer
+     * is written alongside when present.
+     */
+    public void saveModel(java.nio.file.Path outputDir) {
+        save_model(outputDir);
+    }
+
+    public void save_model(java.nio.file.Path outputDir) {
+        Objects.requireNonNull(outputDir, "outputDir");
+        try {
+            java.nio.file.Files.createDirectories(outputDir);
+            if (peftModel != null) {
+                peftModel.savePretrained(outputDir.toFile());
+            }
+            if (tokenizer != null) {
+                tokenizer.savePretrained(outputDir);
+            }
+            saveTrainerState(outputDir.toFile());
+            System.out.println("[SFTTrainer] save_model → " + outputDir);
+        } catch (Exception e) {
+            throw new IllegalStateException("save_model failed: " + outputDir, e);
+        }
+    }
+
+    public void save_model(String outputDir) {
+        save_model(java.nio.file.Path.of(outputDir));
+    }
+
+    /** HuggingFace {@code trainer.push_to_hub()}. Requires {@code HF_TOKEN}. */
+    public void pushToHub(String repoId) {
+        push_to_hub(repoId);
+    }
+
+    public void push_to_hub(String repoId) {
+        String dir = sftConfig.outputDir();
+        if (dir == null || dir.isBlank()) dir = "output";
+        save_model(dir);
+        try {
+            HfApi api = HfApi.fromEnv();
+            api.createRepo(repoId);
+            api.uploadFolder(dir, repoId, "Upload SFT adapter");
+        } catch (Exception e) {
+            System.err.println("[SFTTrainer] push_to_hub skipped/failed: " + e.getMessage());
+        }
     }
 
     // -------------------------------------------------------------------------

@@ -530,13 +530,19 @@ public class TrainerConfig {
         @SuppressWarnings("unchecked")
         public B learningRate(double v) { this.learningRate = v; return (B) this; }
         @SuppressWarnings("unchecked")
+        public B learning_rate(double v) { return learningRate(v); }
+        @SuppressWarnings("unchecked")
         public B weightDecay(double v) { this.weightDecay = v; return (B) this; }
         @SuppressWarnings("unchecked")
         public B maxSteps(int v) { this.maxSteps = v; return (B) this; }
         @SuppressWarnings("unchecked")
         public B numTrainEpochs(int v) { this.numTrainEpochs = v; return (B) this; }
         @SuppressWarnings("unchecked")
+        public B num_train_epochs(int v) { return numTrainEpochs(v); }
+        @SuppressWarnings("unchecked")
         public B loggingSteps(int v) { this.loggingSteps = v; return (B) this; }
+        @SuppressWarnings("unchecked")
+        public B logging_steps(int v) { return loggingSteps(v); }
         @SuppressWarnings("unchecked")
         public B saveSteps(int v) { this.saveSteps = v; return (B) this; }
         @SuppressWarnings("unchecked")
@@ -546,13 +552,21 @@ public class TrainerConfig {
         @SuppressWarnings("unchecked")
         public B warmupRatio(double v) { this.warmupRatio = v; return (B) this; }
         @SuppressWarnings("unchecked")
+        public B warmup_ratio(double v) { return warmupRatio(v); }
+        @SuppressWarnings("unchecked")
         public B gradientAccumulationSteps(int v) { this.gradientAccumulationSteps = v; return (B) this; }
+        @SuppressWarnings("unchecked")
+        public B gradient_accumulation_steps(int v) { return gradientAccumulationSteps(v); }
         @SuppressWarnings("unchecked")
         public B maxGradNorm(double v) { this.maxGradNorm = v; return (B) this; }
         @SuppressWarnings("unchecked")
         public B perDeviceTrainBatchSize(int v) { this.perDeviceTrainBatchSize = v; return (B) this; }
         @SuppressWarnings("unchecked")
+        public B per_device_train_batch_size(int v) { return perDeviceTrainBatchSize(v); }
+        @SuppressWarnings("unchecked")
         public B perDeviceEvalBatchSize(int v) { this.perDeviceEvalBatchSize = v; return (B) this; }
+        @SuppressWarnings("unchecked")
+        public B per_device_eval_batch_size(int v) { return perDeviceEvalBatchSize(v); }
         @SuppressWarnings("unchecked")
         public B lrSchedulerType(String v) { this.lrSchedulerType = v; return (B) this; }
         @SuppressWarnings("unchecked")
@@ -578,9 +592,18 @@ public class TrainerConfig {
         @SuppressWarnings("unchecked")
         public B gradientCheckpointing(boolean v) { this.gradientCheckpointing = v; return (B) this; }
         @SuppressWarnings("unchecked")
+        public B gradient_checkpointing(boolean v) { return gradientCheckpointing(v); }
+        @SuppressWarnings("unchecked")
         public B gradientCheckpointingRatio(double v) { this.gradientCheckpointingRatio = v; return (B) this; }
         @SuppressWarnings("unchecked")
         public B deviceMap(String v) { this.deviceMap = v; return (B) this; }
+        @SuppressWarnings("unchecked")
+        public B device_map(String v) { return deviceMap(v); }
+        /** Python {@code use_cpu=True} → device_map=cpu. */
+        @SuppressWarnings("unchecked")
+        public B useCpu(boolean v) { if (v) this.deviceMap = "cpu"; return (B) this; }
+        @SuppressWarnings("unchecked")
+        public B use_cpu(boolean v) { return useCpu(v); }
 
         // Optimization
         @SuppressWarnings("unchecked")
@@ -622,6 +645,8 @@ public class TrainerConfig {
         @SuppressWarnings("unchecked")
         public B outputDir(String v) { this.outputDir = v; return (B) this; }
         @SuppressWarnings("unchecked")
+        public B output_dir(String v) { return outputDir(v); }
+        @SuppressWarnings("unchecked")
         public B saveTotalLimit(String v) { this.saveTotalLimit = v; return (B) this; }
         @SuppressWarnings("unchecked")
         public B saveOnlyModel(int v) { this.saveOnlyModel = v; return (B) this; }
@@ -629,6 +654,8 @@ public class TrainerConfig {
         public B saveOnlyBest(boolean v) { this.saveOnlyBest = v; return (B) this; }
         @SuppressWarnings("unchecked")
         public B loadBestModelAtEnd(boolean v) { this.loadBestModelAtEnd = v; return (B) this; }
+        @SuppressWarnings("unchecked")
+        public B load_best_model_at_end(boolean v) { return loadBestModelAtEnd(v); }
         @SuppressWarnings("unchecked")
         public B saveState(boolean v) { this.saveState = v; return (B) this; }
         @SuppressWarnings("unchecked")

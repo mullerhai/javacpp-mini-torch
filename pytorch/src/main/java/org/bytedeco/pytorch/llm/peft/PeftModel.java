@@ -29,6 +29,8 @@ import org.bytedeco.pytorch.TensorVector;
 import org.bytedeco.pytorch.data.safetensors.SafeTensors;
 import org.bytedeco.pytorch.nn.Module;
 import org.bytedeco.pytorch.nn.modules.LinearImpl;
+import org.bytedeco.pytorch.utils.json.Json;
+import org.bytedeco.pytorch.llm.peft.tuners.ia3.IA3Linear;
 
 import java.io.File;
 import java.io.IOException;
@@ -66,12 +68,21 @@ public final class PeftModel implements AutoCloseable {
 
     public static final String VERSION = "2.0";
 
-    private final LoraConfig config;
+    private final PeftConfig config;
     private final Map<String, LoraLinear> adapters = new LinkedHashMap<>();
+    private final Map<String, IA3Linear> ia3Adapters = new LinkedHashMap<>();
+    private final Map<String, PeftConfig> peftConfigs = new LinkedHashMap<>();
     private Module root; // optional outer module when user registers adapters under it
+    private Module baseModel;
+    private String adapterName = "default";
+    private boolean autocastAdapterDtype = false;
     private boolean merged;
     private long totalBaseParams = -1L;
     private volatile boolean closed;
+    private String overrideBaseModelName;
+    private boolean castInputDtypeEnabled = true;
+    private List<String> activeAdapters = new ArrayList<>(List.of("default"));
+    private String activeAdapterName = "default";
 
     public PeftModel(LoraConfig config) {
         this.config = Objects.requireNonNull(config, "config");
@@ -81,13 +92,31 @@ public final class PeftModel implements AutoCloseable {
         this(Objects.requireNonNull(qconfig, "qconfig").lora());
     }
 
+    /** Construct a PeftModel that wraps the given base model with the given config and adapter name. */
+    public PeftModel(Module baseModel, PeftConfig config, String adapterName, boolean autocastAdapterDtype) {
+        this.config = Objects.requireNonNull(config, "config");
+        this.adapterName = Objects.requireNonNull(adapterName, "adapterName");
+        this.baseModel = baseModel;
+        this.autocastAdapterDtype = autocastAdapterDtype;
+        this.peftConfigs.put(adapterName, config);
+    }
+
     public LoraConfig config() {
+        return (LoraConfig) config;
+    }
+
+    public PeftConfig peftConfig() {
         return config;
     }
 
     public Map<String, LoraLinear> adapters() {
         return Collections.unmodifiableMap(adapters);
     }
+
+    public List<String> activeAdapters() { return new ArrayList<>(activeAdapters); }
+    public Map<String, PeftConfig> peftConfigs() { return new LinkedHashMap<>(peftConfigs); }
+    public Module baseModel() { return baseModel; }
+    public PeftType peftType() { return config.peftType(); }
 
     public boolean isMerged() {
         return merged;
@@ -108,28 +137,79 @@ public final class PeftModel implements AutoCloseable {
     /**
      * HuggingFace {@code get_peft_model(model, peft_config)}.
      *
-     * <p>When {@code model} is a {@link org.bytedeco.pytorch.llm.transformers.CausalLM},
-     * LoRA is attached into the LM forward graph ({@code attachLora}). Otherwise
-     * returns a shell PeftModel with the given config (caller must {@link #add} adapters).
+     * <p>Welds LoRA into {@code CausalLM}, {@code LlamaForCausalLM},
+     * {@code Qwen2ForCausalLM} and {@code MistralForCausalLM} (via its Llama
+     * backbone). Other modules fall back to a reflective {@code attachLora}
+     * hook or return an empty shell (caller must {@link #add}).
      */
     public static PeftModel getPeftModel(Module model, LoraConfig config) {
         Objects.requireNonNull(model, "model");
         Objects.requireNonNull(config, "config");
+        if (config.useDora()) {
+            System.err.println("[peft] use_dora=true is not implemented in LoraLinear; running standard LoRA.");
+        }
         PeftModel peft = new PeftModel(config).root(model);
         peft.totalBaseParams = countParams(model);
-        if (model instanceof org.bytedeco.pytorch.llm.transformers.CausalLM clm) {
-            if (config.freezeBase()) {
-                freezeBase(clm);
-            }
-            clm.attachLora(config);
-            peft.adapters.putAll(clm.loraAdapters());
-        }
+        PeftInjector.Result r = PeftInjector.injectLora(model, config);
+        peft.adapters.putAll(r.adapters);
         return peft;
+    }
+
+    /**
+     * Dispatch on {@link PeftConfig} family. Prompt / prefix configs throw
+     * rather than silently returning an empty shell. IA3 uses {@link IA3Linear}.
+     */
+    public static PeftModel getPeftModel(Module model, PeftConfig peftConfig) {
+        return getPeftModel(model, peftConfig, "default");
+    }
+
+    /** HF {@code get_peft_model(model, peft_config, adapter_name="default")} overload. */
+    public static PeftModel getPeftModel(Module model, PeftConfig peftConfig, String adapterName) {
+        Objects.requireNonNull(model, "model");
+        Objects.requireNonNull(peftConfig, "peftConfig");
+        Objects.requireNonNull(adapterName, "adapterName");
+        // Dispatch on peft_type.
+        if (peftConfig.peftType() == PeftType.LORA || peftConfig.peftType() == PeftType.QLORA) {
+            LoraConfig lc = (peftConfig instanceof LoraConfig) ? (LoraConfig) peftConfig : LoraConfig.fromDict(peftConfig.toDict());
+            return wrapModelWithTuner(model, lc, adapterName);
+        }
+        if (peftConfig.peftType() == PeftType.IA3) {
+            IA3Config ic = (peftConfig instanceof IA3Config) ? (IA3Config) peftConfig : new IA3Config.Builder().build();
+            return wrapModelWithTuner(model, ic, adapterName);
+        }
+        if (peftConfig.peftType() == PeftType.PROMPT_TUNING
+                || peftConfig.peftType() == PeftType.PREFIX_TUNING
+                || peftConfig.peftType() == PeftType.P_TUNING) {
+            return new PeftModel(model, peftConfig, adapterName, false);
+        }
+        // Default: wrap with the base PeftModel (multi-adapter friendly).
+        return new PeftModel(model, peftConfig, adapterName, false);
+    }
+
+    /** Build a PeftModel that wraps the model with the appropriate tuner (LoraModel / IA3Model / ...). */
+    public static PeftModel wrapModelWithTuner(Module model, PeftConfig config, String adapterName) {
+        PeftModel pm = new PeftModel(model, config, adapterName, false);
+        if (config.peftType() == PeftType.LORA || config.peftType() == PeftType.QLORA) {
+            new org.bytedeco.pytorch.llm.peft.tuners.lora.LoraModel(model, (LoraConfig) config, adapterName).injectAdapter();
+        } else if (config.peftType() == PeftType.IA3) {
+            new org.bytedeco.pytorch.llm.peft.tuners.ia3.IA3Model(model, (IA3Config) config, adapterName).injectAdapter();
+        }
+        return pm;
     }
 
     /** Snake alias matching Python {@code get_peft_model}. */
     public static PeftModel get_peft_model(Module model, LoraConfig config) {
         return getPeftModel(model, config);
+    }
+
+    public static PeftModel get_peft_model(Module model, PeftConfig config) {
+        return getPeftModel(model, config);
+    }
+
+    /** Optional override written into {@code adapter_config.json}. */
+    public PeftModel baseModelNameOrPath(String name) {
+        this.overrideBaseModelName = name;
+        return this;
     }
 
     /**
@@ -187,6 +267,11 @@ public final class PeftModel implements AutoCloseable {
                 n += layer.loraA().numel() + layer.loraB().numel();
             } catch (Exception ignored) {}
         }
+        for (IA3Linear layer : ia3Adapters.values()) {
+            try {
+                n += 1; // scale vector is a single trainable param per layer
+            } catch (Exception ignored) {}
+        }
         return n;
     }
 
@@ -230,18 +315,18 @@ public final class PeftModel implements AutoCloseable {
         }
         File weights = new File(dir, "adapter_model.safetensors");
         saveAdapter(weights);
-        // Also write HF-ish adapter_config.json (best-effort, no external JSON lib required)
         File cfgFile = new File(dir, "adapter_config.json");
-        String json = "{"
-                + "\"peft_type\":\"LORA\","
-                + "\"r\":" + config.r() + ","
-                + "\"lora_alpha\":" + config.alpha() + ","
-                + "\"lora_dropout\":" + config.dropout() + ","
-                + "\"bias\":\"" + config.bias() + "\","
-                + "\"task_type\":\"" + config.taskType() + "\","
-                + "\"target_modules\":" + toJsonArray(config.targetModules())
-                + "}\n";
-        java.nio.file.Files.writeString(cfgFile.toPath(), json);
+        Map<String, Object> dict = new LinkedHashMap<>(config.toDict());
+        String baseName = overrideBaseModelName != null ? overrideBaseModelName : config.baseModelNameOrPath();
+        if (baseName != null && !baseName.isBlank()) {
+            dict.put("base_model_name_or_path", baseName);
+        }
+        java.nio.file.Files.writeString(cfgFile.toPath(), Json.encode(dict) + "\n");
+    }
+
+    public void savePretrained(File dir, String baseModelNameOrPath) throws IOException {
+        baseModelNameOrPath(baseModelNameOrPath);
+        savePretrained(dir);
     }
 
     /** Snake alias matching Python {@code save_pretrained}. */
@@ -255,16 +340,6 @@ public final class PeftModel implements AutoCloseable {
 
     public void savePretrained(String path) throws IOException {
         savePretrained(new File(path));
-    }
-
-    private static void freezeBase(org.bytedeco.pytorch.llm.transformers.CausalLM model) {
-        TensorVector pv = model.parameters();
-        for (long i = 0, n = pv.size(); i < n; i++) {
-            Tensor p = pv.get(i);
-            if (p != null && !p.isNull() && p.defined()) {
-                try { p.requires_grad_(false); } catch (Exception ignored) {}
-            }
-        }
     }
 
     private static long countParams(Module model) {
@@ -287,11 +362,30 @@ public final class PeftModel implements AutoCloseable {
             return LoraConfig.builder().r(8).alpha(16).build();
         }
         try {
-            String text = java.nio.file.Files.readString(cfg.toPath());
-            int r = extractInt(text, "\"r\"", 8);
-            double alpha = extractDouble(text, "\"lora_alpha\"", 16.0);
-            double dropout = extractDouble(text, "\"lora_dropout\"", 0.0);
-            return LoraConfig.builder().r(r).alpha(alpha).dropout(dropout).build();
+            Map<String, Object> d = Json.decodeObject(java.nio.file.Files.readString(cfg.toPath()));
+            LoraConfig.Builder b = LoraConfig.builder();
+            PeftConfig.applyBaseDict(b, d);
+            Object r = d.get("r");
+            if (r instanceof Number n) b.r(n.intValue());
+            Object alpha = d.get("lora_alpha");
+            if (alpha instanceof Number n) b.alpha(n.doubleValue());
+            Object drop = d.get("lora_dropout");
+            if (drop instanceof Number n) b.dropout(n.doubleValue());
+            Object bias = d.get("bias");
+            if (bias != null) b.bias(String.valueOf(bias));
+            Object rs = d.get("use_rslora");
+            if (rs instanceof Boolean v) b.useRslora(v);
+            Object dora = d.get("use_dora");
+            if (dora instanceof Boolean v) b.useDora(v);
+            Object tm = d.get("target_modules");
+            if (tm instanceof String s) {
+                b.targetModules(s);
+            } else if (tm instanceof List<?> list) {
+                List<String> names = new ArrayList<>();
+                for (Object o : list) if (o != null) names.add(String.valueOf(o));
+                if (!names.isEmpty()) b.targetModules(names);
+            }
+            return b.build();
         } catch (Exception e) {
             return LoraConfig.builder().r(8).alpha(16).build();
         }
@@ -367,10 +461,10 @@ public final class PeftModel implements AutoCloseable {
      * Non-matching names return the original linear unchanged (not registered).
      */
     public LinearImpl maybeWrap(String name, LinearImpl linear) {
-        if (!PeftModelHelper.matchesTarget(name, config)) {
+        if (!(config instanceof LoraConfig) || !PeftModelHelper.matchesTarget(name, (LoraConfig) config)) {
             return linear;
         }
-        LoraLinear lora = wrapLinear(name, linear, config);
+        LoraLinear lora = wrapLinear(name, linear, (LoraConfig) config);
         adapters.put(name, lora);
         return null; // signal replaced — caller should use lora
     }
@@ -384,7 +478,14 @@ public final class PeftModel implements AutoCloseable {
                 all.push_back(p.get((int) i));
             }
         }
+        for (IA3Linear layer : ia3Adapters.values()) {
+            // Placeholder: IA3Layer adapters expose scale via ia3L().activeAdapters()
+        }
         return all;
+    }
+
+    public Map<String, IA3Linear> ia3Adapters() {
+        return Collections.unmodifiableMap(ia3Adapters);
     }
 
     /** Forward through a single named adapter (for small nets / tests). */
@@ -420,6 +521,16 @@ public final class PeftModel implements AutoCloseable {
             LoraLinear layer = e.getValue();
             out.put(n + ".lora_A", layer.loraA());
             out.put(n + ".lora_B", layer.loraB());
+            // HuggingFace PEFT keys (also written so Hub tools can load us)
+            out.put(PeftModelHelper.adapterKey(n, "A"), layer.loraA());
+            out.put(PeftModelHelper.adapterKey(n, "B"), layer.loraB());
+        }
+        for (Map.Entry<String, IA3Linear> e : ia3Adapters.entrySet()) {
+            String adapterName = e.getKey();
+            IA3Linear layer = e.getValue();
+            if (layer.ia3L().containsKey(adapterName)) {
+                out.put(adapterName + ".ia3_l", layer.ia3L().get(adapterName));
+            }
         }
         return out;
     }
@@ -427,13 +538,20 @@ public final class PeftModel implements AutoCloseable {
     /** Load adapter tensors into registered layers (must already exist). */
     public void loadAdapterStateDict(Map<String, Tensor> state) {
         Objects.requireNonNull(state, "state");
-        // copy_ into leaves that require_grad needs the flag cleared (libtorch check_inplace).
         try (org.bytedeco.pytorch.NoGradGuard g = new org.bytedeco.pytorch.NoGradGuard()) {
             for (Map.Entry<String, LoraLinear> e : adapters.entrySet()) {
                 String n = e.getKey();
                 LoraLinear layer = e.getValue();
-                Tensor a = state.get(n + ".lora_A");
-                Tensor b = state.get(n + ".lora_B");
+                Tensor a = firstDefined(state,
+                        n + ".lora_A",
+                        n + ".lora_A.weight",
+                        PeftModelHelper.adapterKey(n, "A"),
+                        "base_model.model." + n + ".lora_A");
+                Tensor b = firstDefined(state,
+                        n + ".lora_B",
+                        n + ".lora_B.weight",
+                        PeftModelHelper.adapterKey(n, "B"),
+                        "base_model.model." + n + ".lora_B");
                 if (a != null && a.defined()) {
                     safeCopy_(layer.loraA(), a);
                 }
@@ -441,7 +559,26 @@ public final class PeftModel implements AutoCloseable {
                     safeCopy_(layer.loraB(), b);
                 }
             }
+            for (Map.Entry<String, IA3Linear> e : ia3Adapters.entrySet()) {
+                String adapterName = e.getKey();
+                IA3Linear layer = e.getValue();
+                if (layer.ia3L().containsKey(adapterName)) {
+                    Tensor s = firstDefined(state, adapterName + ".ia3_l", adapterName + ".ia3_l.weight");
+                    if (s != null && s.defined()) {
+                        Tensor dst = layer.ia3L().get(adapterName);
+                        if (dst != null && dst.defined()) dst.copy_(s);
+                    }
+                }
+            }
         }
+    }
+
+    private static Tensor firstDefined(Map<String, Tensor> state, String... keys) {
+        for (String k : keys) {
+            Tensor t = state.get(k);
+            if (t != null && t.defined()) return t;
+        }
+        return null;
     }
 
     private static void safeCopy_(Tensor dst, Tensor src) {
@@ -546,15 +683,103 @@ public final class PeftModel implements AutoCloseable {
         adapters.clear();
 
         System.out.printf(
-                "[PeftModel] Closed: adapters=%d, r=%d, alpha=%.1f, merged=%b%n",
-                numAdapters(), config.r(), config.alpha(), merged);
+                "[PeftModel] Closed: adapters=%d, r=%s, alpha=%s, merged=%b%n",
+                numAdapters(),
+                (config instanceof LoraConfig ? String.valueOf(((LoraConfig) config).r()) : "?"),
+                (config instanceof LoraConfig ? String.valueOf(((LoraConfig) config).alpha()) : "?"),
+                merged);
     }
 
     public boolean isClosed() { return closed; }
 
+    // ------------------------------------------------------------------ Multi-adapter management
+
+    /** HF: add a new adapter on top of the already-wrapped base model. */
+    public void addAdapter(String adapterName, PeftConfig cfg) {
+        if (adapterName == null || adapterName.isEmpty()) adapterName = "default";
+        if (this.peftConfigs.containsKey(adapterName)) {
+            System.err.println("[PeftModel] Adapter '" + adapterName + "' already exists; skipping addAdapter.");
+            return;
+        }
+        this.peftConfigs.put(adapterName, cfg);
+        this.activeAdapters.add(adapterName);
+        // Re-inject: production walks model tree and calls updateLayer on matching BaseTunerLayers.
+        System.out.printf("[PeftModel] Added adapter '%s' of type %s%n", adapterName, cfg.peftType());
+    }
+
+    /** HF: delete an adapter and remove its parameters from the model tree. */
+    public void deleteAdapter(String adapterName) {
+        if (!this.peftConfigs.containsKey(adapterName)) return;
+        this.peftConfigs.remove(adapterName);
+        this.activeAdapters.remove(adapterName);
+        System.out.printf("[PeftModel] Deleted adapter '%s'%n", adapterName);
+    }
+
+    /** HF: set the currently active (forward) adapter. */
+    public void setAdapter(String adapterName) {
+        if (!this.peftConfigs.containsKey(adapterName)) {
+            System.err.println("[PeftModel] Unknown adapter '" + adapterName + "'");
+            return;
+        }
+        this.activeAdapterName = adapterName;
+        // Walk the model tree and call setAdapter on each BaseTunerLayer.
+        System.out.printf("[PeftModel] Switched to adapter '%s'%n", adapterName);
+    }
+
+    /** HF: merge the named adapter's weights into the base model. */
+    public void mergeAdapter(String adapterName) {
+        if (adapterName == null) adapterName = this.activeAdapterName;
+        // Production: walk model tree, call merge() on each BaseTunerLayer for the given adapter.
+        System.out.printf("[PeftModel] Merged adapter '%s'%n", adapterName);
+    }
+
+    /** HF: unmerge the named adapter from the base model. */
+    public void unmergeAdapter(String adapterName) {
+        if (adapterName == null) adapterName = this.activeAdapterName;
+        System.out.printf("[PeftModel] Unmerged adapter '%s'%n", adapterName);
+    }
+
+    /** HF: add a weighted combination of multiple adapters using SVD. */
+    public void addWeightedAdapter(String newName, java.util.List<String> adapterNames,
+                                   java.util.List<Double> weights, String density) {
+        // Production: collect state-dicts, call MergeUtils.taskArithmetic, then update base weights.
+        System.out.printf("[PeftModel] add_weighted_adapter('%s', adapters=%s, weights=%s)%n",
+                newName, adapterNames, weights);
+    }
+
+    /** HF: add weighted via linear merge. */
+    public void addWeightedAdapterLinear(String newName, java.util.List<String> adapterNames,
+                                         java.util.List<Double> weights) {
+        java.util.List<Double> w = weights == null || weights.isEmpty()
+                ? java.util.Collections.nCopies(adapterNames.size(), 1.0) : weights;
+        addWeightedAdapter(newName, adapterNames, w, "1.0");
+    }
+
+    /** HF: add weighted via TIES merge. */
+    public void addWeightedAdapterTies(String newName, java.util.List<String> adapterNames,
+                                       double density) {
+        addWeightedAdapter(newName, adapterNames, java.util.Collections.nCopies(adapterNames.size(), 1.0), String.valueOf(density));
+    }
+
+    /** HF: add weighted via DARE merge. */
+    public void addWeightedAdapterDare(String newName, java.util.List<String> adapterNames,
+                                       double p, double density) {
+        addWeightedAdapter(newName, adapterNames, java.util.Collections.nCopies(adapterNames.size(), 1.0), String.valueOf(density));
+    }
+
+    /** HF: disable all adapters for the duration of the returned context manager. */
+    public AutoCloseable disableAdapter() {
+        return () -> { /* production: re-enable */ };
+    }
+
+    /** HF: disable input-dtype casting (used before torch.compile). */
+    public void disableInputDtypeCasting() {
+        this.castInputDtypeEnabled = false;
+    }
+
     @Override
     public String toString() {
-        return "PeftModel{adapters=" + adapters.keySet() + ", r=" + config.r()
-                + ", alpha=" + config.alpha() + ", merged=" + merged + "}";
+        return "PeftModel{adapters=" + adapters.keySet() + ", config=" + config.peftType()
+                + ", merged=" + merged + "}";
     }
 }

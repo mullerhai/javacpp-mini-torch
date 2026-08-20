@@ -375,6 +375,11 @@ public final class GRPOConfig extends TrainerConfig {
         }
         public Builder mini_batch_size(double v) { return miniBatchSize(v); }
 
+        public Builder output_dir(String v) { return outputDir(v); }
+        public Builder learning_rate(double v) { return learningRate(v); }
+        public Builder max_steps(int v) { return maxSteps(v); }
+        public Builder per_device_train_batch_size(int v) { return perDeviceTrainBatchSize(v); }
+
         public Builder lossTypeDapo(boolean v) { this.lossType = v; this.lossTypeStr = v ? "dapo" : "grpo"; return this; }
         public Builder lossType(String v) {
             if (v == null) { this.lossType = false; this.lossTypeStr = "grpo"; return this; }

@@ -37,13 +37,11 @@ import org.bytedeco.pytorch.llm.transformers.generation.GenerationConfig;
 import org.bytedeco.pytorch.llm.transformers.generation.Generator;
 
 import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
-import java.util.Set;
 
 import static org.bytedeco.pytorch.global.torch.cross_entropy;
+import static org.bytedeco.pytorch.global.torch.silu;
 
 /**
  * Llama / Mistral-style causal LM with HF-identical parameter names
@@ -273,41 +271,40 @@ public class LlamaForCausalLM extends Module {
         @Override
         public Tensor forward(Tensor x) {
             Tensor h = input_layernorm.forward(x);
-            // LoRA-aware Q/K/V projections
-            Tensor q = applyProj(self_attn.q_proj, "q_proj", h);
-            Tensor k = applyProj(self_attn.k_proj, "k_proj", h);
-            Tensor v = applyProj(self_attn.v_proj, "v_proj", h);
-            // Compute attention with the (Q,K,V) tensors
-            Tensor attnOut = self_attn.forwardFromQKV(q, k, v);
-            // LoRA-aware O projection
-            Tensor o = applyProj(self_attn.o_proj, "o_proj", attnOut);
+            long B = h.size(0);
+            long T = h.size(1);
+            int nHeads = self_attn.nHeads();
+            int nKv = self_attn.nKvHeads();
+            int hd = self_attn.headDim();
+            // LoRA-aware Q/K/V: LoraLinear.forward already does base(x)+Δ; view to 4-D
+            // so attendFromQKV matches ModelingAttention's [B,T,H,D] contract.
+            Tensor q = applyProj(self_attn.q_proj, "q_proj", h).view(B, T, nHeads, hd);
+            Tensor k = applyProj(self_attn.k_proj, "k_proj", h).view(B, T, nKv, hd);
+            Tensor v = applyProj(self_attn.v_proj, "v_proj", h).view(B, T, nKv, hd);
+            Tensor attnInner = self_attn.attendFromQKV(q, k, v); // [B,T,nHeads*headDim], no o_proj
+            Tensor o = applyProj(self_attn.o_proj, "o_proj", attnInner);
             x = x.add(o);
-            // LoRA-aware MLP: gate_proj and up_proj are LoRA-aware; down_proj is not
             Tensor mh = post_attention_layernorm.forward(x);
             Tensor gate = applyProj(mlp.gate_proj, "gate_proj", mh);
             Tensor up   = applyProj(mlp.up_proj,   "up_proj",   mh);
-            x = x.add(mlp.forwardWithGateUp(gate, up));
-            return x;
+            Tensor hidden = silu(gate).mul(up);
+            Tensor down = applyProj(mlp.down_proj, "down_proj", hidden);
+            return x.add(down);
         }
 
         /**
-         * Apply a projection layer with optional LoRA overlay.
-         * When a LoRA adapter is attached to the given target name, its output
-         * (scaled: B @ A * scaling) is added to the base projection output.
-         * When the adapter is merged, only the base (now containing ΔW) is used.
+         * Apply a projection with optional LoRA overlay.
          *
-         * @param base      the underlying {@link LinearImpl} (q_proj, k_proj, …)
-         * @param targetKey the LoRA adapter key ({@code "q_proj"}, {@code "gate_proj"}, …)
-         * @param input     the input tensor
-         * @return base(input) [+ ΔW·input] with LoRA
+         * <p>{@link LoraLinear#forward} is {@code base(x)+scale·(x Aᵀ Bᵀ)} (or just
+         * {@code base(x)} when merged). Call it <em>instead of</em> {@code base.forward},
+         * never add the two — that would double-count W.
          */
         private Tensor applyProj(LinearImpl base, String targetKey, Tensor input) {
             LoraLinear lora = loraAdapters.get(targetKey);
-            Tensor baseOut = base.forward(input);
-            if (lora != null && !lora.isMerged()) {
-                return baseOut.add(lora.forward(input));
+            if (lora != null) {
+                return lora.forward(input);
             }
-            return baseOut;
+            return base.forward(input);
         }
 
         /**
@@ -398,21 +395,26 @@ public class LlamaForCausalLM extends Module {
     public java.util.List<LoraLinear> attachLora(LoraConfig config) {
         if (config == null) throw new IllegalArgumentException("config is null");
         java.util.List<LoraLinear> adapters = new java.util.ArrayList<>();
-        java.util.Set<String> targets = config.targetModules() != null
-                ? new java.util.HashSet<>(config.targetModules())
-                : java.util.Collections.emptySet();
-        String[] allTargets = {"q_proj", "k_proj", "v_proj", "o_proj",
-                "gate_proj", "up_proj", "down_proj"};
+        java.util.Map<String, LinearImpl> named = namedLinears();
+        int layerIndex = 0;
         for (int i = 0; i < model.layers.size(); i++) {
+            layerIndex = i;
             LlamaDecoderLayer layer = model.layers.get(i);
-            for (String target : allTargets) {
-                if (targets.isEmpty() || targets.contains(target)) {
-                    LoraLinear adapter = layer.attachLora(target, config);
-                    if (adapter != null) {
-                        String fullName = "model.layers." + i + "." + target;
-                        loraAdapters.put(fullName, adapter);
-                        adapters.add(adapter);
-                    }
+            for (java.util.Map.Entry<String, LinearImpl> e : named.entrySet()) {
+                String fullName = e.getKey();
+                if (org.bytedeco.pytorch.llm.peft.PeftModelHelper.parseLayerIndex(fullName) != i) continue;
+                if (config.isExcluded(fullName) || config.isExcluded(org.bytedeco.pytorch.llm.peft.PeftModelHelper.leafName(fullName))) {
+                    continue;
+                }
+                if (!config.shouldTransformLayer(fullName, layerIndex)) continue;
+                boolean hit = config.isAllLinear()
+                        || org.bytedeco.pytorch.llm.peft.PeftModelHelper.matchesTarget(fullName, config);
+                if (!hit) continue;
+                String leaf = org.bytedeco.pytorch.llm.peft.PeftModelHelper.leafName(fullName);
+                LoraLinear adapter = layer.attachLora(leaf, config);
+                if (adapter != null) {
+                    loraAdapters.put(fullName, adapter);
+                    adapters.add(adapter);
                 }
             }
         }
@@ -422,29 +424,56 @@ public class LlamaForCausalLM extends Module {
     /**
      * Attach a single LoRA adapter to a named linear layer. Returns null if
      * {@code name} is not found.
+     *
+     * <p>The same {@link LoraLinear} instance is stored on the decoder layer
+     * (so {@code forward} sees it) and in {@link #loraAdapters()} (so PEFT
+     * save/load tracks the live tensors). Do not construct a second wrapper.
      */
     public LoraLinear attachLora(String name, LoraConfig config) {
         if (config == null) throw new IllegalArgumentException("config is null");
         Objects.requireNonNull(name, "name");
         LinearImpl lin = namedLinears().get(name);
         if (lin == null) return null;
+        ParsedLayerName parsed = parseLayerLinearName(name);
+        if (parsed != null && parsed.layerIdx >= 0 && parsed.layerIdx < model.layers.size()) {
+            LoraLinear adapter = model.layers.get(parsed.layerIdx).attachLora(parsed.leaf, config);
+            if (adapter != null) {
+                loraAdapters.put(name, adapter);
+            }
+            return adapter;
+        }
         LoraLinear adapter = LoraLinear.borrowBase(lin, config);
         loraAdapters.put(name, adapter);
-        // Parse "model.layers.{idx}.{target}" and wire the layer-level adapter
-        if (name.startsWith("model.layers.")) {
-            String after = name.substring("model.layers.".length());
-            int lastDot = after.lastIndexOf('.');
-            if (lastDot > 0) {
-                try {
-                    int layerIdx = Integer.parseInt(after.substring(0, lastDot));
-                    String target = after.substring(lastDot + 1);
-                    if (layerIdx >= 0 && layerIdx < model.layers.size()) {
-                        model.layers.get(layerIdx).attachLora(target, config);
-                    }
-                } catch (NumberFormatException ignored) {}
-            }
-        }
         return adapter;
+    }
+
+    /**
+     * {@code model.layers.{i}.self_attn.{q|k|v|o}_proj} or
+     * {@code model.layers.{i}.mlp.{gate|up|down}_proj}.
+     */
+    static ParsedLayerName parseLayerLinearName(String name) {
+        if (name == null || !name.startsWith("model.layers.")) return null;
+        String after = name.substring("model.layers.".length());
+        int dot = after.indexOf('.');
+        if (dot <= 0) return null;
+        int layerIdx;
+        try {
+            layerIdx = Integer.parseInt(after.substring(0, dot));
+        } catch (NumberFormatException e) {
+            return null;
+        }
+        String rest = after.substring(dot + 1);
+        String leaf = org.bytedeco.pytorch.llm.peft.PeftModelHelper.leafName(rest);
+        return new ParsedLayerName(layerIdx, leaf);
+    }
+
+    static final class ParsedLayerName {
+        final int layerIdx;
+        final String leaf;
+        ParsedLayerName(int layerIdx, String leaf) {
+            this.layerIdx = layerIdx;
+            this.leaf = leaf;
+        }
     }
 
     /**

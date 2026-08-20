@@ -23,6 +23,8 @@ import org.bytedeco.pytorch.Scalar;
 import org.bytedeco.pytorch.Tensor;
 import org.bytedeco.pytorch.global.torch;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -108,6 +110,28 @@ public class ImageProcessor implements AutoCloseable {
         NHWC   // (batch, height, width, channels)
     }
 
+    /**
+     * Lightweight image handle used by AutoModel vision entry points.
+     * Wraps a filesystem path, URL, or already-decoded pixel tensor.
+     */
+    public static final class ImageInput {
+        public final String path;
+        public final Tensor pixels;
+
+        public ImageInput(String path) {
+            this.path = path;
+            this.pixels = null;
+        }
+
+        public ImageInput(Tensor pixels) {
+            this.path = null;
+            this.pixels = pixels;
+        }
+
+        public static ImageInput of(String path) { return new ImageInput(path); }
+        public static ImageInput of(Tensor pixels) { return new ImageInput(pixels); }
+    }
+
     public static Builder builder() {
         return new Builder();
     }
@@ -170,6 +194,70 @@ public class ImageProcessor implements AutoCloseable {
                 .doRescale(true)
                 .maxImageSize(384)
                 .build();
+    }
+
+    /**
+     * Load an {@code image_processor.json} / {@code preprocessor_config.json} from a model
+     * directory (mirrors HF {@code AutoImageProcessor.from_pretrained}).
+     *
+     * <p>Searches for the config file directly under the directory or inside a
+     * {@code preprocessor_config.json} sibling.
+     */
+    public static ImageProcessor fromPretrained(Path dir) throws java.io.IOException {
+        Path resolved = resolvePreprocessorConfig(dir);
+        String json = Files.readString(resolved, java.nio.charset.StandardCharsets.UTF_8);
+        return fromPreprocessorJson(json);
+    }
+
+    private static Path resolvePreprocessorConfig(Path dir) throws java.io.IOException {
+        for (String name : new String[]{"preprocessor_config.json", "image_processor.json", "processor_config.json"}) {
+            Path p = dir.resolve(name);
+            if (Files.exists(p)) return p;
+        }
+        // fall back to config.json in parent (model dir contains image_processor.json next to config.json)
+        Path modelDir = dir.resolve("model");
+        if (Files.exists(modelDir)) {
+            for (String name : new String[]{"preprocessor_config.json", "image_processor.json"}) {
+                Path p = modelDir.resolve(name);
+                if (Files.exists(p)) return p;
+            }
+        }
+        throw new java.io.IOException("No preprocessor config found under " + dir);
+    }
+
+    private static ImageProcessor fromPreprocessorJson(String json) {
+        // Parse minimal fields we care about; ignore unknown keys.
+        org.bytedeco.pytorch.utils.json.Json j = new org.bytedeco.pytorch.utils.json.Json();
+        java.util.Map<?, ?> m;
+        try {
+            m = j.decodeObject(json);
+        } catch (java.io.IOException e) {
+            // Return a default processor if JSON parsing fails
+            return ImageProcessor.createImageNet();
+        }
+        Builder b = builder();
+        if (m.containsKey("size") || m.containsKey("image_size")) {
+            Object size = m.containsKey("image_size") ? m.get("image_size") : m.get("size");
+            if (size instanceof java.util.Map<?, ?> sz) {
+                b.targetSize(((Number) sz.get("height")).intValue());
+            } else if (size instanceof Number n) {
+                b.targetSize(n.intValue());
+            }
+        }
+        if (m.containsKey("do_resize")) b.doRescale(((Boolean) m.get("do_resize")));
+        if (m.containsKey("do_normalize")) b.doNormalize(((Boolean) m.get("do_normalize")));
+        if (m.containsKey("image_mean")) b.imageMean(asFloatArray(m.get("image_mean")));
+        if (m.containsKey("image_std")) b.imageStd(asFloatArray(m.get("image_std")));
+        return b.build();
+    }
+
+    private static float[] asFloatArray(Object o) {
+        if (o instanceof java.util.List<?> list) {
+            float[] arr = new float[list.size()];
+            for (int i = 0; i < list.size(); i++) arr[i] = ((Number) list.get(i)).floatValue();
+            return arr;
+        }
+        return null;
     }
 
     private ImageProcessor(Builder builder) {

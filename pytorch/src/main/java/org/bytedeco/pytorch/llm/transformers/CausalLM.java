@@ -88,6 +88,9 @@ public class CausalLM extends Module {
     /** Optional LoRA adapters keyed by quantizable linear path (e.g. h/0/attn/c_attn). */
     private final java.util.LinkedHashMap<String, org.bytedeco.pytorch.llm.peft.LoraLinear> loraAdapters =
             new java.util.LinkedHashMap<>();
+    /** Optional IA3 adapters keyed by the same paths. */
+    private final java.util.LinkedHashMap<String, org.bytedeco.pytorch.llm.peft.IA3Linear> ia3Adapters =
+            new java.util.LinkedHashMap<>();
 
     public CausalLM(PretrainedConfig config) {
         super("CausalLM");
@@ -273,10 +276,25 @@ public class CausalLM extends Module {
         return !loraAdapters.isEmpty();
     }
 
-    /** Apply linear or its LoRA wrapper when present. */
+    /** Register an IA3 adapter so {@link #applyLinear} dispatches to it. */
+    public void registerIa3(String name, org.bytedeco.pytorch.llm.peft.IA3Linear layer) {
+        if (name == null || layer == null) return;
+        ia3Adapters.put(name, layer);
+        try {
+            register_module("ia3/" + name.replace('/', '_'), layer);
+        } catch (Exception ignored) {}
+    }
+
+    public java.util.Map<String, org.bytedeco.pytorch.llm.peft.IA3Linear> ia3Adapters() {
+        return java.util.Collections.unmodifiableMap(ia3Adapters);
+    }
+
+    /** Apply linear or its LoRA / IA3 wrapper when present. */
     Tensor applyLinear(String name, LinearImpl lin, Tensor x) {
         org.bytedeco.pytorch.llm.peft.LoraLinear adapter = loraAdapters.get(name);
         if (adapter != null) return adapter.forward(x);
+        org.bytedeco.pytorch.llm.peft.IA3Linear ia3 = ia3Adapters.get(name);
+        if (ia3 != null) return ia3.forward(x);
         return lin.forward(x);
     }
 

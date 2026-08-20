@@ -25,27 +25,50 @@ import org.bytedeco.javacpp.Loader;
 import org.bytedeco.javacpp.annotation.Properties;
 import org.bytedeco.pytorch.LongOptional;
 import org.bytedeco.pytorch.Tensor;
+import org.bytedeco.pytorch.TensorOptional;
 
+import static org.bytedeco.pytorch.global.torch.Reduction;
 import static org.bytedeco.pytorch.global.torch.ScalarType;
-import static org.bytedeco.pytorch.global.torch.cross_entropy;
+import static org.bytedeco.pytorch.global.torch.cross_entropy_loss;
 
 /**
  * Supervised fine-tuning (causal LM) token cross-entropy loss.
  *
  * <p>Standard shift: predict token {@code t+1} from position {@code t}.
+ * Mirrors PyTorch {@code nn.CrossEntropyLoss(ignore_index=-100)} used by
+ * HuggingFace TRL {@code SFTTrainer}.
  */
 @Properties(inherit = org.bytedeco.pytorch.presets.torch.class)
 public final class SFTLoss {
     static { Loader.load(org.bytedeco.pytorch.presets.torch.class); }
+
+    /** HuggingFace / PyTorch default ignore index for padded / prompt tokens. */
+    public static final long DEFAULT_IGNORE_INDEX = -100L;
 
     private SFTLoss() {}
 
     /**
      * @param logits {@code [B, T, V]}
      * @param labels {@code [B, T]} (promoted to Long if needed — CE requires Long/Byte targets)
-     * @return scalar mean CE over shifted tokens
+     * @return scalar mean CE over shifted tokens, ignoring {@code -100}
      */
     public static Tensor compute(Tensor logits, Tensor labels) {
+        return compute(logits, labels, DEFAULT_IGNORE_INDEX);
+    }
+
+    /**
+     * Causal-LM CE with an explicit ignore index (Python
+     * {@code F.cross_entropy(..., ignore_index=ignoreIndex)}).
+     *
+     * <p>Positions where {@code labels == ignoreIndex} are excluded from the
+     * mean (the denominator is the count of non-ignored tokens), matching
+     * {@code nn.CrossEntropyLoss}.
+     *
+     * @param logits {@code [B, T, V]}
+     * @param labels {@code [B, T]}
+     * @param ignoreIndex typically {@code -100}
+     */
+    public static Tensor compute(Tensor logits, Tensor labels, long ignoreIndex) {
         // cross_entropy requires Long/Byte targets. JavaCPP tensor(long[]) without
         // TensorOptions may materialize Float — always promote before CE.
         // scalar_type() returns a non-canonical proxy — intern() before compare/branch.
@@ -63,6 +86,9 @@ public final class SFTLoss {
         long v = shiftLogits.size(2);
         Tensor flatLogits = shiftLogits.reshape(b * tt, v);
         Tensor flatLabels = shiftLabels.reshape(b * tt).to(ScalarType.Long);
-        return cross_entropy(flatLogits, flatLabels);
+        // Reduction.Mean == 1 in ATen; pass ignore_index so prompt / pad tokens
+        // (labels == -100) do not contribute to the mean.
+        return cross_entropy_loss(flatLogits, flatLabels, new TensorOptional(),
+                Reduction.Mean.value, ignoreIndex, 0.0);
     }
 }

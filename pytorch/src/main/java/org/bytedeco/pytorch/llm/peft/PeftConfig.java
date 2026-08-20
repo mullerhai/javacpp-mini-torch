@@ -59,6 +59,15 @@ public class PeftConfig {
         return taskType;
     }
 
+    /** Parsed {@link TaskType}; unknown strings fall back to {@link TaskType#CAUSAL_LM}. */
+    public TaskType taskTypeEnum() {
+        try {
+            return TaskType.fromString(taskType);
+        } catch (IllegalArgumentException e) {
+            return TaskType.CAUSAL_LM;
+        }
+    }
+
     public String baseModelNameOrPath() {
         return baseModelNameOrPath;
     }
@@ -117,8 +126,17 @@ public class PeftConfig {
             return (B) this;
         }
 
+        public B taskType(TaskType taskType) {
+            this.taskType = taskType == null ? "CAUSAL_LM" : taskType.name();
+            return (B) this;
+        }
+
         /** Snake alias matching Python {@code task_type=}. */
         public B task_type(String taskType) {
+            return taskType(taskType);
+        }
+
+        public B task_type(TaskType taskType) {
             return taskType(taskType);
         }
 
@@ -163,6 +181,11 @@ public class PeftConfig {
             return autoMapping(v);
         }
 
+        @SuppressWarnings("unchecked")
+        public B self() {
+            return (B) this;
+        }
+
         public PeftConfig build() {
             return new PeftConfig(this);
         }
@@ -170,5 +193,35 @@ public class PeftConfig {
 
     public static Builder<?> builder() {
         return new Builder<>();
+    }
+
+    /**
+     * Best-effort parse of HuggingFace {@code adapter_config.json} (already decoded
+     * to a map). Subclasses overlay their own fields after calling this.
+     */
+    @SuppressWarnings("unchecked")
+    public static void applyBaseDict(Builder<?> b, Map<String, Object> d) {
+        if (b == null || d == null) return;
+        Object pt = d.get("peft_type");
+        if (pt != null) {
+            try { b.peftType(PeftType.valueOf(String.valueOf(pt).toUpperCase())); }
+            catch (Exception ignored) {}
+        }
+        Object tt = d.get("task_type");
+        if (tt != null) b.taskType(String.valueOf(tt));
+        Object base = d.get("base_model_name_or_path");
+        if (base != null && !"null".equals(String.valueOf(base))) {
+            b.baseModelNameOrPath(String.valueOf(base));
+        }
+        Object rev = d.get("revision");
+        if (rev != null && !"null".equals(String.valueOf(rev))) b.revision(String.valueOf(rev));
+        Object inf = d.get("inference_mode");
+        if (inf instanceof Boolean) b.inferenceMode((Boolean) inf);
+        Object ver = d.get("peft_version");
+        if (ver != null) b.peftVersion(String.valueOf(ver));
+        Object am = d.get("auto_mapping");
+        if (am instanceof Map<?, ?> m) {
+            b.autoMapping(new LinkedHashMap<>((Map<String, Object>) m));
+        }
     }
 }

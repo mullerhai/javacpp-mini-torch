@@ -142,6 +142,97 @@ public final class DeepSpeedConfig {
         return b.build();
     }
 
+    /**
+     * Load either a standard DeepSpeed {@code ds_config.json}/{@code .yaml}
+     * or an Accelerate config whose {@code deepspeed_config.zero_stage} field
+     * is set (the SFT tutorial {@code ds_zero{1,2,3}_config.yaml}).
+     */
+    public static DeepSpeedConfig fromYaml(java.nio.file.Path path) throws java.io.IOException {
+        Objects.requireNonNull(path, "path");
+        String raw = java.nio.file.Files.readString(path);
+        Map<String, Object> m = parseSimpleYaml(raw);
+        Object ds = m.get("deepspeed_config");
+        if (ds instanceof Map<?, ?> nested) {
+            Builder b = builder();
+            Object stage = nested.get("zero_stage");
+            if (stage instanceof Number n) b.zeroStage(n.intValue());
+            else if (stage != null) {
+                try { b.zeroStage(Integer.parseInt(String.valueOf(stage))); } catch (NumberFormatException ignored) {}
+            }
+            Object gas = nested.get("gradient_accumulation_steps");
+            if (gas instanceof Number n) b.gradientAccumulationSteps(n.intValue());
+            Object mbs = nested.get("per_device_train_batch_size");
+            if (mbs instanceof Number n) b.trainMicroBatchSizePerGpu(n.intValue());
+            Object mp = m.get("mixed_precision");
+            if (mp != null) {
+                String s = String.valueOf(mp).replace("'", "").replace("\"", "").trim();
+                if ("bf16".equalsIgnoreCase(s) || "fp16".equalsIgnoreCase(s) || "fp32".equalsIgnoreCase(s)) {
+                    b.precision(s.toLowerCase());
+                }
+            }
+            return b.build();
+        }
+        return fromMap(m);
+    }
+
+    public static DeepSpeedConfig fromYaml(String path) throws java.io.IOException {
+        return fromYaml(java.nio.file.Path.of(path));
+    }
+
+    /**
+     * Minimal YAML subset (key: value, one-level indent) sufficient for the
+     * tutorial Accelerate / DeepSpeed files. Not a general YAML parser.
+     */
+    @SuppressWarnings("unchecked")
+    public static Map<String, Object> parseSimpleYaml(String raw) {
+        Map<String, Object> root = new LinkedHashMap<>();
+        Map<String, Object> current = root;
+        String currentKey = null;
+        for (String line : raw.split("\n")) {
+            String trimmed = line.replace("\t", "  ");
+            if (trimmed.isBlank() || trimmed.trim().startsWith("#")) continue;
+            int indent = 0;
+            while (indent < trimmed.length() && trimmed.charAt(indent) == ' ') indent++;
+            String body = trimmed.trim();
+            int colon = body.indexOf(':');
+            if (colon < 0) continue;
+            String key = body.substring(0, colon).trim();
+            String val = body.substring(colon + 1).trim();
+            if (indent == 0) {
+                current = root;
+                if (val.isEmpty()) {
+                    Map<String, Object> child = new LinkedHashMap<>();
+                    root.put(key, child);
+                    current = child;
+                    currentKey = key;
+                } else {
+                    root.put(key, coerceYamlScalar(val));
+                    currentKey = null;
+                }
+            } else {
+                if (current == root && currentKey != null && root.get(currentKey) instanceof Map) {
+                    current = (Map<String, Object>) root.get(currentKey);
+                }
+                current.put(key, val.isEmpty() ? new LinkedHashMap<>() : coerceYamlScalar(val));
+            }
+        }
+        return root;
+    }
+
+    private static Object coerceYamlScalar(String val) {
+        String v = val;
+        if ((v.startsWith("'") && v.endsWith("'")) || (v.startsWith("\"") && v.endsWith("\""))) {
+            v = v.substring(1, v.length() - 1);
+        }
+        if ("true".equalsIgnoreCase(v) || "false".equalsIgnoreCase(v)) return Boolean.parseBoolean(v);
+        try {
+            if (v.contains(".")) return Double.parseDouble(v);
+            return Integer.parseInt(v);
+        } catch (NumberFormatException e) {
+            return v;
+        }
+    }
+
     private static boolean isKnownKey(String k) {
         return k.startsWith("zero_optimization")
                 || k.startsWith("fp16") || k.startsWith("bf16")

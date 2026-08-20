@@ -1,0 +1,84 @@
+/*
+ * Copyright (C) 2020-2026 Eduardo Gonzalez, Hervé Guillemet, Samuel Audet
+ *
+ * Licensed either under the Apache License, Version 2.0, or (at your option)
+ * under the terms of the GNU General Public License as published by
+ * the Free Software Foundation (subject to the "Classpath" exception),
+ * either version 2, or any later version (collectively, the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.gnu.org/licenses/
+ *     http://www.gnu.org/software/classpath/license.html
+ *
+ * or as provided in the LICENSE.txt file that accompanied this code.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package org.bytedeco.pytorch.llm.transformers.evaluation.evaluate;
+
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * Word Error Rate (WER).
+ *
+ * <p>Edit distance at the word level: (S + D + I) / N.
+ * Expected keys: {@code "pred"} and {@code "ref"} containing text strings.
+ */
+public final class Wer implements Metric {
+
+    @Override
+    public Map<String, Double> compute(List<Map<String, Object>> predictions, List<Map<String, Object>> references) {
+        int totalErrors = 0;
+        int totalWords = 0;
+
+        for (int i = 0; i < predictions.size(); i++) {
+            String pred = String.valueOf(predictions.get(i).get("pred"));
+            String ref = String.valueOf(references.get(i).get("ref"));
+
+            String[] pWords = pred.trim().split("\\s+");
+            String[] rWords = ref.trim().split("\\s+");
+
+            int s = 0, d = 0, iCnt = 0;
+            int m = pWords.length, n = rWords.length;
+            int[][] dp = new int[m + 1][n + 1];
+
+            for (int r = 0; r <= m; r++) dp[r][0] = r;
+            for (int c = 0; c <= n; c++) dp[0][c] = c;
+
+            for (int r = 1; r <= m; r++) {
+                for (int c = 1; c <= n; c++) {
+                    if (pWords[r - 1].equals(rWords[c - 1])) {
+                        dp[r][c] = dp[r - 1][c - 1];
+                    } else {
+                        dp[r][c] = 1 + Math.min(dp[r - 1][c], Math.min(dp[r][c - 1], dp[r - 1][c - 1]));
+                    }
+                }
+            }
+
+            int errors = dp[m][n];
+            int wordCount = n;
+            totalErrors += errors;
+            totalWords += wordCount;
+        }
+
+        double wer = totalWords > 0 ? (double) totalErrors / totalWords : 0.0;
+        return Map.of("wer", wer);
+    }
+
+    @Override
+    public String description() {
+        return "Word Error Rate: fraction of words incorrectly predicted.";
+    }
+
+    @Override
+    public String inputsDescription() {
+        return "Maps with 'pred' and 'ref' keys containing text strings.";
+    }
+}

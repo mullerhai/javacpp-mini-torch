@@ -28,6 +28,7 @@ import org.bytedeco.pytorch.llm.tokenizers.normalizers.Normalizer;
 import org.bytedeco.pytorch.llm.tokenizers.pretokenizers.PreTokenizer;
 import org.bytedeco.pytorch.llm.tokenizers.processors.PostProcessor;
 import org.bytedeco.pytorch.llm.text.tokenizer.BPETokenizer;
+import org.bytedeco.pytorch.llm.transformers.tokenization.ChatTemplate;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -70,7 +71,11 @@ public final class FastTokenizer implements AutoCloseable {
     public enum Backend { BPE, WORDPIECE, GPT2, CHAR, WHITESPACE, UNIGRAM, PIPELINE }
 
     private final Backend backend;
-    private final TokenizerPipeline pipeline;
+    /** Non-final so {@code tokenizer.pad_token = tokenizer.eos_token} can mutate in place (HF semantics). */
+    private volatile TokenizerPipeline pipeline;
+    /** HuggingFace {@code tokenizer.chat_template} raw Jinja / ChatML string. */
+    private volatile String chatTemplate;
+    private volatile ChatTemplate chatTemplateEngine;
 
     private FastTokenizer(Backend backend, TokenizerPipeline pipeline) {
         this.backend = backend == null ? Backend.PIPELINE : backend;
@@ -425,6 +430,150 @@ public final class FastTokenizer implements AutoCloseable {
     public String eosToken() { return pipeline.eosToken(); }
     public String maskToken() { return pipeline.maskToken(); }
     public int modelMaxLength() { return pipeline.modelMaxLength(); }
+
+    /** HuggingFace {@code tokenizer.pad_token_id}. */
+    public int padTokenId() { return pipeline.padId(); }
+    /** HuggingFace {@code tokenizer.eos_token_id}. */
+    public int eosTokenId() { return pipeline.eosId(); }
+    /** HuggingFace {@code tokenizer.bos_token_id}. */
+    public int bosTokenId() { return pipeline.bosId(); }
+
+    /**
+     * HuggingFace {@code tokenizer.pad_token = token}. Rebuilds the pipeline
+     * specials in place (same object identity, matching the mutable Python API).
+     */
+    public FastTokenizer setPadToken(String token) {
+        replaceSpecials(pipeline.unkToken(), token, pipeline.clsToken(), pipeline.sepToken(),
+                pipeline.bosToken(), pipeline.eosToken(), pipeline.maskToken());
+        return this;
+    }
+
+    /** Snake alias matching Python {@code tokenizer.pad_token = ...}. */
+    public FastTokenizer pad_token(String token) { return setPadToken(token); }
+
+    public FastTokenizer setEosToken(String token) {
+        replaceSpecials(pipeline.unkToken(), pipeline.padToken(), pipeline.clsToken(), pipeline.sepToken(),
+                pipeline.bosToken(), token, pipeline.maskToken());
+        return this;
+    }
+
+    public FastTokenizer eos_token(String token) { return setEosToken(token); }
+
+    /**
+     * HuggingFace {@code tokenizer.pad_token_id = id}. Resolves {@code id} through
+     * the vocab and delegates to {@link #setPadToken(String)}.
+     */
+    public FastTokenizer setPadTokenId(int id) {
+        String tok = pipeline.idToToken(id);
+        if (tok != null) setPadToken(tok);
+        return this;
+    }
+
+    public FastTokenizer pad_token_id(int id) { return setPadTokenId(id); }
+
+    /**
+     * HuggingFace {@code tokenizer.chat_template = jinja}.
+     * Stores the raw string and builds a {@link ChatTemplate} (ChatML / Llama-3 /
+     * generation-tag subset — not a full Jinja VM).
+     */
+    public FastTokenizer setChatTemplate(String jinja) {
+        this.chatTemplate = jinja;
+        this.chatTemplateEngine = jinja == null || jinja.isBlank()
+                ? null : ChatTemplate.custom(jinja);
+        return this;
+    }
+
+    public FastTokenizer chat_template(String jinja) { return setChatTemplate(jinja); }
+
+    public String chatTemplate() { return chatTemplate; }
+
+    public ChatTemplate chatTemplateEngine() { return chatTemplateEngine; }
+
+    /**
+     * HuggingFace {@code tokenizer.apply_chat_template(messages, tokenize=False,
+     * add_generation_prompt=...)}.
+     */
+    @SuppressWarnings("unchecked")
+    public String applyChatTemplate(List<? extends Map<String, ?>> messages,
+                                    boolean tokenize, boolean addGenerationPrompt) {
+        ChatTemplate engine = chatTemplateEngine != null ? chatTemplateEngine : ChatTemplate.qwen();
+        String text = engine.applyObject(messages, addGenerationPrompt);
+        if (tokenize) {
+            // Caller asked for token ids via the string API; return a debug
+            // representation. Prefer {@link #applyChatTemplateToIds}.
+            int[] ids = encode(text, false).ids();
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < ids.length; i++) {
+                if (i > 0) sb.append(' ');
+                sb.append(ids[i]);
+            }
+            return sb.toString();
+        }
+        return text;
+    }
+
+    public String apply_chat_template(List<? extends Map<String, ?>> messages,
+                                      boolean tokenize, boolean addGenerationPrompt) {
+        return applyChatTemplate(messages, tokenize, addGenerationPrompt);
+    }
+
+    /** Tokenize the rendered chat template. */
+    public int[] applyChatTemplateToIds(List<? extends Map<String, ?>> messages,
+                                        boolean addGenerationPrompt, boolean addSpecialTokens) {
+        String text = applyChatTemplate(messages, false, addGenerationPrompt);
+        return encode(text, addSpecialTokens).ids();
+    }
+
+    /**
+     * HuggingFace {@code tokenizer(text, truncation=, max_length=, padding=,
+     * return_tensors=None)} → {@code {input_ids, attention_mask}}.
+     */
+    public Map<String, Object> encodeAsMap(String text, boolean truncation, int maxLength, boolean padding) {
+        Encoding enc = encode(text, true);
+        int[] ids = enc.ids();
+        int[] mask = enc.attentionMask();
+        if (truncation && maxLength > 0 && ids.length > maxLength) {
+            int[] tIds = new int[maxLength];
+            int[] tMask = new int[maxLength];
+            System.arraycopy(ids, 0, tIds, 0, maxLength);
+            System.arraycopy(mask, 0, tMask, 0, Math.min(mask.length, maxLength));
+            ids = tIds;
+            mask = tMask;
+        }
+        if (padding && maxLength > 0 && ids.length < maxLength) {
+            int[] pIds = new int[maxLength];
+            int[] pMask = new int[maxLength];
+            System.arraycopy(ids, 0, pIds, 0, ids.length);
+            System.arraycopy(mask, 0, pMask, 0, mask.length);
+            java.util.Arrays.fill(pIds, ids.length, maxLength, padTokenId());
+            ids = pIds;
+            mask = pMask;
+        }
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("input_ids", ids);
+        out.put("attention_mask", mask);
+        return out;
+    }
+
+    public int[] encodeToIds(String text, boolean addSpecialTokens) {
+        return encode(text, addSpecialTokens).ids();
+    }
+
+    /** HuggingFace {@code tokenizer.save_pretrained(dir)}. */
+    public void savePretrained(Path dir) throws IOException {
+        save(dir);
+        if (chatTemplate != null) {
+            Files.writeString(dir.resolve("chat_template.jinja"), chatTemplate, StandardCharsets.UTF_8);
+        }
+    }
+
+    public void save_pretrained(Path dir) throws IOException { savePretrained(dir); }
+    public void save_pretrained(String dir) throws IOException { savePretrained(Path.of(dir)); }
+
+    private void replaceSpecials(String unk, String pad, String cls, String sep,
+                                 String bos, String eos, String mask) {
+        this.pipeline = pipeline.withSpecials(unk, pad, cls, sep, bos, eos, mask, pipeline.modelMaxLength());
+    }
 
     public FastTokenizer withPadding(Padding padding) {
         return new FastTokenizer(backend, pipeline.withPadding(padding));

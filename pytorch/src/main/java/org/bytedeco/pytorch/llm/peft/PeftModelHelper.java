@@ -41,7 +41,56 @@ public final class PeftModelHelper {
         if (moduleName == null || config == null) {
             return false;
         }
+        if (config.isExcluded(moduleName) || config.isExcluded(leafName(moduleName))) {
+            return false;
+        }
+        int layer = parseLayerIndex(moduleName);
+        if (layer >= 0 && !config.shouldTransformLayer(moduleName, layer)) {
+            return false;
+        }
+        if (config.isAllLinear()) {
+            String leaf = leafName(moduleName);
+            return !"lm_head".equalsIgnoreCase(leaf);
+        }
         return matchesTarget(moduleName, config.targetModules());
+    }
+
+    /**
+     * Layer index from HF-style ({@code model.layers.12.self_attn.q_proj}) or
+     * CausalLM-style ({@code h/12/attn/c_attn}) names. {@code -1} if unknown.
+     */
+    public static int parseLayerIndex(String moduleName) {
+        if (moduleName == null || moduleName.isEmpty()) return -1;
+        String n = moduleName;
+        int layers = n.indexOf("layers.");
+        if (layers >= 0) {
+            int start = layers + "layers.".length();
+            int end = start;
+            while (end < n.length() && Character.isDigit(n.charAt(end))) end++;
+            if (end > start) {
+                try { return Integer.parseInt(n.substring(start, end)); } catch (NumberFormatException ignored) {}
+            }
+        }
+        // CausalLM: h/12/attn/c_attn or h.12.attn
+        int hSlash = n.indexOf("h/");
+        if (hSlash >= 0) {
+            int start = hSlash + 2;
+            int end = start;
+            while (end < n.length() && Character.isDigit(n.charAt(end))) end++;
+            if (end > start) {
+                try { return Integer.parseInt(n.substring(start, end)); } catch (NumberFormatException ignored) {}
+            }
+        }
+        int hDot = n.indexOf("h.");
+        if (hDot >= 0) {
+            int start = hDot + 2;
+            int end = start;
+            while (end < n.length() && Character.isDigit(n.charAt(end))) end++;
+            if (end > start) {
+                try { return Integer.parseInt(n.substring(start, end)); } catch (NumberFormatException ignored) {}
+            }
+        }
+        return -1;
     }
 
     public static boolean matchesTarget(String moduleName, List<String> targets) {
@@ -65,20 +114,21 @@ public final class PeftModelHelper {
                 }
                 continue;
             }
-            if (leaf.equals(target) || name.equals(target) || name.endsWith("." + target)) {
+            if (leaf.equals(target) || name.equals(target)
+                    || name.endsWith("." + target) || name.endsWith("/" + target)) {
                 return true;
             }
         }
         return false;
     }
 
-    /** Last dotted segment of a module path. */
+    /** Last dotted or slashed segment of a module path. */
     public static String leafName(String moduleName) {
         if (moduleName == null || moduleName.isEmpty()) {
             return "";
         }
-        int dot = moduleName.lastIndexOf('.');
-        return dot >= 0 ? moduleName.substring(dot + 1) : moduleName;
+        int sep = Math.max(moduleName.lastIndexOf('.'), moduleName.lastIndexOf('/'));
+        return sep >= 0 ? moduleName.substring(sep + 1) : moduleName;
     }
 
     /** Filter names that match the config targets. */

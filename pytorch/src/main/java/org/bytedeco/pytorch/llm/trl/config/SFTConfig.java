@@ -22,7 +22,10 @@
  */
 package org.bytedeco.pytorch.llm.trl.config;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -201,6 +204,16 @@ public final class SFTConfig extends TrainerConfig {
     /** Special tokens configuration JSON. */
     private final String specialTokens;
 
+    // HuggingFace TrainingArguments fields used by the SFT tutorial notebooks
+    private final String evalStrategy;
+    private final String saveStrategy;
+    private final String loggingStrategy;
+    private final boolean doEval;
+    private final boolean pushToHub;
+    private final boolean removeUnusedColumns;
+    private final List<String> labelNames;
+    private final String reportToName;
+
     // -------------------------------------------------------------------------
     // Constructor
     // -------------------------------------------------------------------------
@@ -256,6 +269,14 @@ public final class SFTConfig extends TrainerConfig {
         this.taskInstructions = b.taskInstructions;
         this.trainSplitRatio = b.trainSplitRatio;
         this.specialTokens = b.specialTokens;
+        this.evalStrategy = b.evalStrategy;
+        this.saveStrategy = b.saveStrategy;
+        this.loggingStrategy = b.loggingStrategy;
+        this.doEval = b.doEval;
+        this.pushToHub = b.pushToHub;
+        this.removeUnusedColumns = b.removeUnusedColumns;
+        this.labelNames = b.labelNames == null ? List.of() : Collections.unmodifiableList(new ArrayList<>(b.labelNames));
+        this.reportToName = b.reportToName;
     }
 
     // -------------------------------------------------------------------------
@@ -325,6 +346,16 @@ public final class SFTConfig extends TrainerConfig {
     public boolean taskInstructions() { return taskInstructions; }
     public double trainSplitRatio() { return trainSplitRatio; }
     public String specialTokens() { return specialTokens; }
+
+    public String evalStrategy() { return evalStrategy; }
+    public String saveStrategy() { return saveStrategy; }
+    public String loggingStrategy() { return loggingStrategy; }
+    public boolean doEval() { return doEval; }
+    public boolean pushToHub() { return pushToHub; }
+    public boolean removeUnusedColumns() { return removeUnusedColumns; }
+    public List<String> labelNames() { return labelNames; }
+    /** {@code "none"} / {@code "tensorboard"} / {@code "wandb"} (Python {@code report_to}). */
+    public String reportToName() { return reportToName; }
 
     // -------------------------------------------------------------------------
     // Computed helpers
@@ -410,6 +441,14 @@ public final class SFTConfig extends TrainerConfig {
         m.put("task_instruct", taskInstructions);
         m.put("train_split_ratio", trainSplitRatio);
         m.put("special_tokens", specialTokens);
+        m.put("eval_strategy", evalStrategy);
+        m.put("save_strategy", saveStrategy);
+        m.put("logging_strategy", loggingStrategy);
+        m.put("do_eval", doEval);
+        m.put("push_to_hub", pushToHub);
+        m.put("remove_unused_columns", removeUnusedColumns);
+        m.put("label_names", new ArrayList<>(labelNames));
+        m.put("report_to", reportToName);
         return m;
     }
 
@@ -507,6 +546,14 @@ public final class SFTConfig extends TrainerConfig {
         private boolean taskInstructions = false;
         private double trainSplitRatio = 0.0;
         private String specialTokens = null;
+        private String evalStrategy = "no";
+        private String saveStrategy = "steps";
+        private String loggingStrategy = "steps";
+        private boolean doEval = false;
+        private boolean pushToHub = false;
+        private boolean removeUnusedColumns = true;
+        private List<String> labelNames = new ArrayList<>();
+        private String reportToName = "none";
 
         // Override parent defaults for SFT (Python TRL convention)
         {
@@ -698,6 +745,65 @@ public final class SFTConfig extends TrainerConfig {
         public Builder specialTokens(String v) { this.specialTokens = v; return this; }
         public Builder special_tokens(String v) { return specialTokens(v); }
 
+        public Builder evalStrategy(String v) { this.evalStrategy = v == null ? "no" : v; return this; }
+        public Builder eval_strategy(String v) { return evalStrategy(v); }
+        public Builder saveStrategy(String v) { this.saveStrategy = v == null ? "steps" : v; return this; }
+        public Builder save_strategy(String v) { return saveStrategy(v); }
+        public Builder loggingStrategy(String v) { this.loggingStrategy = v == null ? "steps" : v; return this; }
+        public Builder logging_strategy(String v) { return loggingStrategy(v); }
+        public Builder doEval(boolean v) { this.doEval = v; return this; }
+        public Builder do_eval(boolean v) { return doEval(v); }
+        public Builder pushToHub(boolean v) { this.pushToHub = v; return this; }
+        public Builder push_to_hub(boolean v) { return pushToHub(v); }
+        public Builder removeUnusedColumns(boolean v) { this.removeUnusedColumns = v; return this; }
+        public Builder remove_unused_columns(boolean v) { return removeUnusedColumns(v); }
+        public Builder labelNames(List<String> v) {
+            this.labelNames = v == null ? new ArrayList<>() : new ArrayList<>(v);
+            return this;
+        }
+        public Builder label_names(List<String> v) { return labelNames(v); }
+        public Builder labelNames(String... v) {
+            this.labelNames = v == null ? new ArrayList<>() : new ArrayList<>(List.of(v));
+            return this;
+        }
+        public Builder label_names(String... v) { return labelNames(v); }
+        /**
+         * Python {@code report_to="tensorboard"|"wandb"|"none"|None}. Also maps
+         * onto the parent int {@code reportTo} (0=none, 1=wandb, 2=mlflow, 3=all).
+         */
+        public Builder reportToName(String v) {
+            if (v == null || "none".equalsIgnoreCase(v) || "null".equalsIgnoreCase(v)) {
+                this.reportToName = "none";
+                super.reportTo(0);
+            } else if ("tensorboard".equalsIgnoreCase(v)) {
+                this.reportToName = "tensorboard";
+                super.reportTo(0);
+            } else if ("wandb".equalsIgnoreCase(v)) {
+                this.reportToName = "wandb";
+                super.reportTo(1);
+            } else if ("mlflow".equalsIgnoreCase(v)) {
+                this.reportToName = "mlflow";
+                super.reportTo(2);
+            } else if ("all".equalsIgnoreCase(v)) {
+                this.reportToName = "all";
+                super.reportTo(3);
+            } else {
+                this.reportToName = v;
+            }
+            return this;
+        }
+        public Builder report_to(String v) { return reportToName(v); }
+        public Builder report_to(int v) { super.reportTo(v); return this; }
+
+        public Builder learning_rate(double v) { return learningRate(v); }
+        public Builder output_dir(String v) { return outputDir(v); }
+        public Builder per_device_eval_batch_size(int v) { return perDeviceEvalBatchSize(v); }
+        public Builder gradient_accumulation_steps(int v) { return gradientAccumulationSteps(v); }
+        public Builder eval_steps(int v) { return evalSteps(v); }
+        public Builder max_grad_norm(double v) { return maxGradNorm(v); }
+        public Builder bf16(boolean v) { return super.bf16(v); }
+        public Builder fp16(boolean v) { return super.fp16(v); }
+
         // Snake_case aliases for parent
         public Builder warmup_ratio(double v) { return warmupRatio(v); }
         public Builder warmup_steps(int v) { return warmupSteps(v); }
@@ -706,11 +812,16 @@ public final class SFTConfig extends TrainerConfig {
         public Builder num_train_epochs(int v) { return numTrainEpochs(v); }
         public Builder save_steps(int v) { return saveSteps(v); }
         public Builder logging_steps(int v) { return loggingSteps(v); }
+        /**
+         * Always persist the scheduler name. {@code "linear"} additionally
+         * flips {@link #lrSchedulerLinear(boolean)}; other values (cosine,
+         * constant, …) used to be silently dropped — that was a bug.
+         */
         public Builder lr_scheduler_type(String v) {
             if (v == null) return this;
-            String normalized = v.toLowerCase();
-            if ("linear".equals(normalized)) return lrSchedulerLinear(true);
-            return this;
+            lrSchedulerType(v);
+            if ("linear".equalsIgnoreCase(v)) return lrSchedulerLinear(true);
+            return lrSchedulerLinear(false);
         }
         public Builder group_by_length(boolean v) { return groupByLength(v); }
 

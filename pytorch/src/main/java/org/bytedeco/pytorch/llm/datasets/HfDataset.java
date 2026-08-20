@@ -89,6 +89,11 @@ public final class HfDataset implements Iterable<Map<String, Object>> {
         return new HfDataset(copy, false, "fromList");
     }
 
+    /** Snake alias matching Python {@code Dataset.from_list}. */
+    public static HfDataset from_list(List<Map<String, Object>> rows) {
+        return fromList(rows);
+    }
+
     public static HfDataset fromDict(Map<String, List<?>> columns) {
         Objects.requireNonNull(columns, "columns");
         int n = 0;
@@ -1090,6 +1095,19 @@ public final class HfDataset implements Iterable<Map<String, Object>> {
             out.add(mapped == null ? new LinkedHashMap<>() : new LinkedHashMap<>(mapped));
         }
         return new HfDataset(out, false, info + "/map");
+    }
+
+    /**
+     * HuggingFace {@code Dataset.map(fn, num_proc=, remove_columns=)}.
+     * {@code numProc} is accepted for signature parity; mapping is single-threaded.
+     */
+    public HfDataset map(Function<Map<String, Object>, Map<String, Object>> fn,
+                         int numProc, String... removeColumns) {
+        HfDataset mapped = map(fn);
+        if (removeColumns != null && removeColumns.length > 0) {
+            mapped = mapped.removeColumns(removeColumns);
+        }
+        return mapped;
     }
 
     public HfDataset mapColumn(String column, Function<Object, Object> fn) {

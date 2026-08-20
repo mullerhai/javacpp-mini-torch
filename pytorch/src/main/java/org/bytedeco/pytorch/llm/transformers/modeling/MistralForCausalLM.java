@@ -84,4 +84,18 @@ public class MistralForCausalLM extends Module {
     public LlamaForCausalLM backbone() { return backbone; }
     public int slidingWindow() { return slidingWindow; }
     public boolean usesGqa() { return usesGqa; }
+
+    /** Delegate LoRA weld to the Llama backbone (identical HF parameter names). */
+    public java.util.List<org.bytedeco.pytorch.llm.peft.LoraLinear> attachLora(
+            org.bytedeco.pytorch.llm.peft.LoraConfig config) {
+        return backbone.attachLora(config);
+    }
+
+    public java.util.Map<String, org.bytedeco.pytorch.llm.peft.LoraLinear> loraAdapters() {
+        return backbone.loraAdapters();
+    }
+
+    public void freezeBaseModelParameters() {
+        backbone.freezeBaseModelParameters();
+    }
 }

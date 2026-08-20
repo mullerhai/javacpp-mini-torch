@@ -512,6 +512,10 @@ public class GradScaler implements AutoCloseable {
             return this;
         }
 
+        public Builder initScale(double initScale) {
+            return initScale((float) initScale);
+        }
+
         public Builder minScale(float minScale) {
             this.minScale = minScale;
             return this;
@@ -527,9 +531,17 @@ public class GradScaler implements AutoCloseable {
             return this;
         }
 
+        public Builder growthFactor(double growthFactor) {
+            return growthFactor((float) growthFactor);
+        }
+
         public Builder backoffFactor(float backoffFactor) {
             this.backoffFactor = backoffFactor;
             return this;
+        }
+
+        public Builder backoffFactor(double backoffFactor) {
+            return backoffFactor((float) backoffFactor);
         }
 
         public Builder growthInterval(int growthInterval) {
