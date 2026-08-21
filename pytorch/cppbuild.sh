@@ -26,6 +26,8 @@ export USE_NUMPY=0
 export USE_OPENMP=1
 export USE_SYSTEM_NCCL=1
 export USE_DISTRIBUTED=1
+export USE_RPC=1
+export USE_TENSORPIPE=1
 # Optional distributed backends (auto-detect).
 # Force off:  USE_MPI=0 USE_UCC=0 bash cppbuild.sh ...
 # Force on:   USE_MPI=1 MPI_HOME=...  /  USE_UCC=1 UCC_HOME=...

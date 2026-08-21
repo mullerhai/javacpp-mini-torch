@@ -350,7 +350,19 @@ public class torch_rpc implements LoadEnabled, InfoMapper {
             .put(new Info("utils.h").linePatterns(".*").skip())
         ;
 
-        //--- RpcAgent as std::shared_ptr handle (static get/setCurrentRpcAgent)
+        //--- SerializedPyObj destructive accessors -------------------------------
+        // SerializedPyObj::tensors_() returns a const reference to the internal
+        // std::vector<Tensor>; JavaCPP's @ByRef getter does not bump the
+        // intrusive_ptr refcount on each Tensor, so closing/GC'ing the
+        // SerializedPyObj (which destroys the internal vector) frees the
+        // shared Tensors and then the returned TensorVector tries to free
+        // them again -> SIGSEGV / "double free detected in tcache 2".
+        // Skipping the getter; add safe count / payload helpers below.
+        infoMap
+            .put(new Info("torch::distributed::rpc::SerializedPyObj::tensors",
+                          "torch::distributed::rpc::SerializedPyObj::tensors_",
+                          "torch::distributed::rpc::SerializedPyObj::payload_").skip())
+        ;
         // These are static members of RpcAgent (not free functions). Register the
         // shared_ptr peer type; leave the static methods to the parser so @Name
         // stays as RpcAgent::getCurrentRpcAgent (no double-namespace mangling).

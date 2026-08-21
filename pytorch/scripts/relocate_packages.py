@@ -1102,7 +1102,15 @@ def plan_moves(gen_root: Path, main_root: Optional[Path]) -> Tuple[Dict[Path, Tu
         f"{ROOT_PKG}.audio",
         f"{ROOT_PKG}.plot",
         f"{ROOT_PKG}.serve",
+        # Note: the bare nn package (nn.java factory) is handled separately below
+        # via NN_BARE_PKG check — only the bare package is skipped, not nn.options/
+        # nn.modules/… which are JavaCPP-generated.
     )
+
+    # Bare "org.bytedeco.pytorch.nn" itself (no subpackage) is hand-written and
+    # must never be moved or reclassified. nn.{options,modules,...} are still
+    # processed by the normal classification pipeline.
+    NN_BARE_PKG = NN_PKG
 
     for root in roots:
         existing = existing_by_root.get(root, set())
@@ -1139,6 +1147,11 @@ def plan_moves(gen_root: Path, main_root: Optional[Path]) -> Tuple[Dict[Path, Tu
                 current_pkg == p or current_pkg.startswith(p + ".")
                 for p in handwritten_data_prefixes
             ):
+                continue
+            # The bare nn package (nn.java factory) is hand-written; leave alone.
+            # nn.options / nn.modules / … are JavaCPP-generated and must still be
+            # classified so they land in the right subpackage.
+            if current_pkg == NN_BARE_PKG:
                 continue
 
             if in_preserved:
@@ -1309,6 +1322,27 @@ def scan_existing_package_index(roots: List[Path]) -> Dict[str, str]:
         f"{ROOT_PKG}.cuda", f"{ROOT_PKG}.gloo",
         f"{ROOT_PKG}.rpc", f"{ROOT_PKG}.onnx", f"{ROOT_PKG}.global",
     }
+    # Hand-written packages that must NEVER contribute their simple names to the
+    # index used for import rewriting. A file named nn.java inside .nn would
+    # otherwise register ("nn" -> ".nn") and rewrite every "import .nn.*" into
+    # "import .nn.nn.*" across thousands of files.
+    handwritten_pkg_prefixes = (
+        f"{ROOT_PKG}.dataframe",
+        f"{DATA_PKG}.json", f"{DATA_PKG}.parquet", f"{DATA_PKG}.arrow",
+        f"{DATA_PKG}.avro", f"{DATA_PKG}.orc", f"{DATA_PKG}.numpy",
+        f"{DATA_PKG}.pickle", f"{DATA_PKG}.safetensors", f"{DATA_PKG}.gguf",
+        f"{ROOT_PKG}.distribution", f"{ROOT_PKG}.utils", f"{ROOT_PKG}.rl",
+        f"{ROOT_PKG}.llm", f"{ROOT_PKG}.geometric", f"{ROOT_PKG}.amp",
+        f"{ROOT_PKG}.info", f"{ROOT_PKG}.quantization",
+        f"{ROOT_PKG}.recommend", f"{ROOT_PKG}.feature", f"{ROOT_PKG}.deploy",
+        f"{ROOT_PKG}.vision", f"{ROOT_PKG}.audio", f"{ROOT_PKG}.plot",
+        f"{ROOT_PKG}.serve",
+        # Bare nn package (nn.java) is hand-written and must not contribute its
+        # simple name "nn" to the import-rewrite index — that would otherwise
+        # rewrite every "import .nn.*" to "import .nn.nn.*". nn.options / nn.modules
+        # / … are still indexed normally.
+    )
+    bare_handwritten_pkg = NN_PKG
     idx: Dict[str, str] = {}
     collisions: Dict[str, Set[str]] = {}
     for root in roots:
@@ -1326,6 +1360,16 @@ def scan_existing_package_index(roots: List[Path]) -> Dict[str, str]:
             # Skip preserved preset packages for the global index — their
             # simple names must not drive star-imports into foreign files.
             if pkg in preserved or any(pkg.startswith(p + ".") for p in preserved):
+                continue
+            # Skip hand-written packages entirely — their simple names must
+            # not be rewritten across the codebase (e.g. nn.java → nn.nn.*).
+            if any(pkg == p or pkg.startswith(p + ".") for p in handwritten_pkg_prefixes):
+                continue
+            # The bare nn package is hand-written but its subpackages are not;
+            # only skip the bare package here (nn.options / nn.modules / … must
+            # still contribute their types to the index so .nn.options/*.java can
+            # star-import enumtype.* etc).
+            if pkg == bare_handwritten_pkg:
                 continue
             simple = path.stem
             if simple in idx and idx[simple] != pkg:
@@ -1412,7 +1456,14 @@ def rewrite_references_everywhere(
         f"{ROOT_PKG}.audio",
         f"{ROOT_PKG}.plot",
         f"{ROOT_PKG}.serve",
+        # Only the bare nn package is hand-written (nn.java factory); nn.options /
+        # nn.modules / nn.modules.container / nn.functions are JavaCPP-generated and
+        # still need star-import injection. Handled separately below.
     )
+    # Bare "org.bytedeco.pytorch.nn" itself (no subpackage) is hand-written and
+    # must be skipped wholesale — both the file classification (plan_moves) and
+    # the import-rewrite pass. nn.{options,modules,...} are still processed.
+    NN_BARE_ONLY = (NN_PKG,)
 
     for root in roots:
         for path in collect_java_files(root):
@@ -1430,6 +1481,12 @@ def rewrite_references_everywhere(
                 cur_pkg == p or cur_pkg.startswith(p + ".")
                 for p in handwritten_data_prefixes
             )
+            # Bare nn package (nn.java) is hand-written — treat as handwritten so
+            # its own imports are not touched, but it doesn't pull in star-imports.
+            # nn.{options,modules,...} are still processed normally.
+            is_nn_bare = cur_pkg in NN_BARE_ONLY
+            if is_nn_bare:
+                is_handwritten = True
 
             text = apply_renames_in_text(text0, renames)
             # Qualify bare nested types (TypePtr → Type.TypePtr) outside Type.java
