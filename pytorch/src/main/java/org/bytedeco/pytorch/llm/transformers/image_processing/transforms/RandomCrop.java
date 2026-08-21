@@ -68,12 +68,12 @@ public class RandomCrop extends Transform {
     @Override
     public Tensor apply(Tensor t) {
         if (t == null) return null;
-        int dim = t.dim();
-        int spatialOffset = dim - 2;
+        long dim = t.dim();
+        long spatialOffset = dim - 2;
         long hDim = dim - 2;
         long wDim = dim - 1;
-        int h = (int) t.size(hDim);
-        int w = (int) t.size(wDim);
+        int h = Math.toIntExact(t.size(hDim));
+        int w = Math.toIntExact(t.size(wDim));
 
         // Zero-pad if image is smaller than the crop size.
         Tensor padded = t;
@@ -85,19 +85,27 @@ public class RandomCrop extends Transform {
             int padBottom = padH - padTop;
             padLeft = padW / 2;
             int padRight = padW - padLeft;
-            padded = torch.constant_pad_nd(t, new long[]{padTop, padBottom, padLeft, padRight}, 0.0);
+            padded = torch.constant_pad_nd(t,
+                    new long[]{padTop, padBottom, padLeft, padRight},
+                    new org.bytedeco.pytorch.Scalar(0));
         }
 
         // Recompute dimensions after padding.
-        h = (int) padded.size(hDim);
-        w = (int) padded.size(wDim);
+        h = Math.toIntExact(padded.size(hDim));
+        w = Math.toIntExact(padded.size(wDim));
 
         int top = h > height ? rng.nextInt(h - height + 1) : 0;
         int left = w > width ? rng.nextInt(w - width + 1) : 0;
 
         // Slice out the crop window.
-        return padded.slice(hDim, top, top + height, 1)
-                .slice(wDim, left, left + width, 1);
+        return padded.slice(spatialOffset,
+                            new org.bytedeco.pytorch.LongOptional((long) top),
+                            new org.bytedeco.pytorch.LongOptional((long) top + height),
+                            1L)
+                .slice(wDim,
+                       new org.bytedeco.pytorch.LongOptional((long) left),
+                       new org.bytedeco.pytorch.LongOptional((long) left + width),
+                       1L);
     }
 
     public int height() { return height; }

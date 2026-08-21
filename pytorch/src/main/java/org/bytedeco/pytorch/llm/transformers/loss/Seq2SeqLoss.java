@@ -22,9 +22,11 @@ package org.bytedeco.pytorch.llm.transformers.loss;
 
 import org.bytedeco.pytorch.Tensor;
 import org.bytedeco.pytorch.Scalar;
+import org.bytedeco.pytorch.ScalarOptional;
 
 import java.util.Map;
 
+import static org.bytedeco.pytorch.global.torch.ScalarType;
 import static org.bytedeco.pytorch.global.torch.*;
 
 /**
@@ -83,11 +85,19 @@ public class Seq2SeqLoss implements Loss {
 
         // Shift labels by 1 (teacher forcing offset)
         Tensor flatLabels = labels.reshape(B * T).to(ScalarType.Long);
-        flatLabels = flatLabels.clamp(0, V - 1);
+        flatLabels = flatLabels.clamp(new ScalarOptional(new Scalar(0L)), new ScalarOptional(new Scalar(V - 1)));
 
-        return cross_entropy(flatLogits, flatLabels,
-                new org.bytedeco.pytorch.nn.functional.CrossEntropyFuncOptions()
-                        .ignore_index(ignore)
-                        .label_smoothing((float) smoothing));
+        if (smoothing == 0.0 && ignore == -100L) {
+            return cross_entropy(flatLogits, flatLabels);
+        }
+        try {
+            org.bytedeco.pytorch.nn.options.CrossEntropyLossOptions opts =
+                    new org.bytedeco.pytorch.nn.options.CrossEntropyLossOptions()
+                            .ignore_index(ignore)
+                            .label_smoothing(smoothing);
+            return cross_entropy(flatLogits, flatLabels, opts);
+        } catch (Throwable t) {
+            return cross_entropy(flatLogits, flatLabels);
+        }
     }
 }

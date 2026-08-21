@@ -68,8 +68,8 @@ public final class Llama3AssistantCollator implements TrlDataCollator {
             if (msgs instanceof List<?> list) {
                 for (Object o : list) {
                     if (!(o instanceof Map<?, ?> msg)) continue;
-                    String role = String.valueOf(msg.getOrDefault("role", "user"));
-                    String content = String.valueOf(msg.getOrDefault("content", "")).strip();
+                    String role = String.valueOf(msg.get("role"));
+                    String content = String.valueOf(msg.get("content")).strip();
                     prompt.append("<|start_header_id|>").append(role)
                             .append("<|end_header_id|>\n").append(content).append("<|eot_id|>");
                 }

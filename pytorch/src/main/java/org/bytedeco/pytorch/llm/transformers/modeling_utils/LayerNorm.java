@@ -21,6 +21,7 @@
  */
 package org.bytedeco.pytorch.llm.transformers.modeling_utils;
 
+import org.bytedeco.pytorch.LongVector;
 import org.bytedeco.pytorch.nn.Module;
 import org.bytedeco.pytorch.nn.modules.LayerNormImpl;
 import org.bytedeco.pytorch.nn.options.LayerNormOptions;
@@ -43,7 +44,9 @@ public final class LayerNorm extends Module {
      */
     public LayerNorm(long normalizedShape, double eps) {
         super("LayerNorm");
-        LayerNormOptions opts = new LayerNormOptions(new long[]{normalizedShape})
+        LongVector shape = new LongVector(1);
+        shape.put(0, normalizedShape);
+        LayerNormOptions opts = new LayerNormOptions(shape)
                 .eps(eps)
                 .elementwise_affine(true);
         this.inner = register_module("inner", new LayerNormImpl(opts));

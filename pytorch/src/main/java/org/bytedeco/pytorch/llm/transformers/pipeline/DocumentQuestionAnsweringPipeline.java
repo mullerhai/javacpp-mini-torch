@@ -69,8 +69,11 @@ public final class DocumentQuestionAnsweringPipeline {
 
     /** Returns the generated answer for the document image and question. */
     public String call(Object documentImage, String question) {
-        List<Map<String, String>> messages = List.of(
-                Map.of("role", "user", "content", question));
+        List<Map<String, Object>> messages = new java.util.ArrayList<>();
+        java.util.Map<String, Object> msg = new java.util.LinkedHashMap<>();
+        msg.put("role", "user");
+        msg.put("content", question);
+        messages.add(msg);
         return bundle.chat(messages);
     }
 

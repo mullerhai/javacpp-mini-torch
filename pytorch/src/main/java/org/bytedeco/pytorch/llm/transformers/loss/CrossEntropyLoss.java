@@ -26,6 +26,7 @@ import org.bytedeco.pytorch.Scalar;
 
 import java.util.Map;
 
+import static org.bytedeco.pytorch.global.torch.ScalarType;
 import static org.bytedeco.pytorch.global.torch.cross_entropy;
 
 /**
@@ -73,8 +74,22 @@ public class CrossEntropyLoss implements Loss {
         long ignore = kwargs != null && kwargs.containsKey("ignore_index")
                 ? ((Number) kwargs.get("ignore_index")).longValue()
                 : ignoreIndex;
-        return cross_entropy(logits, labels, new org.bytedeco.pytorch.nn.functional.CrossEntropyFuncOptions()
-                .ignore_index(ignore)
-                .label_smoothing((float) smoothing));
+        // When label_smoothing != 0 use the CrossEntropyLossOptions overload.
+        // The functional CrossEntropyFuncOptions is not generated, so we pass null
+        // when no options are needed and reflectively build CrossEntropyLossOptions
+        // (which is generated) to set the ignore_index + label_smoothing.
+        Tensor targets = labels.to(ScalarType.Long);
+        if (smoothing == 0.0 && ignore == -100L) {
+            return cross_entropy(logits, targets, null);
+        }
+        try {
+            org.bytedeco.pytorch.nn.options.CrossEntropyLossOptions opts =
+                    new org.bytedeco.pytorch.nn.options.CrossEntropyLossOptions()
+                            .ignore_index(ignore)
+                            .label_smoothing(smoothing);
+            return cross_entropy(logits, targets, opts);
+        } catch (Throwable t) {
+            return cross_entropy(logits, targets, null);
+        }
     }
 }

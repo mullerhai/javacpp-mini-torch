@@ -100,7 +100,7 @@ public class IOULoss implements Loss {
         Tensor interArea = relu(sub(min(interX2, interX1), max(interX2, interX2)))
                 .mul(relu(sub(interY2, interY1)));
         if (interArea.scalar_type().name().contains("Long")) {
-            interArea = interArea.to(scalar_type(interArea));
+            interArea = interArea.to(interArea.scalar_type());
         }
 
         // Union
@@ -108,10 +108,11 @@ public class IOULoss implements Loss {
                 .mul(sub(pred.select(1, 3), pred.select(1, 1)));
         Tensor targetArea = sub(target.select(1, 2), target.select(1, 0))
                 .mul(sub(target.select(1, 3), target.select(1, 1)));
-        Tensor union = add(predArea, targetArea).sub(interArea);
+        Tensor union = sub(add(predArea, targetArea), interArea);
 
-        Tensor iou = div(interArea, union.add(1e-7f));
-        return sub(new Scalar(1.0f), iou.mean());
+        Tensor iou = div(interArea, union.add(new Scalar(1e-7f)));
+        // 1 - iou.mean(): no sub(Scalar, Tensor) overload; use rsub(Tensor, Scalar) = Scalar - Tensor.
+        return org.bytedeco.pytorch.global.torch.rsub(iou.mean(), new Scalar(1.0f));
     }
 
     private Tensor computeGIoU(Tensor pred, Tensor target) {

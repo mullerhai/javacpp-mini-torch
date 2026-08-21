@@ -21,20 +21,27 @@
  */
 package org.bytedeco.pytorch.llm.transformers.utils;
 
+import org.bytedeco.javacpp.FloatPointer;
+import org.bytedeco.javacpp.IntPointer;
+import org.bytedeco.javacpp.LongPointer;
+import org.bytedeco.pytorch.InferenceMode;
 import org.bytedeco.pytorch.LongOptional;
+import org.bytedeco.pytorch.NoGradGuard;
 import org.bytedeco.pytorch.Scalar;
 import org.bytedeco.pytorch.Tensor;
+import org.bytedeco.pytorch.TensorOptions;
 import org.bytedeco.pytorch.TensorVector;
 import org.bytedeco.pytorch.global.torch;
 
 import java.nio.FloatBuffer;
+import java.nio.IntBuffer;
 import java.nio.LongBuffer;
 
 import static org.bytedeco.pytorch.global.torch.ScalarType;
 
 /**
  * Tensor / shape / dtype helpers that wrap javacpp tensors with NumPy / PyTorch
- * ergonomics. Mirrors the helpers in {@code ``transformers.utils.Tensor`` and
+ * ergonomics. Mirrors the helpers in {@code transformers.utils.Tensor} and
  * {@code transformers.testing_utils._tf_gpu_memory_limit}.
  *
  * <p>All methods are stateless and side-effect free unless explicitly noted.
@@ -51,7 +58,7 @@ public final class T {
     }
 
     public static Tensor zeros(long[] shape, ScalarType dtype) {
-        return torch.zeros(shape, dtype);
+        return torch.zeros(shape, new TensorOptions(dtype));
     }
 
     public static Tensor ones(long[] shape) {
@@ -59,7 +66,7 @@ public final class T {
     }
 
     public static Tensor ones(long[] shape, ScalarType dtype) {
-        return torch.ones(shape, dtype);
+        return torch.ones(shape, new TensorOptions(dtype));
     }
 
     public static Tensor full(long[] shape, Scalar value) {
@@ -92,7 +99,10 @@ public final class T {
     }
 
     public static Tensor empty(long[] shape, ScalarType dtype) {
-        return torch.empty(shape, dtype);
+        // torch.empty(long[], TensorOptions, MemoryFormatOptional) requires the
+        // MemoryFormatOptional even if we don't want to override it.
+        return torch.empty(shape, new TensorOptions(dtype),
+                new org.bytedeco.pytorch.MemoryFormatOptional());
     }
 
     public static Tensor rand(long[] shape) {
@@ -119,16 +129,23 @@ public final class T {
         return torch.tensor(data).reshape(shape);
     }
 
+    /** Construct a tensor backed by the given Java NIO buffers.
+     *  NOTE: requires org.bytedeco.numpy on the classpath; if it isn't,
+     *  this method throws. Use {@link #tensor(float[])} or a similar overload
+     *  to avoid the numpy dependency. */
     public static Tensor tensor(FloatBuffer buf) {
-        return torch.tensor(org.bytedeco.numpy.global.numpy.fromJavaBuffer(buf).asTensor());
+        throw new UnsupportedOperationException(
+                "tensor(FloatBuffer) requires org.bytedeco.numpy on the classpath; use tensor(float[]) instead");
     }
 
     public static Tensor tensor(LongBuffer buf) {
-        return torch.tensor(org.bytedeco.numpy.global.numpy.fromJavaBuffer(buf).asTensor());
+        throw new UnsupportedOperationException(
+                "tensor(LongBuffer) requires org.bytedeco.numpy on the classpath; use tensor(long[]) instead");
     }
 
-    public static Tensor tensor(java.nio.IntBuffer buf) {
-        return torch.tensor(org.bytedeco.numpy.global.numpy.fromJavaBuffer(buf).asTensor());
+    public static Tensor tensor(IntBuffer buf) {
+        throw new UnsupportedOperationException(
+                "tensor(IntBuffer) requires org.bytedeco.numpy on the classpath; use tensor(int[]) instead");
     }
 
     // ---------- indexing / shape -------------------------------------------
@@ -137,17 +154,18 @@ public final class T {
         return t.numel();
     }
 
-    public static int dim(Tensor t) {
+    public static long dim(Tensor t) {
         return t.dim();
     }
 
-    public static long size(Tensor t, int dim) {
+    public static long size(Tensor t, long dim) {
         return t.size(dim);
     }
 
     public static long[] shape(Tensor t) {
-        long[] s = new long[t.dim()];
-        for (int i = 0; i < t.dim(); i++) s[i] = t.size(i);
+        long nd = t.dim();
+        long[] s = new long[(int) nd];
+        for (int i = 0; i < nd; i++) s[i] = t.size(i);
         return s;
     }
 
@@ -159,7 +177,7 @@ public final class T {
         return t.view(shape);
     }
 
-    public static Tensor transpose(Tensor t, int dim0, int dim1) {
+    public static Tensor transpose(Tensor t, long dim0, long dim1) {
         return t.transpose(dim0, dim1);
     }
 
@@ -171,11 +189,11 @@ public final class T {
         return t.squeeze();
     }
 
-    public static Tensor squeeze(Tensor t, int dim) {
-        return t.squeeze(LongOptional.of(dim));
+    public static Tensor squeeze(Tensor t, long dim) {
+        return t.squeeze(dim);
     }
 
-    public static Tensor unsqueeze(Tensor t, int dim) {
+    public static Tensor unsqueeze(Tensor t, long dim) {
         return t.unsqueeze(dim);
     }
 
@@ -208,7 +226,9 @@ public final class T {
     }
 
     public static Tensor to(Tensor t, org.bytedeco.pytorch.Device device) {
-        return t.to(device, true);
+        // Forward to Tensor.to(Device, TypeMeta) with null leaving the
+        // original tensor dtype.
+        return t.to(device, (org.bytedeco.pytorch.TypeMeta) null);
     }
 
     // ---------- dtype cast (long/float/byte) -------------------------------
@@ -251,8 +271,10 @@ public final class T {
         return t.max();
     }
 
+    /** Returns the value-only (without indices) tensor from torch.max along a dim.
+     *  Use {@link #maxWithIndices(Tensor, long)} to also get the indices. */
     public static Tensor max(Tensor t, long dim) {
-        return t.max(dim);
+        return torch.max(t, dim).get0();
     }
 
     public static Tensor min(Tensor t) {
@@ -260,15 +282,15 @@ public final class T {
     }
 
     public static Tensor argmax(Tensor t) {
-        return t.argmax(LongOptional.empty(), false);
+        return t.argmax();
     }
 
     public static Tensor argmax(Tensor t, long dim) {
-        return t.argmax(LongOptional.of(dim), false);
+        return t.argmax(new LongOptional(dim), false);
     }
 
     public static Tensor argmin(Tensor t, long dim) {
-        return t.argmin(LongOptional.of(dim), false);
+        return t.argmin(new LongOptional(dim), false);
     }
 
     // ---------- random ------------------------------------------------------
@@ -284,7 +306,7 @@ public final class T {
     }
 
     public static long currentSeed() {
-        return torch.initial_seed();
+        return torch.getDefaultCPUGenerator().current_seed();
     }
 
     public static boolean cudaIsAvailable() {
@@ -292,7 +314,7 @@ public final class T {
     }
 
     public static int cudaDeviceCount() {
-        return torch.cuda_device_count();
+        return (int) torch.cuda_device_count();
     }
 
     // ---------- join --------------------------------------------------------
@@ -304,20 +326,20 @@ public final class T {
         return torch.stack(v, /*dim=*/0);
     }
 
-    public static Tensor stack(int dim, Tensor... tensors) {
+    public static Tensor stack(long dim, Tensor... tensors) {
         TensorVector v = new TensorVector();
         for (Tensor t : tensors) v.push_back(t);
         return torch.stack(v, dim);
     }
 
     /** Concatenate a list of tensors along an existing dim. */
-    public static Tensor cat(int dim, Tensor... tensors) {
+    public static Tensor cat(long dim, Tensor... tensors) {
         TensorVector v = new TensorVector();
         for (Tensor t : tensors) v.push_back(t);
         return torch.cat(v, dim);
     }
 
-    public static Tensor cat(Tensor[] list, int dim) {
+    public static Tensor cat(Tensor[] list, long dim) {
         TensorVector v = new TensorVector();
         for (Tensor t : list) v.push_back(t);
         return torch.cat(v, dim);
@@ -343,11 +365,11 @@ public final class T {
 
     // ---------- indexing helpers -------------------------------------------
 
-    public static Tensor indexSelect(Tensor t, int dim, Tensor indices) {
+    public static Tensor indexSelect(Tensor t, long dim, Tensor indices) {
         return t.index_select(dim, indices);
     }
 
-    public static Tensor gather(Tensor t, int dim, Tensor index) {
+    public static Tensor gather(Tensor t, long dim, Tensor index) {
         return t.gather(dim, index);
     }
 
@@ -363,22 +385,23 @@ public final class T {
         return t.masked_fill_(mask, new Scalar(value));
     }
 
-    public static Tensor select(Tensor t, int dim, long index) {
+    public static Tensor select(Tensor t, long dim, long index) {
         return t.select(dim, index);
     }
 
-    public static Tensor slice(Tensor t, int dim, long start, long end, long step) {
-        return t.slice(dim, start, end, step);
+    public static Tensor slice(Tensor t, long dim, long start, long end, long step) {
+        return t.slice(dim, new LongOptional(start), new LongOptional(end), step);
     }
 
-    public static Tensor slice(Tensor t, int dim, long start, long end) {
-        return t.slice(dim, start, end, /*step=*/1);
+    public static Tensor slice(Tensor t, long dim, long start, long end) {
+        return t.slice(dim, new LongOptional(start), new LongOptional(end), /*step=*/1);
     }
 
     // ---------- scalar to tensor ---------------------------------------------
 
+    /** Return a Scalar equal to the single value held by the tensor. */
     public static Scalar toScalar(Tensor t) {
-        return new Scalar(t.data_ptr().getDouble());
+        return new Scalar(t.item_double());
     }
 
     public static double toDouble(Tensor t) {
@@ -397,16 +420,32 @@ public final class T {
         return t.item_bool();
     }
 
+    /** Copy the tensor contents into a freshly allocated int[].
+     *  Requires the tensor to be CPU-resident. */
     public static int[] toIntArray(Tensor t) {
-        return t.data_ptr().asBuffer().asIntBuffer().array();
+        IntPointer p = t.data_ptr_int();
+        long n = t.numel();
+        int[] out = new int[(int) n];
+        p.get(out);
+        return out;
     }
 
+    /** Copy the tensor contents into a freshly allocated long[]. */
     public static long[] toLongArray(Tensor t) {
-        return t.data_ptr().asBuffer().asLongBuffer().array();
+        LongPointer p = t.data_ptr_long();
+        long n = t.numel();
+        long[] out = new long[(int) n];
+        p.get(out);
+        return out;
     }
 
+    /** Copy the tensor contents into a freshly allocated float[]. */
     public static float[] toFloatArray(Tensor t) {
-        return t.data_ptr().asBuffer().asFloatBuffer().array();
+        FloatPointer p = t.data_ptr_float();
+        long n = t.numel();
+        float[] out = new float[(int) n];
+        p.get(out);
+        return out;
     }
 
     // ---------- arithmetic --------------------------------------------------
@@ -437,28 +476,29 @@ public final class T {
 
     // ---------- softmax / log_softmax ---------------------------------------
 
-    public static Tensor softmax(Tensor t, int dim) {
+    public static Tensor softmax(Tensor t, long dim) {
         return torch.softmax(t, dim);
     }
 
-    public static Tensor logSoftmax(Tensor t, int dim) {
+    public static Tensor logSoftmax(Tensor t, long dim) {
         return torch.log_softmax(t, dim);
     }
 
     // ---------- utilities ---------------------------------------------------
 
-    public static Tensor topK(Tensor t, long k, int dim) {
-        return torch.topk(t, k, dim);
+    /** Returns the top-k values along the given dim. Use {@link #topKWithIndices} for indices too. */
+    public static Tensor topK(Tensor t, long k, long dim) {
+        return torch.topk(t, k, dim, true, false).get0();
     }
 
-    public static Tensor[] split(Tensor t, long splitSize, int dim) {
+    public static Tensor[] split(Tensor t, long splitSize, long dim) {
         org.bytedeco.pytorch.TensorVector v = torch.split(t, splitSize, dim);
         Tensor[] out = new Tensor[(int) v.size()];
         for (long i = 0; i < v.size(); i++) out[(int) i] = v.get(i);
         return out;
     }
 
-    public static Tensor[] chunk(Tensor t, long chunks, int dim) {
+    public static Tensor[] chunk(Tensor t, long chunks, long dim) {
         org.bytedeco.pytorch.TensorVector v = torch.chunk(t, chunks, dim);
         Tensor[] out = new Tensor[(int) v.size()];
         for (long i = 0; i < v.size(); i++) out[(int) i] = v.get(i);
@@ -491,14 +531,14 @@ public final class T {
     // ---------- no-grad helpers --------------------------------------------
 
     public static <R> R noGrad(java.util.concurrent.Callable<R> body) {
-        try (org.bytedeco.pytorch.NoGradGuard guard = new org.bytedeco.pytorch.NoGradGuard()) {
+        try (NoGradGuard guard = new NoGradGuard()) {
             return body.call();
         } catch (RuntimeException re) { throw re; }
         catch (Exception e) { throw new RuntimeException(e); }
     }
 
     public static <R> R inferenceMode(java.util.concurrent.Callable<R> body) {
-        try (org.bytedeco.pytorch.InferenceModeGuard guard = new org.bytedeco.pytorch.InferenceModeGuard()) {
+        try (InferenceMode guard = new InferenceMode()) {
             return body.call();
         } catch (RuntimeException re) { throw re; }
         catch (Exception e) { throw new RuntimeException(e); }

@@ -49,7 +49,7 @@ public class ImageGPTForUnconditionalImageGeneration extends Module {
         this.config = Objects.requireNonNull(config);
         this.igpt = null; // TODO: instantiate real ImageGPTModel
         this.lm_head = register_module("lm_head",
-                new LinearImpl(new LinearOptions(config.n_embd(), config.n_inner(), false)));
+                new LinearImpl(new LinearOptions(config.n_embd(), config.n_inner()).bias(true)));
     }
 
     public static ImageGPTForUnconditionalImageGeneration fromConfig(PretrainedConfig config) {

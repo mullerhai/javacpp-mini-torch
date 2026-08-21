@@ -26,6 +26,7 @@ import org.bytedeco.pytorch.dataframe.DataFrame;
 import org.bytedeco.pytorch.dataframe.dataset.*;
 import org.bytedeco.pytorch.llm.hub.HfHub;
 import org.bytedeco.pytorch.llm.hub.HfToken;
+import org.bytedeco.pytorch.llm.transformers.data.Dataset;
 
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -59,7 +60,7 @@ import java.util.stream.Stream;
  * DatasetDict glue = HfDatasets.loadDataset("glue", "cola");
  * }</pre>
  */
-public final class HfDataset implements Iterable<Map<String, Object>> {
+public class HfDataset extends Dataset {
 
     private final List<Map<String, Object>> rows;
     private final List<String> columnNames;
@@ -1019,6 +1020,7 @@ public final class HfDataset implements Iterable<Map<String, Object>> {
         return info;
     }
 
+    @Override
     public Map<String, Object> get(int index) {
         return Collections.unmodifiableMap(rows.get(index));
     }
@@ -1028,20 +1030,60 @@ public final class HfDataset implements Iterable<Map<String, Object>> {
     }
 
     @Override
-    public Iterator<Map<String, Object>> iterator() {
-        return rows.stream().map(Collections::unmodifiableMap).iterator();
-    }
-
-    public Stream<Map<String, Object>> stream() {
-        return rows.stream().map(Collections::unmodifiableMap);
-    }
-
     public HfDataset select(int... indices) {
         List<Map<String, Object>> out = new ArrayList<>(indices.length);
         for (int i : indices) {
             out.add(new LinkedHashMap<>(rows.get(i)));
         }
         return new HfDataset(out, false, info + "/select");
+    }
+
+    /**
+     * {@inheritDoc}
+     * <p>Covariant override: returns {@code HfDataset} for fluent chaining.</p>
+     */
+    @Override
+    public HfDataset filter(Predicate<Map<String, Object>> pred) {
+        List<Map<String, Object>> out = rows.stream()
+                .filter(pred)
+                .map(LinkedHashMap::new)
+                .collect(Collectors.toCollection(ArrayList::new));
+        return new HfDataset(out, false, info + "/filter");
+    }
+
+    /**
+     * {@inheritDoc}
+     * <p>Covariant override: returns {@code HfDataset} for fluent chaining.</p>
+     */
+    @Override
+    public HfDataset map(Function<Map<String, Object>, Map<String, Object>> fn) {
+        List<Map<String, Object>> out = new ArrayList<>(rows.size());
+        for (Map<String, Object> r : rows) {
+            Map<String, Object> mapped = fn.apply(new LinkedHashMap<>(r));
+            out.add(mapped == null ? new LinkedHashMap<>() : new LinkedHashMap<>(mapped));
+        }
+        return new HfDataset(out, false, info + "/map");
+    }
+
+    @Override
+    public HfDataset shuffle(long seed) {
+        List<Map<String, Object>> out = new ArrayList<>(rows.size());
+        for (Map<String, Object> r : rows) out.add(new LinkedHashMap<>(r));
+        Collections.shuffle(out, new Random(seed));
+        return new HfDataset(out, false, info + "/shuffle");
+    }
+
+    /**
+     * Convenience constructor matching the abstract contract on
+     * {@link Dataset} with covariant return. Subclass-supplied variant.
+     */
+    public HfDataset(List<Map<String, Object>> rows) {
+        this(rows, false, "rows");
+    }
+
+    /** Mutable direct access to the underlying row list (for builders). */
+    protected List<Map<String, Object>> rows() {
+        return rows;
     }
 
     public HfDataset selectColumns(String... cols) {
@@ -1078,52 +1120,6 @@ public final class HfDataset implements Iterable<Map<String, Object>> {
             out.add(n);
         }
         return new HfDataset(out, false, info + "/rename");
-    }
-
-    public HfDataset filter(Predicate<Map<String, Object>> pred) {
-        List<Map<String, Object>> out = rows.stream()
-                .filter(pred)
-                .map(LinkedHashMap::new)
-                .collect(Collectors.toCollection(ArrayList::new));
-        return new HfDataset(out, false, info + "/filter");
-    }
-
-    public HfDataset map(Function<Map<String, Object>, Map<String, Object>> fn) {
-        List<Map<String, Object>> out = new ArrayList<>(rows.size());
-        for (Map<String, Object> r : rows) {
-            Map<String, Object> mapped = fn.apply(new LinkedHashMap<>(r));
-            out.add(mapped == null ? new LinkedHashMap<>() : new LinkedHashMap<>(mapped));
-        }
-        return new HfDataset(out, false, info + "/map");
-    }
-
-    /**
-     * HuggingFace {@code Dataset.map(fn, num_proc=, remove_columns=)}.
-     * {@code numProc} is accepted for signature parity; mapping is single-threaded.
-     */
-    public HfDataset map(Function<Map<String, Object>, Map<String, Object>> fn,
-                         int numProc, String... removeColumns) {
-        HfDataset mapped = map(fn);
-        if (removeColumns != null && removeColumns.length > 0) {
-            mapped = mapped.removeColumns(removeColumns);
-        }
-        return mapped;
-    }
-
-    public HfDataset mapColumn(String column, Function<Object, Object> fn) {
-        return map(r -> {
-            if (r.containsKey(column)) {
-                r.put(column, fn.apply(r.get(column)));
-            }
-            return r;
-        });
-    }
-
-    public HfDataset shuffle(long seed) {
-        List<Map<String, Object>> out = new ArrayList<>(rows.size());
-        for (Map<String, Object> r : rows) out.add(new LinkedHashMap<>(r));
-        Collections.shuffle(out, new Random(seed));
-        return new HfDataset(out, false, info + "/shuffle");
     }
 
     public HfDataset shard(int numShards, int index) {

@@ -40,7 +40,7 @@ public final class ViltConfig extends Config {
     private final double attentionDropout;
     private final double hiddenDropoutProb;
     private final String hiddenAct;
-    private final int initializerRange;
+    private final double initializerRange;
 
     public ViltConfig(PretrainedConfig base) {
         super(base);
@@ -52,7 +52,7 @@ public final class ViltConfig extends Config {
         this.attentionDropout = toDouble(base.extra().get("attention_dropout"), 0.0);
         this.hiddenDropoutProb = toDouble(base.extra().get("hidden_dropout_prob"), 0.0);
         this.hiddenAct = String.valueOf(base.extra().get("hidden_act"));
-        this.initializerRange = toInt(base.extra().get("initializer_range"), 0.02);
+        this.initializerRange = toDouble(base.extra().get("initializer_range"), 0.02);
     }
 
     public int imageSize() { return toInt(base().extra().get("image_size"), 384); }
@@ -63,7 +63,7 @@ public final class ViltConfig extends Config {
     public double attentionDropout() { return toDouble(base().extra().get("attention_dropout"), 0.0); }
     public double hiddenDropoutProb() { return toDouble(base().extra().get("hidden_dropout_prob"), 0.0); }
     public String hiddenAct() { Object v = base().extra().get("hidden_act"); return v == null ? "gelu" : String.valueOf(v); }
-    public int initializerRange() { return toInt(base().extra().get("initializer_range"), 0.02); }
+    public double initializerRange() { return toDouble(base().extra().get("initializer_range"), 0.02); }
 
     @Override public String modelType() { return MODEL_TYPE; }
     @Override public Class<? extends Config> getClass_() { return ViltConfig.class; }

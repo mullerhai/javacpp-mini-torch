@@ -103,11 +103,13 @@ public final class get_scheduler {
 
     static class CosineScheduler implements Lambda {
         private final int warmup;
+        private final int total;
         private final double maxRate;
         private final double minRate;
 
         CosineScheduler(int warmup, int total, double maxRate, double minRate) {
             this.warmup = warmup;
+            this.total = total;
             this.maxRate = maxRate;
             this.minRate = minRate;
         }

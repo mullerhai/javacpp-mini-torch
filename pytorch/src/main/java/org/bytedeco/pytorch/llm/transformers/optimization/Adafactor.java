@@ -20,6 +20,7 @@
  * limitations under the License.
  */
 package org.bytedeco.pytorch.llm.transformers.optimization;
+import org.bytedeco.pytorch.optim.options.*;
 
 import org.bytedeco.pytorch.Tensor;
 
@@ -55,7 +56,11 @@ public class Adafactor {
         Objects.requireNonNull(params, "params");
         // TODO: Replace with real org.bytedeco.pytorch.optim.Adafactor once generated.
         // Until then, wrap with a pass-through SGD stub.
-        this.wrapped = new org.bytedeco.pytorch.optim.SGD(params, (float) lr);
+        org.bytedeco.pytorch.TensorVector tv = new org.bytedeco.pytorch.TensorVector((long) params.size());
+        for (int i = 0; i < params.size(); i++) tv.put(i, params.get(i));
+        org.bytedeco.pytorch.optim.options.SGDOptions opts =
+                new org.bytedeco.pytorch.optim.options.SGDOptions(lr).weight_decay(weightDecay);
+        this.wrapped = new org.bytedeco.pytorch.optim.SGD(tv, opts);
     }
 
     /** Perform a single optimization step. */

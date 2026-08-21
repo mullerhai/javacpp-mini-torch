@@ -144,16 +144,13 @@ public final class HfApi {
         uploadFolder(folderPath, repoId, "model", commitMessage, null);
     }
 
-    public void uploadFolder(String folderPath, String repoId) throws IOException {
-        uploadFolder(folderPath, repoId, "model", "upload", this.token);
-    }
-
-    public void uploadFolder(String folderPath, String repoId, String token) throws IOException {
+    /** Tokens are first-class args in HF Python API; legacy Python callers may use this overload. */
+    public void uploadFolderWithToken(String folderPath, String repoId, String token) throws IOException {
         uploadFolder(folderPath, repoId, "model", "upload", token);
     }
 
     public void upload_folder(String folderPath, String repoId) throws IOException {
-        uploadFolder(folderPath, repoId);
+        uploadFolder(folderPath, repoId, "upload");
     }
 
     public void deleteRepo(String repoId, String repoType) throws IOException {

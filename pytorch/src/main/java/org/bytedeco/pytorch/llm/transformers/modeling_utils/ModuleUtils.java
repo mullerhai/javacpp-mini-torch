@@ -46,8 +46,19 @@ public final class ModuleUtils {
     public static Map<String, Tensor> named_parameters(Module m) {
         if (m == null) return Map.of();
         org.bytedeco.pytorch.StringTensorDict dict = m.named_parameters(/*recurse=*/true);
-        if (dict == null || dict.isNull()) return Map.of();
-        return dict.toMap();
+        if (dict == null || dict.is_empty()) return Map.of();
+        Map<String, Tensor> out = new java.util.LinkedHashMap<>();
+        try {
+            org.bytedeco.pytorch.StringVector keys = dict.keys();
+            org.bytedeco.pytorch.TensorVector values = dict.values();
+            long n = Math.min(keys.size(), values.size());
+            for (long i = 0; i < n; i++) {
+                out.put(keys.get(i).getString(), values.get(i));
+            }
+        } catch (Throwable ignore) {
+            return Map.of();
+        }
+        return out;
     }
 
     /**

@@ -71,6 +71,6 @@ public final class MaskedImageModelingPipeline {
     }
 
     public void close() {
-        try { bundle.model().close(); } catch (Throwable ignored) {}
+        try { bundle.model.close(); } catch (Throwable ignored) {}
     }
 }

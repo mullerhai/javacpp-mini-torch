@@ -52,17 +52,23 @@ public class HuberLoss implements Loss {
     public Tensor compute(Tensor logits, Tensor labels, Map<String, Object> kwargs) {
         Tensor diff = sub(logits, labels);
         Tensor absDiff = abs(diff);
-        Tensor sqDiff = pow(diff, new Scalar(2.0f));
-        Tensor deltaScalar = new Scalar((float) delta);
+        // Tensor.pow(Scalar) is the only overload — use the instance form.
+        Tensor sqDiff = diff.mul(diff);
+        Scalar deltaScalar = new Scalar((float) delta);
 
         // L2 region: |diff| <= delta
         Tensor l2Region = mul(sqDiff, new Scalar(0.5f));
         // L1 region: |diff| > delta
-        Tensor l1Region = sub(mul(absDiff, deltaScalar), mul(new Scalar(0.5f), pow(deltaScalar, new Scalar(2.0f))));
+        // halfDeltaSq = delta * delta * 0.5  — compute as a plain Scalar since
+        // there's no mul(Scalar, Scalar) overload.
+        Scalar halfDeltaSq = new Scalar(0.5f * (float) delta * (float) delta);
+        Tensor l1Region = sub(mul(absDiff, deltaScalar), halfDeltaSq);
 
         // Select per-element: where(absDiff <= delta, l2Region, l1Region)
         Tensor mask = absDiff.le(deltaScalar).to(diff.scalar_type());
-        Tensor loss = add(mul(mask, l2Region), mul(sub(new Scalar(1.0f), mask), l1Region));
+        // (1 - mask) → use neg() of (mask - 1)
+        Tensor invMask = sub(mask, new Scalar(1.0f)).neg();
+        Tensor loss = add(mul(mask, l2Region), mul(invMask, l1Region));
         return loss.mean();
     }
 }

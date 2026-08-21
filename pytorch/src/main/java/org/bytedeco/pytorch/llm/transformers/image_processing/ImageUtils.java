@@ -78,12 +78,16 @@ public final class ImageUtils {
         if (c == 3) return t;
         if (c == 1) {
             // Replicate gray channel 3 times.
-            Tensor gray = t.squeeze(LongOptional.of(t.dim() - 3));
-            return torch.stack(gray, gray, gray, /*dim=*/0);
+            Tensor gray = t.squeeze(t.dim() - 3);
+            org.bytedeco.pytorch.TensorVector stackVec = new org.bytedeco.pytorch.TensorVector();
+            stackVec.push_back(gray);
+            stackVec.push_back(gray);
+            stackVec.push_back(gray);
+            return torch.stack(stackVec, /*dim=*/0);
         }
         if (c == 4) {
             // Drop alpha.
-            return t.slice(t.dim() - 3, 0, 3, 1);
+            return t.slice(t.dim() - 3, new LongOptional(0), new LongOptional(3), 1L);
         }
         return t;
     }
@@ -131,7 +135,7 @@ public final class ImageUtils {
      */
     public static int inferChannelAxis(Tensor t, int fallback) {
         Objects.requireNonNull(t, "t");
-        int dim = t.dim();
+        int dim = Math.toIntExact(t.dim());
         if (dim == 3) return 0;          // CHW
         if (dim == 4) return 1;          // NCHW
         if (dim == 2) return fallback;   // HW — ambiguous
@@ -171,7 +175,8 @@ public final class ImageUtils {
     /** Rescale tensor from [0, 1] to [0, 255] and convert to byte. */
     public static Tensor toUint8(Tensor t) {
         return t.mul(new org.bytedeco.pytorch.Scalar(255.0))
-                .clamp(0.0, 255.0)
+                .clamp(new org.bytedeco.pytorch.ScalarOptional(new org.bytedeco.pytorch.Scalar(0.0)),
+                        new org.bytedeco.pytorch.ScalarOptional(new org.bytedeco.pytorch.Scalar(255.0)))
                 .to(torch.ScalarType.Byte);
     }
 }

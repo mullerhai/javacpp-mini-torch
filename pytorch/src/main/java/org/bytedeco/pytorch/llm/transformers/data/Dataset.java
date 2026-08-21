@@ -114,4 +114,22 @@ public abstract class Dataset implements Iterable<Map<String, Object>> {
             @Override public Map<String, Object> next() { return get(pos++); }
         };
     }
+
+    /**
+     * Wrap this abstract {@link Dataset} as a concrete {@link
+     * org.bytedeco.pytorch.llm.datasets.HfDataset}, copying all rows.
+     *
+     * <p>This enables mutual conversion between the {@code transformers.data}
+     * namespace (abstract contract) and the {@code llm.datasets} namespace
+     * (concrete, fluent, IO-rich HF-style implementation).
+     */
+    public org.bytedeco.pytorch.llm.datasets.HfDataset toHfDataset() {
+        int n = size();
+        java.util.List<java.util.Map<String, Object>> copy =
+                new java.util.ArrayList<>(n);
+        for (int i = 0; i < n; i++) {
+            copy.add(new java.util.LinkedHashMap<>(get(i)));
+        }
+        return org.bytedeco.pytorch.llm.datasets.HfDataset.fromList(copy);
+    }
 }

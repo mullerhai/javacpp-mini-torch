@@ -24,6 +24,8 @@ import org.bytedeco.pytorch.optim.schedulers.*;
 
 import org.bytedeco.pytorch.optim.Optimizer;
 
+import java.util.function.UnaryOperator;
+
 /**
  * Learning-rate scheduler factory mirroring HF's
  * {@code transformers.optimization.get_scheduler}.
@@ -58,7 +60,9 @@ public final class scheduler {
             case COSINE:
                 return makeCosineDecay(numWarmupSteps, numTrainingSteps);
             case CONSTANT:
-                return (step) -> step < numWarmupSteps ? (float) step / Math.max(1, numWarmupSteps) : 1.0f;
+                final int warmupSteps = numWarmupSteps;
+                return (UnaryOperator<Float>) (step) -> step < warmupSteps
+                        ? (float) step / Math.max(1, warmupSteps) : 1.0f;
             case CONSTANT_WITH_WARMUP:
                 return makeConstantWithWarmup(numWarmupSteps);
             default:
@@ -66,7 +70,7 @@ public final class scheduler {
         }
     }
 
-    private static FloatUnaryOperator makeLinearDecay(int numWarmupSteps, int numTrainingSteps) {
+    private static UnaryOperator<Float> makeLinearDecay(int numWarmupSteps, int numTrainingSteps) {
         return (step) -> {
             if (step < numWarmupSteps) {
                 return (float) step / Math.max(1, numWarmupSteps);
@@ -77,7 +81,7 @@ public final class scheduler {
         };
     }
 
-    private static FloatUnaryOperator makeCosineDecay(int numWarmupSteps, int numTrainingSteps) {
+    private static UnaryOperator<Float> makeCosineDecay(int numWarmupSteps, int numTrainingSteps) {
         return (step) -> {
             if (step < numWarmupSteps) {
                 return (float) step / Math.max(1, numWarmupSteps);
@@ -87,12 +91,7 @@ public final class scheduler {
         };
     }
 
-    private static FloatUnaryOperator makeConstantWithWarmup(int numWarmupSteps) {
+    private static UnaryOperator<Float> makeConstantWithWarmup(int numWarmupSteps) {
         return (step) -> step < numWarmupSteps ? (float) step / Math.max(1, numWarmupSteps) : 1.0f;
-    }
-
-    @FunctionalInterface
-    public interface FloatUnaryOperator {
-        float applyAsFloat(float operand);
     }
 }

@@ -424,7 +424,6 @@ public class UNet2DConditionModel extends Module {
     public UNet2DConditionModel(DiffusionUnetConfig config) {
         super("UNet2DConditionModel");
         this.config = Objects.requireNonNull(config);
-
         int[] chs = config.blockOutChannels();
         int base = chs[0];
         this.timeEmbedDim = base * 4;
@@ -487,6 +486,18 @@ public class UNet2DConditionModel extends Module {
         // Output conv
         this.convOut = register_module("conv_out",
             new Conv2dImpl(conv2d(base, config.outChannels(), 3)));
+    }
+
+    // ── Accessors ──────────────────────────────────────────────────
+
+    /** Number of latent channels expected at the input of {@link #forward}. */
+    public int inChannels() {
+        return config.inChannels();
+    }
+
+    /** Underlying configuration (read-only). */
+    public DiffusionUnetConfig config() {
+        return config;
     }
 
     // ── Forward ───────────────────────────────────────────────────
@@ -558,6 +569,4 @@ private static Tensor upsample2x(Tensor x) {
             up = up.repeat_interleave(2, new LongOptional(3) ,new LongOptional());       // [b, c, h*2, w*2]
             return up;
         }
-
-    public DiffusionUnetConfig config() { return config; }
 }

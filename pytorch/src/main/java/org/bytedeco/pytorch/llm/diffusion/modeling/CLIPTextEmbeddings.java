@@ -259,4 +259,32 @@ public class CLIPTextEmbeddings extends Module {
     }
 
     public CLIPTextConfig config() { return config; }
+
+    /**
+     * Convenience overload that tokenises a single prompt using a simple
+     * whitespace split into a BPE-style id sequence. Used by pipelines
+     * (e.g. {@code FluxPipeline}) that take a {@link String} prompt.
+     *
+     * <p>Tokens are mapped via {@code ch % vocabSize} so any reasonable
+     * UTF-8 string becomes a valid id sequence without an external
+     * tokenizer. For production-quality tokenisation use a {@code
+     * org.bytedeco.pytorch.llm.tokenizers.Tokenizer} instance instead and
+     * call {@link #forward(int[][])} directly.
+     */
+    public Tensor forward(String prompt) {
+        Objects.requireNonNull(prompt, "prompt");
+        int maxPos = config.maxPositionEmbeddings();
+        int vocabSize = config.vocabSize();
+        String[] toks = prompt.trim().isEmpty() ? new String[0] : prompt.trim().split("\\s+");
+        int n = Math.min(toks.length, maxPos);
+        int[][] ids = new int[1][n];
+        for (int i = 0; i < n; i++) {
+            int h = 0;
+            for (int k = 0; k < toks[i].length(); k++) {
+                h = h * 31 + toks[i].charAt(k);
+            }
+            ids[0][i] = Math.floorMod(h, vocabSize);
+        }
+        return forward(ids);
+    }
 }

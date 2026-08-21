@@ -117,13 +117,15 @@ public class FluxPipeline {
             Tensor latentInput = org.bytedeco.pytorch.global.torch.cat(
                     new org.bytedeco.pytorch.TensorVector(latents, latents));
 
-            // Unet forward
-            Tensor noisePred = unet.forward(latentInput, new Scalar(t), promptEmbedding);
+            // Unet forward — timestep must be a Tensor of shape [batch]
+            Tensor timestep = org.bytedeco.pytorch.global.torch.full(
+                    new long[]{latentInput.size(0)}, new Scalar(t));
+            Tensor noisePred = unet.forward(latentInput, timestep, promptEmbedding);
 
             // Guidance (if scale > 1)
             if (guidanceScale > 1.0) {
-                Tensor predCond = noisePred.get(new org.bytedeco.pytorch.LongOptional(0));
-                Tensor predUncond = noisePred.get(new org.bytedeco.pytorch.LongOptional(1));
+                Tensor predCond = noisePred.get(0L);
+                Tensor predUncond = noisePred.get(1L);
                 Tensor guidedPred = predUncond.add(
                         predCond.sub(predUncond).mul(new Scalar((float) guidanceScale)));
                 noisePred = guidedPred;

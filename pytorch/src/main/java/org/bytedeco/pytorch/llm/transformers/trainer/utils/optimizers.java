@@ -43,7 +43,7 @@ public final class optimizers {
     public static org.bytedeco.pytorch.optim.Optimizer create_optimizer(Module model, TrainingArguments args) {
         optimizer_types type = optimizer_types.from(args.optim());
         return switch (type) {
-            case ADAM   -> create_adam(model, args.learningRate(), args.weightDecay());
+            case ADAM   -> create_adam(model, args.learningRate());
             case SGD    -> create_sgd(model, args.learningRate());
             case ADAFACTOR -> create_adafactor(model, args.learningRate());
             default     -> create_adamw(model, args.learningRate(), args.weightDecay());

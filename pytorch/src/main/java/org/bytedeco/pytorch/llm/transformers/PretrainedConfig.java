@@ -616,6 +616,72 @@ public final class PretrainedConfig {
     public String torchDtype() { return torchDtype; }
     public Map<String, Object> extra() { return extra; }
 
+    // ---- Convenience accessors over the `extra` map for downstream model code ----
+    // These get/set values by HF key so modeling files can read whatever each
+    // architecture stores there without needing every config type to know about
+    // every model. Falls back to a sensible default when the key is absent.
+
+    /** Number of labels for the classification head (HF "num_labels"). */
+    public int numLabels() { return extraInt("num_labels", 2); }
+    public PretrainedConfig numLabels(int v) { extra.put("num_labels", v); return this; }
+
+    /** Transformer hidden / model dimension (HF "d_model" — used by T5, BART, MBart, M2M100, NLLB). */
+    public int dModel() { return extraInt("d_model", hiddenSize); }
+    public PretrainedConfig dModel(int v) { extra.put("d_model", v); return this; }
+
+    /** Vision Transformer / Beit / DeiT patch size (HF "patch_size"). */
+    public int patchSize() { return extraInt("patch_size", 16); }
+    public PretrainedConfig patchSize(int v) { extra.put("patch_size", v); return this; }
+
+    /** GPT-2 / ImageGPT main embedding width (HF "n_embd"). */
+    public int n_embd() { return extraInt("n_embd", hiddenSize); }
+
+    /** GPT-2 / ImageGPT feed-forward inner dimension (HF "n_inner"). */
+    public int n_inner() {
+        Object v = extra.get("n_inner");
+        if (v instanceof Number n) return n.intValue();
+        if (v != null) return Integer.parseInt(String.valueOf(v));
+        return 4 * hiddenSize;
+    }
+
+    /** Generic hidden_size (alias of hiddenSize() but spelled like HF key). */
+    public int hidden_size() { return hiddenSize; }
+
+    /** Embedding dimension (HF "embedding_size" — Albert). */
+    public int embeddingSize() {
+        Object v = extra.get("embedding_size");
+        if (v instanceof Number n) return n.intValue();
+        if (v != null) return Integer.parseInt(String.valueOf(v));
+        return hiddenSize;
+    }
+
+    /** Projection output dim for CLIP-style architectures. */
+    public int projectionDim() { return extraInt("projection_dim", hiddenSize); }
+
+    /** Hidden sizes for hierarchical / ConvNext models. Returns int[]{}. */
+    public int[] hiddenSizes() {
+        Object v = extra.get("hidden_sizes");
+        if (v instanceof List<?> list) {
+            int[] out = new int[list.size()];
+            for (int i = 0; i < list.size(); i++) out[i] = extraInt("hidden_sizes[" + i + "]", 0);
+            // Re-read raw since extraInt would rekey...
+            for (int i = 0; i < list.size(); i++) {
+                Object item = list.get(i);
+                if (item instanceof Number n) out[i] = n.intValue();
+                else if (item != null) out[i] = Integer.parseInt(String.valueOf(item));
+            }
+            return out;
+        }
+        return new int[0];
+    }
+
+    private int extraInt(String key, int dflt) {
+        Object v = extra.get(key);
+        if (v instanceof Number n) return n.intValue();
+        if (v != null) return Integer.parseInt(String.valueOf(v));
+        return dflt;
+    }
+
     // ---- Gemma-specific getters ----
     public String hiddenActivation() { return hiddenActivation; }
     public double attentionDropout() { return attentionDropout; }

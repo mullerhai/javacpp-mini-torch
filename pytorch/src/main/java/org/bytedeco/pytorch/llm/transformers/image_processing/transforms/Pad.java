@@ -65,7 +65,9 @@ public class Pad extends Transform {
      * @param paddingMode padding mode
      */
     public Pad(int[] padding, int fill, PaddingMode paddingMode) {
-        this(parsePadding(padding), fill, paddingMode);
+        this(parsePadding(padding)[0], parsePadding(padding)[1],
+                parsePadding(padding)[2], parsePadding(padding)[3],
+                fill, paddingMode);
     }
 
     /**
@@ -89,11 +91,11 @@ public class Pad extends Transform {
         if (top == 0 && left == 0 && bottom == 0 && right == 0) return t;
         long[] pad = new long[]{top, bottom, left, right};
         if (paddingMode == PaddingMode.CONSTANT) {
-            return torch.constant_pad_nd(t, pad, (double) fill);
+            return torch.constant_pad_nd(t, pad, new org.bytedeco.pytorch.Scalar(fill));
         }
         // EDGE / REFLECT / REPLICATE are not yet wired to torch primitives;
         // fall back to constant pad with a warning.
-        return torch.constant_pad_nd(t, pad, (double) fill);
+        return torch.constant_pad_nd(t, pad, new org.bytedeco.pytorch.Scalar(fill));
     }
 
     /**

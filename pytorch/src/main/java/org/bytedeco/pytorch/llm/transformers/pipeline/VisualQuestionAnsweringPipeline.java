@@ -69,8 +69,11 @@ public final class VisualQuestionAnsweringPipeline {
 
     /** Returns the generated text answer for the given image and question. */
     public String call(Object image, String question) {
-        List<Map<String, String>> messages = List.of(
-                Map.of("role", "user", "content", question));
+        java.util.Map<String, Object> msg = new java.util.LinkedHashMap<>();
+        msg.put("role", "user");
+        msg.put("content", question);
+        java.util.List<java.util.Map<String, Object>> messages = new java.util.ArrayList<>();
+        messages.add(msg);
         return bundle.chat(messages);
     }
 

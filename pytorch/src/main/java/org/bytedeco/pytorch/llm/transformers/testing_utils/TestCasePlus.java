@@ -34,11 +34,13 @@ public class TestCasePlus {
 
     /**
      * Skip the current test if PyTorch was built without CUDA support.
+     *
+     * <p>Without JUnit on the classpath this just throws
+     * {@link TestSkippedException} which subclasses can catch.
      */
     protected void requireTorch() {
         if (!org.bytedeco.pytorch.global.torch.is_available()) {
-            org.junit.jupiter.api.Assumptions.assumeTrue(
-                    false, "PyTorch is not available");
+            throw new TestSkippedException("PyTorch is not available");
         }
     }
 
@@ -47,8 +49,7 @@ public class TestCasePlus {
      */
     protected void requireCUDA() {
         if (!org.bytedeco.pytorch.global.torch.cuda_is_available()) {
-            org.junit.jupiter.api.Assumptions.assumeTrue(
-                    false, "CUDA is not available");
+            throw new TestSkippedException("CUDA is not available");
         }
     }
 

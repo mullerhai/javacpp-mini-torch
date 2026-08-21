@@ -55,4 +55,5 @@ public class InstanceNorm3dImpl extends InstanceNorm3dImplBase {
     /** Pointer cast constructor. Invokes {@link Pointer#Pointer(Pointer)}. */
     public InstanceNorm3dImpl(Pointer p) { super(p); }
 
+  public native void _check_input_dim(@Const @ByRef Tensor input);
 }

@@ -49,6 +49,7 @@ public class VisualQuestionAnsweringOutput extends org.bytedeco.pytorch.llm.tran
     /** Get the answer with the highest logit score. */
     public int predictedAnswer() {
         if (logits == null || !logits.defined()) return -1;
-        return (int) logits.argmax(logits.dim() - 1).item().toLong();
+        long dim = logits.dim() - 1;
+        return (int) logits.argmax(new org.bytedeco.pytorch.LongOptional(dim), false).item().toLong();
     }
 }

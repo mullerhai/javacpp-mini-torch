@@ -67,7 +67,7 @@ public class ToTensor extends Transform {
      */
     public static Tensor fromImageData(ImageData image) {
         Objects.requireNonNull(image, "image");
-        BufferedImage bi = image.toBufferedImage();
+        BufferedImage bi = image.getImage();
         return fromBufferedImage(bi);
     }
 

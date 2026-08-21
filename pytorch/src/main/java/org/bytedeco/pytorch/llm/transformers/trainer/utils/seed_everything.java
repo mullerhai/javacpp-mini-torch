@@ -39,7 +39,7 @@ public final class seed_everything {
     public static int seed(int seed) {
         org.bytedeco.pytorch.global.torch.manual_seed(seed);
         try {
-            org.bytedeco.pytorch.global.torch.cuda.manual_seed_all(seed);
+            org.bytedeco.pytorch.global.torch.cuda_manual_seed_all(seed);
         } catch (Exception ignored) {
             // CUDA not available
         }

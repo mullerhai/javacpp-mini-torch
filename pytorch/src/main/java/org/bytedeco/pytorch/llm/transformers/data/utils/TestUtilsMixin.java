@@ -64,7 +64,7 @@ public final class TestUtilsMixin {
             throw new AssertionError("One of the tensors is undefined");
         }
         // Use torch.allclose under the hood
-        boolean close = org.bytedeco.pytorch.global.torch.allclose(a, b, rtol, atol);
+        boolean close = org.bytedeco.pytorch.global.torch.allclose(a, b, rtol, atol, false);
         if (!close) {
             throw new AssertionError(
                     "Tensors not close (rtol=" + rtol + ", atol=" + atol + "):\n  a=" + a + "\n  b=" + b);

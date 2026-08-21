@@ -40,7 +40,7 @@ public final class YolosConfig extends Config {
     private final double layerNormEps;
     private final double attentionDropout;
     private final double hiddenDropoutProb;
-    private final int initializerRange;
+    private final double initializerRange;
     private final boolean qkvBias;
 
     public YolosConfig(PretrainedConfig base) {
@@ -53,7 +53,7 @@ public final class YolosConfig extends Config {
         this.layerNormEps = toDouble(base.extra().get("layer_norm_eps"), 1e-12);
         this.attentionDropout = toDouble(base.extra().get("attention_dropout"), 0.0);
         this.hiddenDropoutProb = toDouble(base.extra().get("hidden_dropout_prob"), 0.0);
-        this.initializerRange = toInt(base.extra().get("initializer_range"), 0.02);
+        this.initializerRange = toDouble(base.extra().get("initializer_range"), 0.02);
         this.qkvBias = base.extra().get("qkv_bias") == Boolean.TRUE;
     }
 
@@ -65,7 +65,7 @@ public final class YolosConfig extends Config {
     public double layerNormEps() { return toDouble(base().extra().get("layer_norm_eps"), 1e-12); }
     public double attentionDropout() { return toDouble(base().extra().get("attention_dropout"), 0.0); }
     public double hiddenDropoutProb() { return toDouble(base().extra().get("hidden_dropout_prob"), 0.0); }
-    public int initializerRange() { return toInt(base().extra().get("initializer_range"), 0.02); }
+    public double initializerRange() { return toDouble(base().extra().get("initializer_range"), 0.02); }
     public boolean qkvBias() { return base().extra().get("qkv_bias") == Boolean.TRUE; }
 
     @Override public String modelType() { return MODEL_TYPE; }

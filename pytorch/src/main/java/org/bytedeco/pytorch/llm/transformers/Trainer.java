@@ -72,8 +72,8 @@ public final class Trainer {
         TrainingArguments ta = TrainingArguments.builder()
                 .outputDir(String.valueOf(args.getOrDefault("output_dir", "output")))
                 .build();
-        HfDataset trainDs = train instanceof HfDataset h ? h : null;
-        HfDataset evalDs = eval instanceof HfDataset h ? h : null;
+        HfDataset trainDs = train instanceof HfDataset h ? h : (train == null ? null : train.toHfDataset());
+        HfDataset evalDs = eval instanceof HfDataset h ? h : (eval == null ? null : eval.toHfDataset());
         org.bytedeco.pytorch.llm.transformers.trainer.Trainer t =
                 new org.bytedeco.pytorch.llm.transformers.trainer.Trainer(model, ta, trainDs, evalDs, null);
         t.train();

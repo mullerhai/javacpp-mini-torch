@@ -70,7 +70,7 @@ public class RandomHorizontalFlip extends Transform {
         if (t == null) return null;
         if (rng.nextDouble() < p) {
             // Flip along width axis (last spatial dimension).
-            int wDim = t.dim() - 1;
+            long wDim = t.dim() - 1;
             return torch.flip(t, new long[]{wDim});
         }
         return t;

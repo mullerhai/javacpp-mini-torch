@@ -55,4 +55,5 @@ public class BatchNorm3dImpl extends BatchNorm3dImplBase {
     /** Pointer cast constructor. Invokes {@link Pointer#Pointer(Pointer)}. */
     public BatchNorm3dImpl(Pointer p) { super(p); }
 
+  public native void _check_input_dim(@Const @ByRef Tensor input);
 }

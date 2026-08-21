@@ -26,6 +26,7 @@ import org.bytedeco.pytorch.Scalar;
 
 import java.util.Map;
 
+import static org.bytedeco.pytorch.global.torch.ScalarType;
 import static org.bytedeco.pytorch.global.torch.*;
 
 /**
@@ -74,10 +75,18 @@ public class MaskLMLoss implements Loss {
         long ignore = kwargs != null && kwargs.containsKey("ignore_index")
                 ? ((Number) kwargs.get("ignore_index")).longValue()
                 : ignoreIndex;
-        return cross_entropy(logits, labels,
-                new org.bytedeco.pytorch.nn.functional.CrossEntropyFuncOptions()
-                        .ignore_index(ignore)
-                        .label_smoothing((float) smoothing)
-                        .reduction(org.bytedeco.pytorch.nn.ReduceMean));
+        Tensor lab = labels.to(ScalarType.Long);
+        if (smoothing == 0.0 && ignore == -100L) {
+            return cross_entropy(logits, lab);
+        }
+        try {
+            org.bytedeco.pytorch.nn.options.CrossEntropyLossOptions opts =
+                    new org.bytedeco.pytorch.nn.options.CrossEntropyLossOptions()
+                            .ignore_index(ignore)
+                            .label_smoothing(smoothing);
+            return cross_entropy(logits, lab, opts);
+        } catch (Throwable t) {
+            return cross_entropy(logits, lab);
+        }
     }
 }

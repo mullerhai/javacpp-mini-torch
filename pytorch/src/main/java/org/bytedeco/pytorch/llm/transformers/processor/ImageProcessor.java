@@ -227,10 +227,9 @@ public class ImageProcessor implements AutoCloseable {
 
     private static ImageProcessor fromPreprocessorJson(String json) {
         // Parse minimal fields we care about; ignore unknown keys.
-        org.bytedeco.pytorch.utils.json.Json j = new org.bytedeco.pytorch.utils.json.Json();
         java.util.Map<?, ?> m;
         try {
-            m = j.decodeObject(json);
+            m = org.bytedeco.pytorch.utils.json.Json.decodeObject(json);
         } catch (java.io.IOException e) {
             // Return a default processor if JSON parsing fails
             return ImageProcessor.createImageNet();

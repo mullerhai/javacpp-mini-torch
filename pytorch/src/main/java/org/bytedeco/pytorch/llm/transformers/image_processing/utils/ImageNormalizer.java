@@ -81,12 +81,12 @@ public final class ImageNormalizer {
                     "Expected 3 channels (RGB), got " + mean.length);
         }
 
-        int cDim = channelDim.axis(t.dim());
+        long cDim = channelDim.axis((int) t.dim());
         if (cDim < 0) {
             throw new IllegalArgumentException(
                     "Cannot determine channel axis for tensor with " + t.dim() + " dims");
         }
-        long c = t.size(cDim);
+        long c = t.size((int) cDim);
         if (c != mean.length) {
             throw new IllegalArgumentException(
                     "Channel dimension has " + c + " channels, but mean/std have " +
@@ -94,8 +94,8 @@ public final class ImageNormalizer {
         }
 
         // Build (1, C, 1, 1) broadcast tensors — works for CHW, NCHW, etc.
-        long[] meanShape = makeShape(t.dim(), cDim, mean.length);
-        long[] stdShape  = makeShape(t.dim(), cDim, mean.length);
+        long[] meanShape = makeShape((int) t.dim(), (int) cDim, mean.length);
+        long[] stdShape  = makeShape((int) t.dim(), (int) cDim, mean.length);
 
         Tensor meanT = torch.tensor(mean).reshape(meanShape).to(t.scalar_type());
         Tensor stdT  = torch.tensor(std).reshape(stdShape).to(t.scalar_type());

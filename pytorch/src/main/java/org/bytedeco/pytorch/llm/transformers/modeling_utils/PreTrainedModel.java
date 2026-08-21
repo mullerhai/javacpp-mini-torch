@@ -22,6 +22,8 @@
 package org.bytedeco.pytorch.llm.transformers.modeling_utils;
 
 import org.bytedeco.pytorch.StringTensorDict;
+import org.bytedeco.pytorch.StringVector;
+import org.bytedeco.pytorch.TensorVector;
 import org.bytedeco.pytorch.nn.Module;
 import org.bytedeco.pytorch.llm.hub.HfHub;
 import org.bytedeco.pytorch.llm.transformers.loading.WeightLoader;
@@ -29,6 +31,7 @@ import org.bytedeco.pytorch.llm.transformers.loading.WeightLoader;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
@@ -50,7 +53,7 @@ public abstract class PreTrainedModel extends Module {
      * @throws IOException on load failure
      */
     public static Module fromPretrained(String modelId, HfHub hub) throws IOException {
-        Path snapshot = hub.download(modelId);
+        Path snapshot = hub.snapshotDownload(modelId);
         Module model = null; // Subclasses create the Module instance
         if (model != null) {
             WeightLoader.LoadReport report = WeightLoader.loadAndBind(model, snapshot);
@@ -62,12 +65,24 @@ public abstract class PreTrainedModel extends Module {
     /**
      * Get all named parameters as a map.
      *
+     * <p>This is a Java-friendly convenience around {@link Module#named_parameters()}
+     * which returns a native dictionary type. The map name is intentionally
+     * pluralised {@code namedParameters} (camelCase) to avoid clashing with
+     * the native method.
+     *
      * @return unmodifiable map of parameter name to tensor
      */
-    public Map<String, org.bytedeco.pytorch.Tensor> named_parameters() {
-        StringTensorDict dict = super.named_parameters(/*recurse=*/true);
-        if (dict == null || dict.isNull()) return Collections.emptyMap();
-        return dict.toMap();
+    public Map<String, org.bytedeco.pytorch.Tensor> namedParameters() {
+        StringTensorDict dict = named_parameters(/*recurse=*/true);
+        if (dict == null || dict.is_empty()) return Collections.emptyMap();
+        Map<String, org.bytedeco.pytorch.Tensor> out = new LinkedHashMap<>();
+        StringVector keys = dict.keys();
+        TensorVector values = dict.values();
+        long n = Math.min(keys.size(), values.size());
+        for (long i = 0; i < n; i++) {
+            out.put(keys.get(i).getString(), values.get(i));
+        }
+        return Collections.unmodifiableMap(out);
     }
 
     @Override

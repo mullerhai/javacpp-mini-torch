@@ -1663,8 +1663,8 @@ public class Module extends Pointer {
   public native @ByVal T_TensorTensor_T forward_tuple_tensor_tensor_attn(@Const @ByRef Tensor query, @Const @ByRef Tensor key, @Const @ByRef Tensor value, @Const @ByRef Tensor key_padding_mask, @Cast("bool") boolean need_weights, @Const @ByRef Tensor attn_mask, @Cast("bool") boolean average_attn_weights);
   // Named forward_tensor_* so JavaCPP does not treat derived non-virtual
   // BatchNorm/InstanceNorm::forward as an override of Module::forward.
-  public native @ByVal TensorVector forward_tensor_vector(@Const @ByRef TensorVector inputs);
-  public native @ByVal TensorVector forward_tensor_dict(@Const @ByRef StringTensorDict inputs);
+  
+  
 
 
   /** The implementation of the various {@code to()} methods. */

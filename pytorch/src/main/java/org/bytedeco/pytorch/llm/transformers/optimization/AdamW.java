@@ -52,7 +52,7 @@ public class AdamW {
                  double beta1, double beta2, double eps) {
         Objects.requireNonNull(params, "params");
         TensorVector tv = new TensorVector();
-        for (Tensor t : params) tv.add(t);
+        for (Tensor t : params) tv.push_back(t);
         AdamWOptions opts = new AdamWOptions(lr);
         opts.weight_decay().put(weightDecay);
         DoublePointer betas = new DoublePointer(2);

@@ -22,6 +22,7 @@
 package org.bytedeco.pytorch.llm.transformers.hub;
 
 import java.io.IOException;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.Objects;
 

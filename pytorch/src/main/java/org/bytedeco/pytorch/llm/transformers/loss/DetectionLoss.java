@@ -22,10 +22,12 @@ package org.bytedeco.pytorch.llm.transformers.loss;
 
 import org.bytedeco.pytorch.Tensor;
 import org.bytedeco.pytorch.Scalar;
+import org.bytedeco.pytorch.ScalarOptional;
 
 import java.util.Map;
 import java.util.LinkedHashMap;
 
+import static org.bytedeco.pytorch.global.torch.ScalarType;
 import static org.bytedeco.pytorch.global.torch.*;
 
 /**
@@ -90,16 +92,14 @@ public class DetectionLoss implements Loss {
         } else {
             classLoss = cross_entropy(logits.transpose(0, 1).contiguous(),
                     labels.to(ScalarType.Long),
-                    new org.bytedeco.pytorch.nn.functional.CrossEntropyFuncOptions()
-                            .ignore_index(-100)
-                            .label_smoothing(0.0f));
+                    null);
         }
 
-        Tensor total = mul(new Scalar((float) classWeight), classLoss);
+        Tensor total = mul(classLoss, new Scalar((float) classWeight));
 
         if (boxes != null) {
             Tensor boxLoss = l1Loss(logits, boxes);
-            total = add(total, mul(new Scalar((float) boxWeight), boxLoss));
+            total = add(total, mul(boxLoss, new Scalar((float) boxWeight)));
         }
 
         return total;
@@ -109,10 +109,12 @@ public class DetectionLoss implements Loss {
         // Focal CE for imbalanced detection
         Tensor probs = softmax(logits, logits.dim() - 1);
         Tensor pt = probs.gather(logits.dim() - 1, targets.unsqueeze(-1), true)
-                .clamp(1e-7f, 1.0f - 1e-7f);
-        Tensor focalWeight = pow(sub(new Scalar(1.0f), pt), new Scalar((float) ceGamma));
+                .clamp(new ScalarOptional(new Scalar(1e-7f)), new ScalarOptional(new Scalar(1.0f - 1e-7f)));
+        // sub(Scalar, Tensor) is not available; use rsub (Scalar - Tensor).
+        Tensor focalWeight = org.bytedeco.pytorch.global.torch.rsub(pt, new Scalar(1.0f)).pow(new Scalar((float) ceGamma));
         Tensor ce = neg(log(pt));
-        return mul(mul(new Scalar((float) ceAlpha, focalWeight.scalar_type()), focalWeight), ce).mean();
+        // mul(Scalar, Tensor) does not exist; use Tensor.mul(Scalar).
+        return mul(mul(focalWeight, new Scalar((float) ceAlpha)), ce).mean();
     }
 
     private Tensor l1Loss(Tensor logits, Tensor boxes) {

@@ -23,9 +23,11 @@ package org.bytedeco.pytorch.llm.transformers.loss;
 
 import org.bytedeco.pytorch.Tensor;
 import org.bytedeco.pytorch.Scalar;
+import org.bytedeco.pytorch.ScalarOptional;
 
 import java.util.Map;
 
+import static org.bytedeco.pytorch.global.torch.ScalarType;
 import static org.bytedeco.pytorch.global.torch.*;
 
 /**
@@ -62,14 +64,16 @@ public class FocalLoss implements Loss {
 
         // Get probability for the true class
         Tensor pt = probs.gather(logits.dim() - 1, labels.to(ScalarType.Long), true)
-                .clamp(1e-7f, 1.0f - 1e-7f);
+                .clamp(new ScalarOptional(new Scalar(1e-7f)), new ScalarOptional(new Scalar(1.0f - 1e-7f)));
 
-        // Focal weight: (1 - p_t)^gamma
-        Tensor focalWeight = pow(sub(new Scalar(1.0f), pt), new Scalar((float) gamma));
+        // Focal weight: (1 - p_t)^gamma  — Tensor.pow(Scalar) is the only overload.
+        // sub(Scalar, Tensor) is not available; use rsub (Scalar - Tensor).
+        Tensor focalWeight = org.bytedeco.pytorch.global.torch.rsub(pt, new Scalar(1.0f)).pow(new Scalar((float) gamma));
 
         // Cross-entropy log term
         Tensor ceLoss = nll_loss(neg(log(pt)), labels, null);
 
-        return mul(mul(new Scalar((float) alpha, focalWeight.scalar_type()), focalWeight), ceLoss).mean();
+        // mul(Scalar, Tensor) not available; use Tensor * Scalar (Tensor.mul(Scalar)).
+        return mul(mul(focalWeight, new Scalar((float) alpha)), ceLoss).mean();
     }
 }

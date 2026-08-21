@@ -74,8 +74,11 @@ public final class ImageToTextPipeline {
 
     /** Returns the generated caption with a hint for max_new_tokens. */
     public String call(Object image, int maxNewTokens) {
-        List<Map<String, String>> messages = List.of(
-                Map.of("role", "user", "content", "Describe this image in detail."));
+        List<Map<String, Object>> messages = new java.util.ArrayList<>();
+        java.util.Map<String, Object> msg = new java.util.LinkedHashMap<>();
+        msg.put("role", "user");
+        msg.put("content", "Describe this image in detail.");
+        messages.add(msg);
         return bundle.chat(messages);
     }
 
