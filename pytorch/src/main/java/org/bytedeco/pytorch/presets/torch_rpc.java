@@ -350,19 +350,61 @@ public class torch_rpc implements LoadEnabled, InfoMapper {
             .put(new Info("utils.h").linePatterns(".*").skip())
         ;
 
-        //--- SerializedPyObj destructive accessors -------------------------------
-        // SerializedPyObj::tensors_() returns a const reference to the internal
-        // std::vector<Tensor>; JavaCPP's @ByRef getter does not bump the
-        // intrusive_ptr refcount on each Tensor, so closing/GC'ing the
-        // SerializedPyObj (which destroys the internal vector) frees the
-        // shared Tensors and then the returned TensorVector tries to free
-        // them again -> SIGSEGV / "double free detected in tcache 2".
-        // Skipping the getter; add safe count / payload helpers below.
+        //--- SerializedPyObj::tensors_() ownership fix ---------------------------
+        //
+        // Root cause of "double free detected in tcache 2" / SIGSEGV in glibc
+        // free() (see hs_err_pid251939.log):
+        //
+        //   types.h:60 declares SerializedPyObj with a *public data field*
+        //   `std::vector<at::Tensor> tensors_;`. JavaCPP sees the trailing
+        //   underscore and synthesises a getter/setter pair:
+        //
+        //     public native @ByRef TensorVector tensors_();
+        //     public native SerializedPyObj tensors_(TensorVector setter);
+        //
+        //   The @ByRef getter returns a *const reference to the internal
+        //   std::vector*. The Java peer TensorVector wraps the same C++
+        //   pointer. Each at::Tensor in the vector owns a c10::intrusive_ptr
+        //   to TensorImpl. JavaCPP does NOT bump those refcounts when
+        //   wrapping an @ByRef vector — it just points at the storage.
+        //
+        //   When try-with-resources closes both SerializedPyObj AND the
+        //   returned TensorVector, two independent destruction paths run on
+        //   the same Tensors:
+        //     1. SerializedPyObj.dtor → ~std::vector<at::Tensor> → each Tensor's
+        //        intrusive_ptr drops to 0 → TensorImpl is freed.
+        //     2. TensorVector.dtor (Java peer) → again destroys the same
+        //        Tensors → free() detects the double free → SIGSEGV inside
+        //        glibc's tcache unlink (lock xadd at the crash PC).
+        //
+        //   payload_() is unaffected because @StdString makes JavaCPP deep-
+        //   copy the string contents into an independent Java BytePointer.
+        //
+        // Fix: force the getter to return *by value* (@ByVal). JavaCPP then
+        // emits a stub that materialises a fresh std::vector<at::Tensor> on
+        // the C++ side. The at::Tensor copy constructor bumps each Tensor's
+        // intrusive_ptr, so the returned TensorVector owns its Tensors
+        // independently of the source SerializedPyObj. Closing the source
+        // only releases the original refcount; closing the returned vector
+        // releases the new refcount — no double free.
+        //
+        // The setter is left unchanged (the C++ side moves the input vector
+        // in, transferring intrusive_ptrs to the SerializedPyObj).
         infoMap
-            .put(new Info("torch::distributed::rpc::SerializedPyObj::tensors",
-                          "torch::distributed::rpc::SerializedPyObj::tensors_",
-                          "torch::distributed::rpc::SerializedPyObj::payload_").skip())
+            .put(new Info("torch::distributed::rpc::SerializedPyObj::tensors")
+                 .pointerTypes("TensorVector"))
+            .put(new Info("torch::distributed::rpc::SerializedPyObj::tensors_")
+                 .javaText(
+                    "  /** Safe getter. Returns a deep-copied TensorVector whose\n"
+                  + "   *  Tensors are independent of this object's internal\n"
+                  + "   *  storage; closing this object will not invalidate the\n"
+                  + "   *  returned vector. Replaces the unsafe @ByRef getter\n"
+                  + "   *  that caused double-free SIGSEGV. */\n"
+                  + "  public native @ByVal TensorVector tensors_();\n"
+                  + "  public native @Name(\"tensors_\") SerializedPyObj tensors_(TensorVector setter);\n"
+                 ))
         ;
+
         // These are static members of RpcAgent (not free functions). Register the
         // shared_ptr peer type; leave the static methods to the parser so @Name
         // stays as RpcAgent::getCurrentRpcAgent (no double-namespace mangling).
