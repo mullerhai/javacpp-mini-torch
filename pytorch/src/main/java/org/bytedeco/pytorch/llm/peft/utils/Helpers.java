@@ -6,7 +6,7 @@
  * the Free Software Foundation (subject to the "Classpath" exception),
  * either version 2, or any later version (collectively, the "License").
  */
-package org.bytedeco.pytorch.helpers;
+package org.bytedeco.pytorch.llm.peft.utils;
 
 import org.bytedeco.pytorch.nn.Module;
 

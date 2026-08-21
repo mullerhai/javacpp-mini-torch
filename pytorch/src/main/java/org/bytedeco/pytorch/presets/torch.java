@@ -109,7 +109,7 @@ import org.bytedeco.openblas.presets.openblas;
 
             },
             exclude = {"openblas_config.h", "cblas.h", "lapacke_config.h", "lapacke_mangling.h", "lapack.h", "lapacke.h", "lapacke_utils.h"},
-            link = { "c10", "torch", "torch_cpu" }
+            link = { "c10", "torch", "torch_cpu", "shm" }
         ),
         @Platform(
             value = {"linux", "macosx", "windows"},
