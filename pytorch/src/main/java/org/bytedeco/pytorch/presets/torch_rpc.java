@@ -405,6 +405,32 @@ public class torch_rpc implements LoadEnabled, InfoMapper {
                  ))
         ;
 
+        //--- SerializedPyObj(BytePointer, TensorVector) constructor -----
+        //   The parser generates `allocate(... @ByRef(true) TensorVector tensors)`
+        //   which lets C++ std::move(tensors) transfer ownership *out* of the
+        //   Java peer. The Java peer still holds the same native pointer; when
+        //   try-with-resources closes it after the SerializedPyObj is closed,
+        //   the C++ destructor runs a second time on the moved-from vector →
+        //   double free / SIGSEGV inside glibc free().
+        //
+        //   The fix: declare the parameter @ByVal so JavaCPP copies the vector
+        //   by value on the C++ side, bumps each Tensor's intrusive_ptr via
+        //   at::Tensor copy ctor, and SerializedPyObj's constructor moves the
+        //   fresh copy in. Both the Java peer and SerializedPyObj hold
+        //   independent ownership; closing either is safe.
+        infoMap
+            .put(new Info("torch::distributed::rpc::SerializedPyObj::SerializedPyObj").javaText(
+                  "  public SerializedPyObj(BytePointer payload, TensorVector tensors) "
+                + "{ super((Pointer)null); allocate(payload, tensors); }\n"
+                + "  private native void allocate(@Cast({\"\", \"std::string&&\"}) "
+                + "@StdString BytePointer payload, @ByVal TensorVector tensors);\n"
+                + "  public SerializedPyObj(String payload, TensorVector tensors) "
+                + "{ super((Pointer)null); allocate(payload, tensors); }\n"
+                + "  private native void allocate(@Cast({\"\", \"std::string&&\"}) "
+                + "@StdString String payload, @ByVal TensorVector tensors);\n"
+            ))
+        ;
+
         // These are static members of RpcAgent (not free functions). Register the
         // shared_ptr peer type; leave the static methods to the parser so @Name
         // stays as RpcAgent::getCurrentRpcAgent (no double-namespace mangling).

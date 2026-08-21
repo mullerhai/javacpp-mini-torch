@@ -32,5 +32,11 @@ public class SerializedPyObj extends Pointer {
   public static native @ByVal SerializedPyObj fromIValues(@StdVector IValue value);
 
   public native @StdString BytePointer payload_(); public native SerializedPyObj payload_(BytePointer setter);
-  public native @ByRef TensorVector tensors_(); public native SerializedPyObj tensors_(TensorVector setter);
+    /** Safe getter. Returns a deep-copied TensorVector whose
+     *  Tensors are independent of this object's internal
+     *  storage; closing this object will not invalidate the
+     *  returned vector. Replaces the unsafe @ByRef getter
+     *  that caused double-free SIGSEGV. */
+    public native @ByVal TensorVector tensors_();
+    public native @Name("tensors_") SerializedPyObj tensors_(TensorVector setter);
 }
