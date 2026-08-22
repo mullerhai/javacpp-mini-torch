@@ -23,10 +23,10 @@ public class SerializedPyObj extends Pointer {
     /** Pointer cast constructor. Invokes {@link Pointer#Pointer(Pointer)}. */
     public SerializedPyObj(Pointer p) { super(p); }
 
-    public SerializedPyObj(BytePointer payload, TensorVector tensors) { super((Pointer)null); allocate(payload, tensors); }
-    private native void allocate(@Cast({"","std::string&&"}) @StdString BytePointer payload, @ByRef(true) TensorVector tensors);
-    public SerializedPyObj(String payload, TensorVector tensors) { super((Pointer)null); allocate(payload, tensors); }
-    private native void allocate(@Cast({"","std::string&&"}) @StdString String payload, @ByRef(true) TensorVector tensors);
+    public SerializedPyObj(BytePointer payload, TensorVector tensors) { super((Pointer)null); allocate(tensors, payload); }
+    private native @Name("makeSerializedPyObj") void allocate(@Cast({"", "const std::vector<at::Tensor>*"}) TensorVector tensors, @Cast({"", "const std::string&"}) @StdString BytePointer payload);
+    public SerializedPyObj(String payload, TensorVector tensors) { super((Pointer)null); allocate(tensors, payload); }
+    private native @Name("makeSerializedPyObj") void allocate(@Cast({"", "const std::vector<at::Tensor>*"}) TensorVector tensors, @Cast({"", "const std::string&"}) @StdString String payload);
 
   
   public static native @ByVal SerializedPyObj fromIValues(@StdVector IValue value);

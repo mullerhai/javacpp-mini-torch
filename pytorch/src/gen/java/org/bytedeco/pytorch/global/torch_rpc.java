@@ -228,6 +228,77 @@ public class torch_rpc extends org.bytedeco.pytorch.presets.torch_rpc {
 // #endif  // !defined(TORCH_STABLE_ONLY) && !defined(TORCH_TARGET_VERSION)
 
 
+// Parsed from serialized_py_obj_shim.h
+
+/*
+ * Parse-time + compile-time shim for SerializedPyObj construction.
+ *
+ * The upstream types.h declares:
+ *   SerializedPyObj(std::string&& payload, std::vector<at::Tensor>&& tensors);
+ *
+ * JavaCPP's default emit:
+ *   new SerializedPyObj((std::string&&)adapter0, *ptr1);
+ *
+ * fails to compile because *ptr1 is an lvalue that cannot bind to
+ * std::vector<at::Tensor>&&.
+ *
+ * Fix: a free function `makeSerializedPyObj(tensors, payload)` in the
+ * GLOBAL namespace that takes a TensorVector pointer and a
+ * const-string-ref (matching exactly what JavaCPP's generated stub
+ * passes) and forwards via copy-then-std::move into the real rvalue
+ * ctor. The argument order matches JavaCPP's emit; the parameter
+ * types match its cast expressions.
+ *
+ * Why pointer for tensors: JavaCPP's emit is `makeSerializedPyObj(ptr0,
+ * (const std::string&)adapter1)` where ptr0 is `std::vector<at::Tensor>*`
+ * (a raw pointer, not a reference). Forcing const-ref on a pointer
+ * argument would silently deref into a vector *and* take its address,
+ * yielding the wrong type. A `const std::vector<at::Tensor>*` parameter
+ * binds directly to the pointer JavaCPP passes — zero deref at the
+ * call site.
+ *
+ * Why const-ref for payload: the second arg is `(const std::string&)
+ * adapter1`, which is already an lvalue-of-const-ref. Binding it to
+ * another `const std::string&` is a no-op cast.
+ *
+ * JavaCPP routes the allocate() stub through this factory via
+ * @Name("makeSerializedPyObj"). Bypassing the ctor sidesteps the
+ * rvalue-binding compile error.
+ *
+ * Important: the factory MUST live in the GLOBAL namespace. JavaCPP's
+ * generated JNI functions are emitted as `extern "C"` symbols outside
+ * any namespace, so an unqualified call to `makeSerializedPyObj(...)`
+ * resolves only against global-namespace symbols. A version nested
+ * inside `torch::distributed::rpc` produces
+ *   `error: 'makeSerializedPyObj' was not declared in this scope`
+ * even though the rpc namespace contains it.
+ *
+ * The factory returns a freshly heap-allocated SerializedPyObj* whose
+ * ownership transfers to the caller. JavaCPP's deallocator will
+ * `delete` it on GC, matching the original ctor allocation semantics.
+ */
+// #pragma once
+
+// #include <torch/csrc/distributed/rpc/types.h>
+// #include <memory>
+// #include <string>
+// #include <utility>
+// #include <vector>
+
+// Global-namespace factory. JavaCPP's generated JNI stub calls
+// `makeSerializedPyObj(ptr0, (const std::string&)adapter1)` from
+// `extern "C"` JNI-exported functions in the global namespace. We
+// deref the TensorVector pointer here so the rvalue ctor sees a real
+// vector (the copy bumps intrusive_ptr on every Tensor, giving the new
+// SerializedPyObj its own owned storage — peer TensorVector's data is
+// untouched).
+public static native SerializedPyObj makeSerializedPyObj(
+    @Const TensorVector tensors,
+    @StdString BytePointer payload);
+public static native SerializedPyObj makeSerializedPyObj(
+    @Const TensorVector tensors,
+    @StdString String payload);
+
 // Parsed from torch/csrc/distributed/rpc/rref_proto.h
 
 // #if !defined(TORCH_STABLE_ONLY) && !defined(TORCH_TARGET_VERSION)

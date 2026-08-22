@@ -73,6 +73,10 @@ import org.bytedeco.pytorch.presets.torch.PointerInfo;
             // Parse-time shim (no Python.h). init() swaps this for the real
             // request_callback_impl.h when compiling jnitorch_rpc.
             "request_callback_impl_java.h",
+            // Shim providing `makeSerializedPyObj` factory used by the
+            // SerializedPyObj(byte[], TensorVector) constructor binding —
+            // see the SerializedPyObj::SerializedPyObj Info below.
+            "serialized_py_obj_shim.h",
             "torch/csrc/distributed/rpc/rref_proto.h",
             "torch/csrc/distributed/rpc/rref_impl.h",
             "torch/csrc/distributed/rpc/rref_context.h",
@@ -405,29 +409,39 @@ public class torch_rpc implements LoadEnabled, InfoMapper {
                  ))
         ;
 
-        //--- SerializedPyObj(BytePointer, TensorVector) constructor -----
-        //   The parser generates `allocate(... @ByRef(true) TensorVector tensors)`
-        //   which lets C++ std::move(tensors) transfer ownership *out* of the
-        //   Java peer. The Java peer still holds the same native pointer; when
-        //   try-with-resources closes it after the SerializedPyObj is closed,
-        //   the C++ destructor runs a second time on the moved-from vector →
-        //   double free / SIGSEGV inside glibc free().
+        //--- SerializedPyObj(BytePointer/String, TensorVector) constructor -----
+        //   Root cause of the compile error in jnitorch_rpc.cpp:
         //
-        //   The fix: declare the parameter @ByVal so JavaCPP copies the vector
-        //   by value on the C++ side, bumps each Tensor's intrusive_ptr via
-        //   at::Tensor copy ctor, and SerializedPyObj's constructor moves the
-        //   fresh copy in. Both the Java peer and SerializedPyObj hold
-        //   independent ownership; closing either is safe.
+        //   types.h declares the ctor as
+        //     SerializedPyObj(std::string&& payload, std::vector<at::Tensor>&& tensors)
+        //
+        //   JavaCPP's default emit is
+        //     new SerializedPyObj((std::string&&)adapter0, *ptr1);
+        //                                                *ptr1 is lvalue
+        //   which cannot bind to the rvalue parameter — compile error.
+        //
+        //   Fix: route the binding through a free function
+        //   `makeSerializedPyObj(payload, tensors)` declared in the shim
+        //   header `serialized_py_obj_shim.h`. The factory takes both args
+        //   by const-ref (matching the lvalues JavaCPP passes) and forwards
+        //   via std::move into the real rvalue ctor. JavaCPP's stub calls
+        //   the factory via @Name("makeSerializedPyObj"), bypassing the
+        //   && ctor entirely.
+        //
+        //   The @Cast types match the factory's parameters exactly so the
+        //   generated stub passes the lvalue through with the correct type.
         infoMap
             .put(new Info("torch::distributed::rpc::SerializedPyObj::SerializedPyObj").javaText(
                   "  public SerializedPyObj(BytePointer payload, TensorVector tensors) "
-                + "{ super((Pointer)null); allocate(payload, tensors); }\n"
-                + "  private native void allocate(@Cast({\"\", \"std::string&&\"}) "
-                + "@StdString BytePointer payload, @ByVal TensorVector tensors);\n"
+                + "{ super((Pointer)null); allocate(tensors, payload); }\n"
+                + "  private native @Name(\"makeSerializedPyObj\") void allocate("
+                + "@Cast({\"\", \"const std::vector<at::Tensor>*\"}) TensorVector tensors, "
+                + "@Cast({\"\", \"const std::string&\"}) @StdString BytePointer payload);\n"
                 + "  public SerializedPyObj(String payload, TensorVector tensors) "
-                + "{ super((Pointer)null); allocate(payload, tensors); }\n"
-                + "  private native void allocate(@Cast({\"\", \"std::string&&\"}) "
-                + "@StdString String payload, @ByVal TensorVector tensors);\n"
+                + "{ super((Pointer)null); allocate(tensors, payload); }\n"
+                + "  private native @Name(\"makeSerializedPyObj\") void allocate("
+                + "@Cast({\"\", \"const std::vector<at::Tensor>*\"}) TensorVector tensors, "
+                + "@Cast({\"\", \"const std::string&\"}) @StdString String payload);\n"
             ))
         ;
 
