@@ -43,8 +43,10 @@ package org.bytedeco.pytorch;
 import org.bytedeco.javacpp.BooleanPointer;
 import org.bytedeco.javacpp.LongPointer;
 import org.bytedeco.javacpp.Pointer;
+import org.bytedeco.javacpp.annotation.Cast;
 import org.bytedeco.pytorch.DoubleOptional;
 import org.bytedeco.pytorch.LongVector;
+import org.bytedeco.pytorch.LongVectorOptional;
 import org.bytedeco.pytorch.enumtype.Conv2dPadding;
 import org.bytedeco.pytorch.nn.modules.*;
 import org.bytedeco.pytorch.nn.modules.container.*;
@@ -146,6 +148,10 @@ public class nnn {
         return register(name, new LinearImpl(new LinearOptions(inFeatures, outFeatures).bias(bias)));
     }
 
+    public static LinearImpl Linear(String name, long inFeatures, long outFeatures, boolean bias) {
+        return register(name, new LinearImpl(new LinearOptions(inFeatures, outFeatures).bias(bias)));
+    }
+
     public static LinearImpl linear(String name, LinearOptions options) {
         return register(name, new LinearImpl(options));
     }
@@ -156,6 +162,10 @@ public class nnn {
     }
 
     public static LinearImpl linear(long inFeatures, long outFeatures, boolean bias) {
+        return create(new LinearImpl(new LinearOptions(inFeatures, outFeatures).bias(bias)));
+    }
+
+    public static LinearImpl Linear(long inFeatures, long outFeatures, boolean bias) {
         return create(new LinearImpl(new LinearOptions(inFeatures, outFeatures).bias(bias)));
     }
 
@@ -171,7 +181,15 @@ public class nnn {
         return register(name, new BilinearImpl(in1Features, in2Features, outFeatures));
     }
 
+    public static BilinearImpl Bilinear(String name, long in1Features, long in2Features, long outFeatures) {
+        return register(name, new BilinearImpl(in1Features, in2Features, outFeatures));
+    }
+
     public static BilinearImpl bilinear(String name, long in1Features, long in2Features, long outFeatures, boolean bias) {
+        return register(name, new BilinearImpl(new BilinearOptions(in1Features, in2Features, outFeatures).bias(bias)));
+    }
+
+    public static BilinearImpl Bilinear(String name, long in1Features, long in2Features, long outFeatures, boolean bias) {
         return register(name, new BilinearImpl(new BilinearOptions(in1Features, in2Features, outFeatures).bias(bias)));
     }
 
@@ -180,6 +198,10 @@ public class nnn {
     }
 
     public static BilinearImpl bilinear(long in1Features, long in2Features, long outFeatures) {
+        return create(new BilinearImpl(in1Features, in2Features, outFeatures));
+    }
+
+    public static BilinearImpl Bilinear(long in1Features, long in2Features, long outFeatures) {
         return create(new BilinearImpl(in1Features, in2Features, outFeatures));
     }
 
@@ -195,11 +217,24 @@ public class nnn {
         return register(name, new Conv1dImpl(new Conv1dOptions(inChannels, outChannels, new LongPointer(kernelSize)).stride(new LongPointer(stride))));
     }
 
+    public static Conv1dImpl Conv1d(String name, long inChannels, long outChannels, long kernelSize) {
+        return register(name, new Conv1dImpl(inChannels, outChannels, new LongPointer(kernelSize)));
+    }
+
+    public static Conv1dImpl Conv1d(String name, long inChannels, long outChannels, long kernelSize, long stride) {
+        return register(name, new Conv1dImpl(new Conv1dOptions(inChannels, outChannels, new LongPointer(kernelSize)).stride(new LongPointer(stride))));
+    }
+
+
     public static Conv1dImpl conv1d(String name, Conv1dOptions options) {
         return register(name, new Conv1dImpl(options));
     }
 
     public static Conv1dImpl conv1d(long inChannels, long outChannels, long kernelSize) {
+        return create(new Conv1dImpl(inChannels, outChannels, new LongPointer(kernelSize)));
+    }
+
+    public static Conv1dImpl Conv1d(long inChannels, long outChannels, long kernelSize) {
         return create(new Conv1dImpl(inChannels, outChannels, new LongPointer(kernelSize)));
     }
 
@@ -219,11 +254,27 @@ public class nnn {
         return register(name, new Conv2dImpl(new Conv2dOptions(inChannels, outChannels, new LongPointer(kernelSize, kernelSize)).stride(new LongPointer(stride, stride)).padding(new Conv2dPadding(new LongPointer(padding, padding)))));
     }
 
+    public static Conv2dImpl Conv2d(String name, long inChannels, long outChannels, long kernelSize) {
+        return register(name, new Conv2dImpl(inChannels, outChannels, new LongPointer(kernelSize, kernelSize)));
+    }
+
+    public static Conv2dImpl Conv2d(String name, long inChannels, long outChannels, long kernelSize, long stride) {
+        return register(name, new Conv2dImpl(new Conv2dOptions(inChannels, outChannels, new LongPointer(kernelSize, kernelSize)).stride(new LongPointer(stride, stride))));
+    }
+
+    public static Conv2dImpl Conv2d(String name, long inChannels, long outChannels, long kernelSize, long stride, long padding) {
+        return register(name, new Conv2dImpl(new Conv2dOptions(inChannels, outChannels, new LongPointer(kernelSize, kernelSize)).stride(new LongPointer(stride, stride)).padding(new Conv2dPadding(new LongPointer(padding, padding)))));
+    }
+
     public static Conv2dImpl conv2d(String name, Conv2dOptions options) {
         return register(name, new Conv2dImpl(options));
     }
 
     public static Conv2dImpl conv2d(long inChannels, long outChannels, long kernelSize) {
+        return create(new Conv2dImpl(inChannels, outChannels, new LongPointer(kernelSize, kernelSize)));
+    }
+
+    public static Conv2dImpl Conv2d(long inChannels, long outChannels, long kernelSize) {
         return create(new Conv2dImpl(inChannels, outChannels, new LongPointer(kernelSize, kernelSize)));
     }
 
@@ -239,11 +290,23 @@ public class nnn {
         return register(name, new Conv3dImpl(new Conv3dOptions(inChannels, outChannels, new LongPointer(kernelSize, kernelSize, kernelSize)).stride(new LongPointer(stride, stride, stride))));
     }
 
+    public static Conv3dImpl Conv3d(String name, long inChannels, long outChannels, long kernelSize) {
+        return register(name, new Conv3dImpl(inChannels, outChannels, new LongPointer(kernelSize, kernelSize, kernelSize)));
+    }
+
+    public static Conv3dImpl Conv3d(String name, long inChannels, long outChannels, long kernelSize, long stride) {
+        return register(name, new Conv3dImpl(new Conv3dOptions(inChannels, outChannels, new LongPointer(kernelSize, kernelSize, kernelSize)).stride(new LongPointer(stride, stride, stride))));
+    }
+
     public static Conv3dImpl conv3d(String name, Conv3dOptions options) {
         return register(name, new Conv3dImpl(options));
     }
 
     public static Conv3dImpl conv3d(long inChannels, long outChannels, long kernelSize) {
+        return create(new Conv3dImpl(inChannels, outChannels, new LongPointer(kernelSize, kernelSize, kernelSize)));
+    }
+
+    public static Conv3dImpl Conv3d(long inChannels, long outChannels, long kernelSize) {
         return create(new Conv3dImpl(inChannels, outChannels, new LongPointer(kernelSize, kernelSize, kernelSize)));
     }
 
@@ -260,6 +323,14 @@ public class nnn {
                 .stride(new LongPointer(stride))));
     }
 
+    public static ConvTranspose1dImpl Conv_transpose1d(String name, long inChannels, long outChannels, long kernelSize) {
+        return register(name, new ConvTranspose1dImpl(inChannels, outChannels, new LongPointer(kernelSize)));
+    }
+
+    public static ConvTranspose1dImpl Conv_transpose1d(String name, long inChannels, long outChannels, long kernelSize, long stride) {
+        return register(name, new ConvTranspose1dImpl(new ConvTranspose1dOptions(inChannels, outChannels, new LongPointer(kernelSize))
+                .stride(new LongPointer(stride))));
+    }
     public static ConvTranspose1dImpl conv_transpose1d(String name, ConvTranspose1dOptions options) {
         return register(name, new ConvTranspose1dImpl(options));
     }
@@ -268,6 +339,9 @@ public class nnn {
         return create(new ConvTranspose1dImpl(inChannels, outChannels, new LongPointer(kernelSize)));
     }
 
+    public static ConvTranspose1dImpl Conv_transpose1d(long inChannels, long outChannels, long kernelSize) {
+        return create(new ConvTranspose1dImpl(inChannels, outChannels, new LongPointer(kernelSize)));
+    }
     // ========================================================================
     // CONV TRANSPOSE 2D
     // ========================================================================
@@ -277,7 +351,17 @@ public class nnn {
     }
 
     public static ConvTranspose2dImpl conv_transpose2d(String name, long inChannels, long outChannels, long kernelSize, long stride) {
-        return register(name, new ConvTranspose2dImpl(new ConvTranspose2dOptions(inChannels, outChannels, new LongPointer(kernelSize, kernelSize)).stride(new LongPointer(stride, stride))));
+        return register(name, new ConvTranspose2dImpl(new ConvTranspose2dOptions(inChannels, outChannels, new LongPointer(kernelSize, kernelSize))
+                .stride(new LongPointer(stride, stride))));
+    }
+
+    public static ConvTranspose2dImpl Conv_transpose2d(String name, long inChannels, long outChannels, long kernelSize) {
+        return register(name, new ConvTranspose2dImpl(inChannels, outChannels, new LongPointer(kernelSize, kernelSize)));
+    }
+
+    public static ConvTranspose2dImpl Conv_transpose2d(String name, long inChannels, long outChannels, long kernelSize, long stride) {
+        return register(name, new ConvTranspose2dImpl(new ConvTranspose2dOptions(inChannels, outChannels, new LongPointer(kernelSize, kernelSize))
+                .stride(new LongPointer(stride, stride))));
     }
 
     public static ConvTranspose2dImpl conv_transpose2d(String name, ConvTranspose2dOptions options) {
@@ -285,7 +369,11 @@ public class nnn {
     }
 
     public static ConvTranspose2dImpl conv_transpose2d(long inChannels, long outChannels, long kernelSize) {
-        return create(new ConvTranspose2dImpl(inChannels, outChannels, new LongPointer(kernelSize,kernelSize)));
+        return create(new ConvTranspose2dImpl(inChannels, outChannels, new LongPointer(kernelSize, kernelSize)));
+    }
+
+    public static ConvTranspose2dImpl Conv_transpose2d(long inChannels, long outChannels, long kernelSize) {
+        return create(new ConvTranspose2dImpl(inChannels, outChannels, new LongPointer(kernelSize, kernelSize)));
     }
 
     public static ConvTranspose2dImpl conv_transpose2d(ConvTranspose2dOptions options) {
@@ -296,23 +384,35 @@ public class nnn {
     // CONV TRANSPOSE 3D
     // ========================================================================
 
-    public static ConvTranspose3dImpl conv_transpose3d(String name, long inChannels, long outChannels, long kernelSize) {
-        return register(name, new ConvTranspose3dImpl(inChannels, outChannels, new LongPointer(kernelSize, kernelSize, kernelSize)));
-    }
 
     public static ConvTranspose3dImpl conv_transpose3d(String name, ConvTranspose3dOptions options) {
         return register(name, new ConvTranspose3dImpl(options));
     }
-
+    public static ConvTranspose3dImpl conv_transpose3d(ConvTranspose3dOptions options) {
+        return create(new ConvTranspose3dImpl(options));
+    }
     public static ConvTranspose3dImpl conv_transpose3d(long inChannels, long outChannels, long kernelSize) {
         return create(new ConvTranspose3dImpl(inChannels, outChannels, new LongPointer(kernelSize, kernelSize, kernelSize)));
     }
 
-    public static ConvTranspose3dImpl conv_transpose3d(ConvTranspose3dOptions options) {
-        return create(new ConvTranspose3dImpl(options));
+    public static ConvTranspose3dImpl conv_transpose3d(String name, long inChannels, long outChannels, long kernelSize) {
+        return register(name, new ConvTranspose3dImpl(inChannels, outChannels, new LongPointer(kernelSize, kernelSize, kernelSize)));
     }
 
     public static ConvTranspose3dImpl conv_transpose3d(String name, long inChannels, long outChannels, long kernelSize, long stride) {
+        return register(name, new ConvTranspose3dImpl(new ConvTranspose3dOptions(inChannels, outChannels, new LongPointer(kernelSize, kernelSize, kernelSize))
+                .stride(new LongPointer(stride, stride, stride))));
+    }
+
+    public static ConvTranspose3dImpl Conv_transpose3d(long inChannels, long outChannels, long kernelSize) {
+        return create(new ConvTranspose3dImpl(inChannels, outChannels, new LongPointer(kernelSize, kernelSize, kernelSize)));
+    }
+
+    public static ConvTranspose3dImpl Conv_transpose3d(String name, long inChannels, long outChannels, long kernelSize) {
+        return register(name, new ConvTranspose3dImpl(inChannels, outChannels, new LongPointer(kernelSize, kernelSize, kernelSize)));
+    }
+
+    public static ConvTranspose3dImpl Conv_transpose3d(String name, long inChannels, long outChannels, long kernelSize, long stride) {
         return register(name, new ConvTranspose3dImpl(new ConvTranspose3dOptions(inChannels, outChannels, new LongPointer(kernelSize, kernelSize, kernelSize))
                 .stride(new LongPointer(stride, stride, stride))));
     }
@@ -332,6 +432,18 @@ public class nnn {
         return create(new AvgPool1dImpl(new LongPointer(kernelSize)));
     }
 
+    public static AvgPool1dImpl Avg_pool1d(String name, long kernelSize) {
+        return register(name, new AvgPool1dImpl(new LongPointer(kernelSize)));
+    }
+
+    public static AvgPool1dImpl Avg_pool1d(String name, long kernelSize, long stride) {
+        return register(name, new AvgPool1dImpl(new AvgPool1dOptions(new LongPointer(kernelSize)).stride(new LongPointer(stride))));
+    }
+
+    public static AvgPool1dImpl Avg_pool1d(long kernelSize) {
+        return create(new AvgPool1dImpl(new LongPointer(kernelSize)));
+    }
+
     public static AvgPool1dImpl avg_pool1d(String name, AvgPool1dOptions options) {
         return register(name, new AvgPool1dImpl(options));
     }
@@ -348,6 +460,18 @@ public class nnn {
     }
 
     public static MaxPool1dImpl max_pool1d(long kernelSize) {
+        return create(new MaxPool1dImpl(new LongPointer(kernelSize)));
+    }
+
+    public static MaxPool1dImpl Max_pool1d(String name, long kernelSize) {
+        return register(name, new MaxPool1dImpl(new LongPointer(kernelSize)));
+    }
+
+    public static MaxPool1dImpl Max_pool1d(String name, long kernelSize, long stride) {
+        return register(name, new MaxPool1dImpl(new MaxPool1dOptions(new LongPointer(kernelSize)).stride(new LongPointer(stride))));
+    }
+
+    public static MaxPool1dImpl Max_pool1d(long kernelSize) {
         return create(new MaxPool1dImpl(new LongPointer(kernelSize)));
     }
 
@@ -431,11 +555,22 @@ public class nnn {
     }
 
     public static AvgPool2dImpl avg_pool2d(String name, long kernelSize, long stride) {
-        return register(name, new AvgPool2dImpl(new AvgPool2dOptions(new LongPointer(kernelSize, kernelSize))
-                .stride(new LongPointer(stride, stride))));
+        return register(name, new AvgPool2dImpl(new AvgPool2dOptions(new LongPointer(kernelSize, kernelSize)).stride(new LongPointer(stride, stride))));
     }
 
     public static AvgPool2dImpl avg_pool2d(long kernelSize) {
+        return create(new AvgPool2dImpl(new LongPointer(kernelSize, kernelSize)));
+    }
+
+    public static AvgPool2dImpl Avg_pool2d(String name, long kernelSize) {
+        return register(name, new AvgPool2dImpl(new LongPointer(kernelSize, kernelSize)));
+    }
+
+    public static AvgPool2dImpl Avg_pool2d(String name, long kernelSize, long stride) {
+        return register(name, new AvgPool2dImpl(new AvgPool2dOptions(new LongPointer(kernelSize, kernelSize)).stride(new LongPointer(stride, stride))));
+    }
+
+    public static AvgPool2dImpl Avg_pool2d(long kernelSize) {
         return create(new AvgPool2dImpl(new LongPointer(kernelSize, kernelSize)));
     }
 
@@ -451,11 +586,22 @@ public class nnn {
     }
 
     public static MaxPool2dImpl max_pool2d(String name, long kernelSize, long stride) {
-        return register(name, new MaxPool2dImpl(new MaxPool2dOptions(new LongPointer(kernelSize, kernelSize))
-                .stride(new LongPointer(stride, stride))));
+        return register(name, new MaxPool2dImpl(new MaxPool2dOptions(new LongPointer(kernelSize, kernelSize)).stride(new LongPointer(stride, stride))));
     }
 
     public static MaxPool2dImpl max_pool2d(long kernelSize) {
+        return create(new MaxPool2dImpl(new LongPointer(kernelSize, kernelSize)));
+    }
+
+    public static MaxPool2dImpl Max_pool2d(String name, long kernelSize) {
+        return register(name, new MaxPool2dImpl(new LongPointer(kernelSize, kernelSize)));
+    }
+
+    public static MaxPool2dImpl Max_pool2d(String name, long kernelSize, long stride) {
+        return register(name, new MaxPool2dImpl(new MaxPool2dOptions(new LongPointer(kernelSize, kernelSize)).stride(new LongPointer(stride, stride))));
+    }
+
+    public static MaxPool2dImpl Max_pool2d(long kernelSize) {
         return create(new MaxPool2dImpl(new LongPointer(kernelSize, kernelSize)));
     }
 
@@ -554,11 +700,22 @@ public class nnn {
     }
 
     public static AvgPool3dImpl avg_pool3d(String name, long kernelSize, long stride) {
-        return register(name, new AvgPool3dImpl(new AvgPool3dOptions(new LongPointer(kernelSize, kernelSize, kernelSize)).
-                stride(new LongPointer(stride, stride, stride))));
+        return register(name, new AvgPool3dImpl(new AvgPool3dOptions(new LongPointer(kernelSize, kernelSize, kernelSize)).stride(new LongPointer(stride, stride, stride))));
     }
 
     public static AvgPool3dImpl avg_pool3d(long kernelSize) {
+        return create(new AvgPool3dImpl(new LongPointer(kernelSize, kernelSize, kernelSize)));
+    }
+
+    public static AvgPool3dImpl Avg_pool3d(String name, long kernelSize) {
+        return register(name, new AvgPool3dImpl(new LongPointer(kernelSize, kernelSize, kernelSize)));
+    }
+
+    public static AvgPool3dImpl Avg_pool3d(String name, long kernelSize, long stride) {
+        return register(name, new AvgPool3dImpl(new AvgPool3dOptions(new LongPointer(kernelSize, kernelSize, kernelSize)).stride(new LongPointer(stride, stride, stride))));
+    }
+
+    public static AvgPool3dImpl Avg_pool3d(long kernelSize) {
         return create(new AvgPool3dImpl(new LongPointer(kernelSize, kernelSize, kernelSize)));
     }
 
@@ -578,6 +735,18 @@ public class nnn {
     }
 
     public static MaxPool3dImpl max_pool3d(long kernelSize) {
+        return create(new MaxPool3dImpl(new LongPointer(kernelSize, kernelSize, kernelSize)));
+    }
+
+    public static MaxPool3dImpl Max_pool3d(String name, long kernelSize) {
+        return register(name, new MaxPool3dImpl(new LongPointer(kernelSize, kernelSize, kernelSize)));
+    }
+
+    public static MaxPool3dImpl Max_pool3d(String name, long kernelSize, long stride) {
+        return register(name, new MaxPool3dImpl(new MaxPool3dOptions(new LongPointer(kernelSize, kernelSize, kernelSize)).stride(new LongPointer(stride, stride, stride))));
+    }
+
+    public static MaxPool3dImpl Max_pool3d(long kernelSize) {
         return create(new MaxPool3dImpl(new LongPointer(kernelSize, kernelSize, kernelSize)));
     }
 
@@ -904,6 +1073,19 @@ public class nnn {
         return create(new BatchNorm1dImpl(new BatchNormOptions(numFeatures)));
     }
 
+
+    public static BatchNorm1dImpl BatchNorm1d(String name, long numFeatures) {
+        return register(name, new BatchNorm1dImpl(new BatchNormOptions(numFeatures)));
+    }
+
+    public static BatchNorm1dImpl BatchNorm1d(String name, long numFeatures, float momentum, float eps) {
+        return register(name, new BatchNorm1dImpl(new BatchNormOptions(numFeatures).momentum(new DoubleOptional(momentum)).eps(eps)));
+    }
+
+    public static BatchNorm1dImpl BatchNorm1d(long numFeatures) {
+        return create(new BatchNorm1dImpl(new BatchNormOptions(numFeatures)));
+    }
+
     public static BatchNorm1dImpl batch_norm1d(String name, BatchNormOptions options) {
         return register(name, new BatchNorm1dImpl(options));
     }
@@ -920,6 +1102,18 @@ public class nnn {
     }
 
     public static BatchNorm2dImpl batch_norm2d(long numFeatures) {
+        return create(new BatchNorm2dImpl(new BatchNormOptions(numFeatures)));
+    }
+
+    public static BatchNorm2dImpl BatchNorm2d(String name, long numFeatures) {
+        return register(name, new BatchNorm2dImpl(new BatchNormOptions(numFeatures)));
+    }
+
+    public static BatchNorm2dImpl BatchNorm2d(String name, long numFeatures, float momentum, float eps) {
+        return register(name, new BatchNorm2dImpl(new BatchNormOptions(numFeatures).momentum(new DoubleOptional(momentum)).eps(eps)));
+    }
+
+    public static BatchNorm2dImpl BatchNorm2d(long numFeatures) {
         return create(new BatchNorm2dImpl(new BatchNormOptions(numFeatures)));
     }
 
@@ -942,6 +1136,18 @@ public class nnn {
         return create(new BatchNorm3dImpl(new BatchNormOptions(numFeatures)));
     }
 
+    public static BatchNorm3dImpl BatchNorm3d(String name, long numFeatures) {
+        return register(name, new BatchNorm3dImpl(new BatchNormOptions(numFeatures)));
+    }
+
+    public static BatchNorm3dImpl BatchNorm3d(String name, long numFeatures, float momentum, float eps) {
+        return register(name, new BatchNorm3dImpl(new BatchNormOptions(numFeatures).momentum(new DoubleOptional(momentum)).eps(eps)));
+    }
+
+    public static BatchNorm3dImpl BatchNorm3d(long numFeatures) {
+        return create(new BatchNorm3dImpl(new BatchNormOptions(numFeatures)));
+    }
+
     public static BatchNorm3dImpl batch_norm3d(String name, BatchNormOptions options) {
         return register(name, new BatchNorm3dImpl(options));
     }
@@ -955,6 +1161,14 @@ public class nnn {
     }
 
     public static InstanceNorm1dImpl instance_norm1d(long numFeatures) {
+        return create(new InstanceNorm1dImpl(new InstanceNormOptions(numFeatures)));
+    }
+
+    public static InstanceNorm1dImpl InstanceNorm1d(String name, long numFeatures) {
+        return register(name, new InstanceNorm1dImpl(new InstanceNormOptions(numFeatures)));
+    }
+
+    public static InstanceNorm1dImpl InstanceNorm1d(long numFeatures) {
         return create(new InstanceNorm1dImpl(new InstanceNormOptions(numFeatures)));
     }
 
@@ -973,6 +1187,14 @@ public class nnn {
         return create(new InstanceNorm2dImpl(new InstanceNormOptions(numFeatures)));
     }
 
+    public static InstanceNorm2dImpl InstanceNorm2d(String name, long numFeatures) {
+        return register(name, new InstanceNorm2dImpl(new InstanceNormOptions(numFeatures)));
+    }
+
+    public static InstanceNorm2dImpl InstanceNorm2d(long numFeatures) {
+        return create(new InstanceNorm2dImpl(new InstanceNormOptions(numFeatures)));
+    }
+
     public static InstanceNorm2dImpl instance_norm2d(String name, InstanceNormOptions options) {
         return register(name, new InstanceNorm2dImpl(options));
     }
@@ -985,6 +1207,14 @@ public class nnn {
     }
 
     public static InstanceNorm3dImpl instance_norm3d(long numFeatures) {
+        return create(new InstanceNorm3dImpl(new InstanceNormOptions(numFeatures)));
+    }
+
+    public static InstanceNorm3dImpl InstanceNorm3d(String name, long numFeatures) {
+        return register(name, new InstanceNorm3dImpl(new InstanceNormOptions(numFeatures)));
+    }
+
+    public static InstanceNorm3dImpl InstanceNorm3d(long numFeatures) {
         return create(new InstanceNorm3dImpl(new InstanceNormOptions(numFeatures)));
     }
 
@@ -1010,11 +1240,38 @@ public class nnn {
         return create(new LayerNormImpl(vec));
     }
 
+    public static LayerNormImpl LayerNorm(String name, long... normalizedShape) {
+        LongVector vec = new LongVector(normalizedShape);
+        return register(name, new LayerNormImpl(vec));
+    }
+
+    public static LayerNormImpl LayerNorm(String name, LayerNormOptions options) {
+        return register(name, new LayerNormImpl(options));
+    }
+
+    public static LayerNormImpl LayerNorm(long... normalizedShape) {
+        LongVector vec = new LongVector(normalizedShape);
+        return create(new LayerNormImpl(vec));
+    }
+
     public static LayerNormImpl layer_norm(LayerNormOptions options) {
         return create(new LayerNormImpl(options));
     }
 
     // GroupNorm
+    public static GroupNormImpl GroupNorm(String name, long numGroups, long numChannels) {
+        return register(name, new GroupNormImpl(numGroups, numChannels));
+    }
+
+    public static GroupNormImpl GroupNorm(String name, long numGroups, long numChannels, float eps) {
+        return register(name, new GroupNormImpl(new GroupNormOptions(numGroups, numChannels).eps(eps)));
+    }
+
+    public static GroupNormImpl GroupNorm(long numGroups, long numChannels) {
+        return create(new GroupNormImpl(numGroups, numChannels));
+    }
+
+
     public static GroupNormImpl group_norm(String name, long numGroups, long numChannels) {
         return register(name, new GroupNormImpl(numGroups, numChannels));
     }
@@ -1040,6 +1297,18 @@ public class nnn {
     }
 
     public static LocalResponseNormImpl local_response_norm(String name, long size, float alpha, float beta, float k) {
+        return register(name, new LocalResponseNormImpl(new LocalResponseNormOptions(size).alpha(alpha).beta(beta).k(k)));
+    }
+
+    public static LocalResponseNormImpl LocalResponseNorm(long size) {
+        return create(new LocalResponseNormImpl(size));
+    }
+
+    public static LocalResponseNormImpl LocalResponseNorm(String name, long size) {
+        return register(name, new LocalResponseNormImpl(size));
+    }
+
+    public static LocalResponseNormImpl LocalResponseNorm(String name, long size, float alpha, float beta, float k) {
         return register(name, new LocalResponseNormImpl(new LocalResponseNormOptions(size).alpha(alpha).beta(beta).k(k)));
     }
 
@@ -1086,6 +1355,18 @@ public class nnn {
         return create(new ReLUImpl());
     }
 
+    public static ReLUImpl ReLU(String name) {
+        return register(name, new ReLUImpl());
+    }
+
+    public static ReLUImpl ReLU(String name, boolean inplace) {
+        return register(name, new ReLUImpl(new ReLUOptions().inplace(inplace)));
+    }
+
+    public static ReLUImpl ReLU() {
+        return create(new ReLUImpl());
+    }
+
     public static ReLUImpl relu(String name, ReLUOptions options) {
         return register(name, new ReLUImpl(options));
     }
@@ -1105,6 +1386,19 @@ public class nnn {
         return create(new ReLU6Impl());
     }
 
+    public static ReLU6Impl ReLU6(String name) {
+        return register(name, new ReLU6Impl());
+    }
+
+    public static ReLU6Impl ReLU6(String name, boolean inplace) {
+        return register(name, new ReLU6Impl(new ReLU6Options().inplace(inplace)));
+    }
+
+    public static ReLU6Impl ReLU6() {
+        return create(new ReLU6Impl());
+    }
+
+
     public static ReLU6Impl relu6(String name, ReLU6Options options) {
         return register(name, new ReLU6Impl(options));
     }
@@ -1121,6 +1415,18 @@ public class nnn {
     }
 
     public static RReLUImpl rrelu() {
+        return create(new RReLUImpl());
+    }
+
+    public static RReLUImpl RReLU(String name) {
+        return register(name, new RReLUImpl());
+    }
+
+    public static RReLUImpl RReLU(String name, float lower, float upper) {
+        return register(name, new RReLUImpl(new RReLUOptions().lower(lower).upper(upper)));
+    }
+
+    public static RReLUImpl RReLU() {
         return create(new RReLUImpl());
     }
 
@@ -1144,6 +1450,22 @@ public class nnn {
     }
 
     public static LeakyReLUImpl leaky_relu() {
+        return create(new LeakyReLUImpl());
+    }
+
+    public static LeakyReLUImpl LeakyReLU(String name) {
+        return register(name, new LeakyReLUImpl());
+    }
+
+    public static LeakyReLUImpl LeakyReLU(String name, float negativeSlope) {
+        return register(name, new LeakyReLUImpl(new LeakyReLUOptions().negative_slope(negativeSlope)));
+    }
+
+    public static LeakyReLUImpl LeakyReLU(String name, float negativeSlope, boolean inplace) {
+        return register(name, new LeakyReLUImpl(new LeakyReLUOptions().negative_slope(negativeSlope).inplace(inplace)));
+    }
+
+    public static LeakyReLUImpl LeakyReLU() {
         return create(new LeakyReLUImpl());
     }
 
@@ -1304,6 +1626,26 @@ public class nnn {
         return create(new TanhImpl());
     }
 
+    public static MishImpl Mish(String name) {
+        return register(name, new MishImpl());
+    }
+
+    public static MishImpl Mish(String name, boolean inplace) {
+        return register(name, new MishImpl(new BooleanPointer(inplace)));
+    }
+
+    public static MishImpl Mish() {
+        return create(new MishImpl());
+    }
+
+    public static TanhImpl Tanh(String name) {
+        return register(name, new TanhImpl());
+    }
+
+    public static TanhImpl Tanh() {
+        return create(new TanhImpl());
+    }
+
     public static HardtanhImpl hardtanh(String name) {
         return register(name, new HardtanhImpl());
     }
@@ -1335,12 +1677,25 @@ public class nnn {
         return register(name, new SoftmaxImpl(dim));
     }
 
-//    public static SoftmaxImpl softmax(String name, long dim, long? dtype) {
-//        // Note: dtype handling would require additional Options setup
-//        return register(name, new SoftmaxImpl(dim));
-//    }
 
     public static SoftmaxImpl softmax(long dim) {
+        return create(new SoftmaxImpl(dim));
+    }
+
+    public static SigmoidImpl Sigmoid(String name) {
+        return register(name, new SigmoidImpl());
+    }
+
+    public static SigmoidImpl Sigmoid() {
+        return create(new SigmoidImpl());
+    }
+
+    public static SoftmaxImpl Softmax(String name, long dim) {
+        return register(name, new SoftmaxImpl(dim));
+    }
+
+
+    public static SoftmaxImpl Softmax(long dim) {
         return create(new SoftmaxImpl(dim));
     }
 
@@ -1371,6 +1726,15 @@ public class nnn {
     }
 
     public static LogSoftmaxImpl log_softmax(long dim) {
+        return create(new LogSoftmaxImpl(dim));
+    }
+
+
+    public static LogSoftmaxImpl LogSoftmax(String name, long dim) {
+        return register(name, new LogSoftmaxImpl(dim));
+    }
+
+    public static LogSoftmaxImpl LogSoftmax(long dim) {
         return create(new LogSoftmaxImpl(dim));
     }
 
@@ -1513,6 +1877,22 @@ public class nnn {
         return create(new DropoutImpl());
     }
 
+    public static DropoutImpl Dropout(String name, float p) {
+        return register(name, new DropoutImpl(p));
+    }
+
+    public static DropoutImpl Dropout(String name, float p, boolean inplace) {
+        return register(name, new DropoutImpl(new DropoutOptions(p).inplace(inplace)));
+    }
+
+    public static DropoutImpl Dropout(float p) {
+        return create(new DropoutImpl(p));
+    }
+
+    public static DropoutImpl Dropout() {
+        return create(new DropoutImpl());
+    }
+
     public static DropoutImpl dropout(String name, DropoutOptions options) {
         return register(name, new DropoutImpl(options));
     }
@@ -1532,6 +1912,18 @@ public class nnn {
         return create(new Dropout2dImpl());
     }
 
+    public static Dropout2dImpl Dropout2d(String name, float p) {
+        return register(name, new Dropout2dImpl(p));
+    }
+
+    public static Dropout2dImpl Dropout2d(float p) {
+        return create(new Dropout2dImpl(p));
+    }
+
+    public static Dropout2dImpl Dropout2d() {
+        return create(new Dropout2dImpl());
+    }
+
     public static Dropout2dImpl dropout2d(String name, DropoutOptions options) {
         return register(name, new Dropout2dImpl(options));
     }
@@ -1548,6 +1940,19 @@ public class nnn {
     }
 
     public static Dropout3dImpl dropout3d() {
+        return create(new Dropout3dImpl());
+    }
+
+
+    public static Dropout3dImpl Dropout3d(String name, float p) {
+        return register(name, new Dropout3dImpl(p));
+    }
+
+    public static Dropout3dImpl Dropout3d(float p) {
+        return create(new Dropout3dImpl(p));
+    }
+
+    public static Dropout3dImpl Dropout3d() {
         return create(new Dropout3dImpl());
     }
 
@@ -1590,12 +1995,25 @@ public class nnn {
         return register(name, new EmbeddingImpl(numEmbeddings, embeddingDim));
     }
 
-    public static EmbeddingImpl embedding(String name, EmbeddingOptions options) {
-        return register(name, new EmbeddingImpl(options));
-    }
+
 
     public static EmbeddingImpl embedding(long numEmbeddings, long embeddingDim) {
         return create(new EmbeddingImpl(numEmbeddings, embeddingDim));
+    }
+
+
+    public static EmbeddingImpl Embedding(String name, long numEmbeddings, long embeddingDim) {
+        return register(name, new EmbeddingImpl(numEmbeddings, embeddingDim));
+    }
+
+
+
+    public static EmbeddingImpl Embedding(long numEmbeddings, long embeddingDim) {
+        return create(new EmbeddingImpl(numEmbeddings, embeddingDim));
+    }
+
+    public static EmbeddingImpl embedding(String name, EmbeddingOptions options) {
+        return register(name, new EmbeddingImpl(options));
     }
 
     public static EmbeddingImpl embedding(EmbeddingOptions options) {
@@ -1606,16 +2024,26 @@ public class nnn {
         return register(name, new EmbeddingBagImpl(numEmbeddings, embeddingDim));
     }
 
-    public static EmbeddingBagImpl embedding_bag(String name, EmbeddingBagOptions options) {
-        return register(name, new EmbeddingBagImpl(options));
-    }
 
     public static EmbeddingBagImpl embedding_bag(long numEmbeddings, long embeddingDim) {
         return create(new EmbeddingBagImpl(numEmbeddings, embeddingDim));
     }
 
+    public static EmbeddingBagImpl EmbeddingBag(String name, long numEmbeddings, long embeddingDim) {
+        return register(name, new EmbeddingBagImpl(numEmbeddings, embeddingDim));
+    }
+
+
+    public static EmbeddingBagImpl EmbeddingBag(long numEmbeddings, long embeddingDim) {
+        return create(new EmbeddingBagImpl(numEmbeddings, embeddingDim));
+    }
+
     public static EmbeddingBagImpl embedding_bag(EmbeddingBagOptions options) {
         return create(new EmbeddingBagImpl(options));
+    }
+
+    public static EmbeddingBagImpl embedding_bag(String name, EmbeddingBagOptions options) {
+        return register(name, new EmbeddingBagImpl(options));
     }
 
     // ========================================================================
@@ -1961,6 +2389,22 @@ public class nnn {
         return create(new FlattenImpl());
     }
 
+    public static FlattenImpl Flatten(String name, long startDim, long endDim) {
+        return register(name, new FlattenImpl(new FlattenOptions().start_dim(startDim).end_dim(endDim)));
+    }
+
+    public static FlattenImpl Flatten(String name) {
+        return register(name, new FlattenImpl());
+    }
+
+    public static FlattenImpl Flatten(long startDim, long endDim) {
+        return create(new FlattenImpl(new FlattenOptions().start_dim(startDim).end_dim(endDim)));
+    }
+
+    public static FlattenImpl Flatten() {
+        return create(new FlattenImpl());
+    }
+
     public static FlattenImpl flatten(String name, FlattenOptions options) {
         return register(name, new FlattenImpl(options));
     }
@@ -1978,6 +2422,17 @@ public class nnn {
         return create(new UnflattenImpl(dim, vec));
     }
 
+
+    public static UnflattenImpl Unflatten(String name, long dim, long... shape) {
+        LongVector vec = new LongVector(shape);
+        return register(name, new UnflattenImpl(dim, vec));
+    }
+
+    public static UnflattenImpl Unflatten(long dim, long... shape) {
+        LongVector vec = new LongVector(shape);
+        return create(new UnflattenImpl(dim, vec));
+    }
+
     public static UnflattenImpl unflatten(String name, UnflattenOptions options) {
         return register(name, new UnflattenImpl(options));
     }
@@ -1990,6 +2445,14 @@ public class nnn {
     }
 
     public static IdentityImpl identity() {
+        return create(new IdentityImpl());
+    }
+
+    public static IdentityImpl Identity(String name) {
+        return register(name, new IdentityImpl());
+    }
+
+    public static IdentityImpl Identity() {
         return create(new IdentityImpl());
     }
 
@@ -2023,16 +2486,27 @@ public class nnn {
         return create(new PixelUnshuffleImpl(options));
     }
 
-    public static UpsampleImpl upsample(String name, long... size) {
-        LongVector vec = new LongVector(size);
-        return register(name, new UpsampleImpl(new UpsampleOptions().size(new LongVectorOptional(vec))));
-    }
+
 
     public static UpsampleImpl upsample(String name, UpsampleOptions options) {
         return register(name, new UpsampleImpl(options));
     }
 
+    public static UpsampleImpl upsample(String name, long... size) {
+        LongVector vec = new LongVector(size);
+        return register(name, new UpsampleImpl(new UpsampleOptions().size(new LongVectorOptional(vec))));
+    }
     public static UpsampleImpl upsample(long... size) {
+        LongVector vec = new LongVector(size);
+        UpsampleOptions options = new UpsampleOptions().size(new LongVectorOptional(vec));
+        return create(new UpsampleImpl(options));
+    }
+
+    public static UpsampleImpl Upsample(String name, long... size) {
+        LongVector vec = new LongVector(size);
+        return register(name, new UpsampleImpl(new UpsampleOptions().size(new LongVectorOptional(vec))));
+    }
+    public static UpsampleImpl Upsample(long... size) {
         LongVector vec = new LongVector(size);
         UpsampleOptions options = new UpsampleOptions().size(new LongVectorOptional(vec));
         return create(new UpsampleImpl(options));
@@ -2042,7 +2516,6 @@ public class nnn {
         return create(new UpsampleImpl(options));
     }
 
-
     public static FoldImpl fold(String name, long[] outputSize, long... kernelSize) {
         LongVector vec = new LongVector(outputSize);
         return register(name, new FoldImpl(new FoldOptions(new LongPointer(outputSize),new LongPointer(kernelSize)).
@@ -2050,6 +2523,19 @@ public class nnn {
     }
 
     public static FoldImpl fold(long[] outputSize, long... kernelSize) {
+        LongVector vec = new LongVector(outputSize);
+        FoldOptions options = new FoldOptions(new LongPointer(outputSize),new LongPointer(kernelSize)).
+                output_size(new LongPointer(outputSize)).output_size(new LongPointer(kernelSize));
+        return create(new FoldImpl(options));
+    }
+
+    public static FoldImpl Fold(String name, long[] outputSize, long... kernelSize) {
+        LongVector vec = new LongVector(outputSize);
+        return register(name, new FoldImpl(new FoldOptions(new LongPointer(outputSize),new LongPointer(kernelSize)).
+                output_size(new LongPointer(outputSize)).output_size(new LongPointer(kernelSize))));
+    }
+
+    public static FoldImpl Fold(long[] outputSize, long... kernelSize) {
         LongVector vec = new LongVector(outputSize);
         FoldOptions options = new FoldOptions(new LongPointer(outputSize),new LongPointer(kernelSize)).
                 output_size(new LongPointer(outputSize)).output_size(new LongPointer(kernelSize));
@@ -2077,6 +2563,20 @@ public class nnn {
         return create(new UnfoldImpl(new UnfoldOptions(new LongPointer(kernelSize)).kernel_size(new LongPointer(kernelSize))));
     }
 
+    public static UnfoldImpl Unfold(String name, long... kernelSize) {
+        if (kernelSize.length == 1) {
+            return register(name, new UnfoldImpl(new UnfoldOptions(new LongPointer(kernelSize)).kernel_size(new LongPointer(kernelSize))));
+        }
+        return register(name, new UnfoldImpl(new UnfoldOptions(new LongPointer(kernelSize)).kernel_size(new LongPointer(kernelSize))));
+    }
+
+    public static UnfoldImpl Unfold(long... kernelSize) {
+        if (kernelSize.length == 1) {
+            return create(new UnfoldImpl(new UnfoldOptions(new LongPointer(kernelSize)).kernel_size(new LongPointer(kernelSize))));
+        }
+        return create(new UnfoldImpl(new UnfoldOptions(new LongPointer(kernelSize)).kernel_size(new LongPointer(kernelSize))));
+    }
+
     public static UnfoldImpl unfold(String name, UnfoldOptions options) {
         return register(name, new UnfoldImpl(options));
     }
@@ -2092,11 +2592,19 @@ public class nnn {
         return register(name, new CosineSimilarityImpl());
     }
 
+    public static CosineSimilarityImpl CosineSimilarity(String name) {
+        return register(name, new CosineSimilarityImpl());
+    }
+
     public static CosineSimilarityImpl cosine_similarity(String name, CosineSimilarityOptions options) {
         return register(name, new CosineSimilarityImpl(options));
     }
 
     public static CosineSimilarityImpl cosine_similarity() {
+        return create(new CosineSimilarityImpl());
+    }
+
+    public static CosineSimilarityImpl CosineSimilarity() {
         return create(new CosineSimilarityImpl());
     }
 
@@ -2108,14 +2616,23 @@ public class nnn {
         return register(name, new PairwiseDistanceImpl());
     }
 
-    public static PairwiseDistanceImpl pairwise_distance(String name, PairwiseDistanceOptions options) {
-        return register(name, new PairwiseDistanceImpl(options));
-    }
 
     public static PairwiseDistanceImpl pairwise_distance() {
         return create(new PairwiseDistanceImpl());
     }
 
+    public static PairwiseDistanceImpl PairwiseDistance(String name) {
+        return register(name, new PairwiseDistanceImpl());
+    }
+
+
+    public static PairwiseDistanceImpl PairwiseDistance() {
+        return create(new PairwiseDistanceImpl());
+    }
+
+    public static PairwiseDistanceImpl pairwise_distance(String name, PairwiseDistanceOptions options) {
+        return register(name, new PairwiseDistanceImpl(options));
+    }
     public static PairwiseDistanceImpl pairwise_distance(PairwiseDistanceOptions options) {
         return create(new PairwiseDistanceImpl(options));
     }
@@ -2148,6 +2665,23 @@ public class nnn {
         return create(new SequentialImpl());
     }
 
+    public static SequentialImpl Sequential(String name) {
+        SequentialImpl seq = new SequentialImpl();
+        Module parent = getParent();
+        if (parent != null) {
+            parent.register_module(name, seq);
+        }
+        return seq;
+    }
+
+    /**
+     * Create a Sequential module (for use without registration).
+     *
+     * @return the created SequentialImpl
+     */
+    public static SequentialImpl Sequential() {
+        return create(new SequentialImpl());
+    }
     /**
      * Create and register a ModuleList.
      *
@@ -2169,6 +2703,24 @@ public class nnn {
      * @return the created ModuleListImpl
      */
     public static ModuleListImpl module_list() {
+        return create(new ModuleListImpl());
+    }
+
+    public static ModuleListImpl ModuleList(String name) {
+        ModuleListImpl list = new ModuleListImpl();
+        Module parent = getParent();
+        if (parent != null) {
+            parent.register_module(name, list);
+        }
+        return list;
+    }
+
+    /**
+     * Create a ModuleList.
+     *
+     * @return the created ModuleListImpl
+     */
+    public static ModuleListImpl ModuleList() {
         return create(new ModuleListImpl());
     }
 
@@ -2196,6 +2748,24 @@ public class nnn {
         return create(new ModuleDictImpl());
     }
 
+    public static ModuleDictImpl ModuleDict(String name) {
+        ModuleDictImpl dict = new ModuleDictImpl();
+        Module parent = getParent();
+        if (parent != null) {
+            parent.register_module(name, dict);
+        }
+        return dict;
+    }
+
+    /**
+     * Create a ModuleDict.
+     *
+     * @return the created ModuleDictImpl
+     */
+    public static ModuleDictImpl ModuleDict() {
+        return create(new ModuleDictImpl());
+    }
+
     /**
      * Create and register a ParameterList.
      *
@@ -2217,6 +2787,24 @@ public class nnn {
      * @return the created ParameterListImpl
      */
     public static ParameterListImpl parameter_list() {
+        return create(new ParameterListImpl());
+    }
+
+    public static ParameterListImpl ParameterList(String name) {
+        ParameterListImpl list = new ParameterListImpl();
+        Module parent = getParent();
+        if (parent != null) {
+            parent.register_module(name, list);
+        }
+        return list;
+    }
+
+    /**
+     * Create a ParameterList.
+     *
+     * @return the created ParameterListImpl
+     */
+    public static ParameterListImpl ParameterList() {
         return create(new ParameterListImpl());
     }
 
@@ -2244,6 +2832,24 @@ public class nnn {
         return create(new ParameterDictImpl());
     }
 
+    public static ParameterDictImpl ParameterDict(String name) {
+        ParameterDictImpl dict = new ParameterDictImpl();
+        Module parent = getParent();
+        if (parent != null) {
+            parent.register_module(name, dict);
+        }
+        return dict;
+    }
+
+    /**
+     * Create a ParameterDict.
+     *
+     * @return the created ParameterDictImpl
+     */
+    public static ParameterDictImpl ParameterDict() {
+        return create(new ParameterDictImpl());
+    }
+
     // ========================================================================
     // RECURRENT
     // ========================================================================
@@ -2252,12 +2858,24 @@ public class nnn {
         return register(name, new RNNImpl(new RNNOptions(inputSize, hiddenSize).hidden_size(hiddenSize).num_layers(numLayers)));
     }
 
-    public static RNNImpl rnn(String name, RNNOptions options) {
-        return register(name, new RNNImpl(options));
-    }
+
 
     public static RNNImpl rnn(long inputSize, long hiddenSize, long numLayers) {
         return create(new RNNImpl(new RNNOptions(inputSize, hiddenSize).input_size(inputSize).hidden_size(hiddenSize).num_layers(numLayers)));
+    }
+
+    public static RNNImpl RNN(String name, long inputSize, long hiddenSize, long numLayers) {
+        return register(name, new RNNImpl(new RNNOptions(inputSize, hiddenSize).hidden_size(hiddenSize).num_layers(numLayers)));
+    }
+
+
+
+    public static RNNImpl RNN(long inputSize, long hiddenSize, long numLayers) {
+        return create(new RNNImpl(new RNNOptions(inputSize, hiddenSize).input_size(inputSize).hidden_size(hiddenSize).num_layers(numLayers)));
+    }
+
+    public static RNNImpl rnn(String name, RNNOptions options) {
+        return register(name, new RNNImpl(options));
     }
 
     public static RNNImpl rnn(RNNOptions options) {
@@ -2268,30 +2886,51 @@ public class nnn {
         return register(name, new LSTMImpl(new LSTMOptions(inputSize, hiddenSize).input_size(inputSize).hidden_size(hiddenSize).num_layers(numLayers)));
     }
 
-    public static LSTMImpl lstm(String name, LSTMOptions options) {
-        return register(name, new LSTMImpl(options));
-    }
 
     public static LSTMImpl lstm(long inputSize, long hiddenSize, long numLayers) {
+        return create(new LSTMImpl(new LSTMOptions(inputSize, hiddenSize).input_size(inputSize).hidden_size(hiddenSize).num_layers(numLayers)));
+    }
+
+    public static LSTMImpl LSTM(String name, long inputSize, long hiddenSize, long numLayers) {
+        return register(name, new LSTMImpl(new LSTMOptions(inputSize, hiddenSize).input_size(inputSize).hidden_size(hiddenSize).num_layers(numLayers)));
+    }
+
+
+    public static LSTMImpl LSTM(long inputSize, long hiddenSize, long numLayers) {
         return create(new LSTMImpl(new LSTMOptions(inputSize, hiddenSize).input_size(inputSize).hidden_size(hiddenSize).num_layers(numLayers)));
     }
 
     public static LSTMImpl lstm(LSTMOptions options) {
         return create(new LSTMImpl(options));
     }
+    public static LSTMImpl lstm(String name, LSTMOptions options) {
+        return register(name, new LSTMImpl(options));
+    }
+
 
     public static GRUImpl gru(String name, long inputSize, long hiddenSize, long numLayers) {
         return register(name, new GRUImpl(new GRUOptions(inputSize, hiddenSize).input_size(inputSize).hidden_size(hiddenSize).num_layers(numLayers)));
     }
 
-    public static GRUImpl gru(String name, GRUOptions options) {
-        return register(name, new GRUImpl(options));
-    }
+
 
     public static GRUImpl gru(long inputSize, long hiddenSize, long numLayers) {
         return create(new GRUImpl(new GRUOptions(inputSize, hiddenSize).input_size(inputSize).hidden_size(hiddenSize).num_layers(numLayers)));
     }
 
+    public static GRUImpl GRU(String name, long inputSize, long hiddenSize, long numLayers) {
+        return register(name, new GRUImpl(new GRUOptions(inputSize, hiddenSize).input_size(inputSize).hidden_size(hiddenSize).num_layers(numLayers)));
+    }
+
+
+
+    public static GRUImpl GRU(long inputSize, long hiddenSize, long numLayers) {
+        return create(new GRUImpl(new GRUOptions(inputSize, hiddenSize).input_size(inputSize).hidden_size(hiddenSize).num_layers(numLayers)));
+    }
+
+    public static GRUImpl gru(String name, GRUOptions options) {
+        return register(name, new GRUImpl(options));
+    }
     public static GRUImpl gru(GRUOptions options) {
         return create(new GRUImpl(options));
     }
@@ -2300,12 +2939,24 @@ public class nnn {
         return register(name, new RNNCellImpl(new RNNCellOptions(inputSize, hiddenSize).input_size(inputSize).hidden_size(hiddenSize)));
     }
 
-    public static RNNCellImpl rnn_cell(String name, RNNCellOptions options) {
-        return register(name, new RNNCellImpl(options));
-    }
+
 
     public static RNNCellImpl rnn_cell(long inputSize, long hiddenSize) {
         return create(new RNNCellImpl(new RNNCellOptions(inputSize, hiddenSize).input_size(inputSize).hidden_size(hiddenSize)));
+    }
+
+    public static RNNCellImpl RNNCell(String name, long inputSize, long hiddenSize) {
+        return register(name, new RNNCellImpl(new RNNCellOptions(inputSize, hiddenSize).input_size(inputSize).hidden_size(hiddenSize)));
+    }
+
+
+
+    public static RNNCellImpl RNNCell(long inputSize, long hiddenSize) {
+        return create(new RNNCellImpl(new RNNCellOptions(inputSize, hiddenSize).input_size(inputSize).hidden_size(hiddenSize)));
+    }
+
+    public static RNNCellImpl rnn_cell(String name, RNNCellOptions options) {
+        return register(name, new RNNCellImpl(options));
     }
 
     public static RNNCellImpl rnn_cell(RNNCellOptions options) {
@@ -2316,30 +2967,53 @@ public class nnn {
         return register(name, new LSTMCellImpl(new LSTMCellOptions(inputSize, hiddenSize).input_size(inputSize).hidden_size(hiddenSize)));
     }
 
-    public static LSTMCellImpl lstm_cell(String name, LSTMCellOptions options) {
-        return register(name, new LSTMCellImpl(options));
-    }
+
 
     public static LSTMCellImpl lstm_cell(long inputSize, long hiddenSize) {
         return create(new LSTMCellImpl(new LSTMCellOptions(inputSize, hiddenSize).input_size(inputSize).hidden_size(hiddenSize)));
+    }
+
+    public static LSTMCellImpl LSTMCell(String name, long inputSize, long hiddenSize) {
+        return register(name, new LSTMCellImpl(new LSTMCellOptions(inputSize, hiddenSize).input_size(inputSize).hidden_size(hiddenSize)));
+    }
+
+
+
+    public static LSTMCellImpl LSTMCell(long inputSize, long hiddenSize) {
+        return create(new LSTMCellImpl(new LSTMCellOptions(inputSize, hiddenSize).input_size(inputSize).hidden_size(hiddenSize)));
+    }
+
+    public static LSTMCellImpl lstm_cell(String name, LSTMCellOptions options) {
+        return register(name, new LSTMCellImpl(options));
     }
 
     public static LSTMCellImpl lstm_cell(LSTMCellOptions options) {
         return create(new LSTMCellImpl(options));
     }
 
+    public static GRUCellImpl GRUCell(String name, long inputSize, long hiddenSize) {
+        return register(name, new GRUCellImpl(new GRUCellOptions(inputSize, hiddenSize).input_size(inputSize).hidden_size(hiddenSize)));
+    }
+
+
+
+    public static GRUCellImpl GRUCell(long inputSize, long hiddenSize) {
+        return create(new GRUCellImpl(new GRUCellOptions(inputSize, hiddenSize).input_size(inputSize).hidden_size(hiddenSize)));
+    }
+
     public static GRUCellImpl gru_cell(String name, long inputSize, long hiddenSize) {
         return register(name, new GRUCellImpl(new GRUCellOptions(inputSize, hiddenSize).input_size(inputSize).hidden_size(hiddenSize)));
     }
 
-    public static GRUCellImpl gru_cell(String name, GRUCellOptions options) {
-        return register(name, new GRUCellImpl(options));
-    }
+
 
     public static GRUCellImpl gru_cell(long inputSize, long hiddenSize) {
         return create(new GRUCellImpl(new GRUCellOptions(inputSize, hiddenSize).input_size(inputSize).hidden_size(hiddenSize)));
     }
 
+    public static GRUCellImpl gru_cell(String name, GRUCellOptions options) {
+        return register(name, new GRUCellImpl(options));
+    }
     public static GRUCellImpl gru_cell(GRUCellOptions options) {
         return create(new GRUCellImpl(options));
     }
@@ -2347,7 +3021,6 @@ public class nnn {
     // ========================================================================
     // TRANSFORMER
     // ========================================================================
-
 
     public static TransformerImpl transformer(String name,
                                               long d_model,
@@ -2361,9 +3034,7 @@ public class nnn {
                 num_decoder_layers(num_decoder_layers)));
     }
 
-    public static TransformerImpl transformer(String name, TransformerOptions options) {
-        return register(name, new TransformerImpl(options));
-    }
+
 
     public static TransformerImpl transformer(long d_model,
                                               long nhead,
@@ -2376,16 +3047,40 @@ public class nnn {
                 num_decoder_layers(num_decoder_layers)));
     }
 
+
+    public static TransformerImpl Transformer(String name,
+                                              long d_model,
+                                              long nhead,
+                                              long num_encoder_layers,
+                                              long num_decoder_layers) {
+        return register(name, new TransformerImpl(new TransformerOptions(d_model, nhead, num_encoder_layers, num_decoder_layers).
+                d_model(d_model).
+                nhead(nhead).
+                num_encoder_layers(num_encoder_layers).
+                num_decoder_layers(num_decoder_layers)));
+    }
+
+
+
+    public static TransformerImpl Transformer(long d_model,
+                                              long nhead,
+                                              long num_encoder_layers,
+                                              long num_decoder_layers) {
+        return create(new TransformerImpl(new TransformerOptions(d_model, nhead, num_encoder_layers, num_decoder_layers).
+                d_model(d_model).
+                nhead(nhead).
+                num_encoder_layers(num_encoder_layers).
+                num_decoder_layers(num_decoder_layers)));
+    }
+
+    public static TransformerImpl transformer(String name, TransformerOptions options) {
+        return register(name, new TransformerImpl(options));
+    }
     public static TransformerImpl transformer(TransformerOptions options) {
         return create(new TransformerImpl(options));
     }
 
-    public static TransformerEncoderImpl transformer_encoder(String name, long d_model, long nhead,long num_layers) {
-        return register(name, new TransformerEncoderImpl(
-                new TransformerEncoderOptions(new TransformerEncoderLayerOptions(d_model, nhead).d_model(d_model).
-                        nhead(nhead),num_layers).
-                        num_layers(num_layers)));
-    }
+
 
     public static TransformerEncoderImpl transformer_encoder(String name, TransformerEncoderLayerOptions layerOptions,long num_layers) {
         return register(name, new TransformerEncoderImpl(new TransformerEncoderOptions(layerOptions,num_layers).
@@ -2396,7 +3091,25 @@ public class nnn {
         return register(name, new TransformerEncoderImpl(options));
     }
 
+    public static TransformerEncoderImpl transformer_encoder(String name, long d_model, long nhead,long num_layers) {
+        return register(name, new TransformerEncoderImpl(
+                new TransformerEncoderOptions(new TransformerEncoderLayerOptions(d_model, nhead).d_model(d_model).
+                        nhead(nhead),num_layers).
+                        num_layers(num_layers)));
+    }
     public static TransformerEncoderImpl transformer_encoder(long d_model, long nhead,long num_layers) {
+        return create(new TransformerEncoderImpl(new TransformerEncoderOptions(new TransformerEncoderLayerOptions(d_model, nhead).d_model(d_model).
+                nhead(nhead),num_layers).
+                num_layers(num_layers)));
+    }
+
+    public static TransformerEncoderImpl TransformerEncoder(String name, long d_model, long nhead,long num_layers) {
+        return register(name, new TransformerEncoderImpl(
+                new TransformerEncoderOptions(new TransformerEncoderLayerOptions(d_model, nhead).d_model(d_model).
+                        nhead(nhead),num_layers).
+                        num_layers(num_layers)));
+    }
+    public static TransformerEncoderImpl TransformerEncoder(long d_model, long nhead,long num_layers) {
         return create(new TransformerEncoderImpl(new TransformerEncoderOptions(new TransformerEncoderLayerOptions(d_model, nhead).d_model(d_model).
                 nhead(nhead),num_layers).
                 num_layers(num_layers)));
@@ -2416,14 +3129,6 @@ public class nnn {
         return register(name, new TransformerDecoderImpl(new TransformerDecoderOptions(decoder_layer_options,num_layers)));
     }
 
-    public static TransformerDecoderImpl transformer_decoder(String name,long d_model, long nhead,
-                                                             long num_layers) {
-        TransformerDecoderLayerOptions decoder_layer_options = new TransformerDecoderLayerOptions(d_model, nhead);
-        decoder_layer_options.d_model(d_model);
-        decoder_layer_options.nhead(nhead);
-        return register(name, new TransformerDecoderImpl(new TransformerDecoderOptions(decoder_layer_options,num_layers)));
-    }
-
     public static TransformerDecoderImpl transformer_decoder(String name, TransformerDecoderOptions options) {
         return register(name, new TransformerDecoderImpl(options));
     }
@@ -2433,8 +3138,35 @@ public class nnn {
         return create(new TransformerDecoderImpl(new TransformerDecoderOptions(decoder_layer_options,num_layers)));
     }
 
+    public static TransformerDecoderImpl transformer_decoder(String name,long d_model, long nhead,
+                                                             long num_layers) {
+        TransformerDecoderLayerOptions decoder_layer_options = new TransformerDecoderLayerOptions(d_model, nhead);
+        decoder_layer_options.d_model(d_model);
+        decoder_layer_options.nhead(nhead);
+        return register(name, new TransformerDecoderImpl(new TransformerDecoderOptions(decoder_layer_options,num_layers)));
+    }
+
+
+
     public static TransformerDecoderImpl transformer_decoder(long d_model, long nhead,
                                                              long num_layers) {
+        TransformerDecoderLayerOptions decoder_layer_options = new TransformerDecoderLayerOptions(d_model, nhead);
+        return create(new TransformerDecoderImpl(new TransformerDecoderOptions(decoder_layer_options,num_layers)));
+    }
+
+
+    public static TransformerDecoderImpl TransformerDecoder(String name,long d_model, long nhead,
+                                                            long num_layers) {
+        TransformerDecoderLayerOptions decoder_layer_options = new TransformerDecoderLayerOptions(d_model, nhead);
+        decoder_layer_options.d_model(d_model);
+        decoder_layer_options.nhead(nhead);
+        return register(name, new TransformerDecoderImpl(new TransformerDecoderOptions(decoder_layer_options,num_layers)));
+    }
+
+
+
+    public static TransformerDecoderImpl TransformerDecoder(long d_model, long nhead,
+                                                            long num_layers) {
         TransformerDecoderLayerOptions decoder_layer_options = new TransformerDecoderLayerOptions(d_model, nhead);
         return create(new TransformerDecoderImpl(new TransformerDecoderOptions(decoder_layer_options,num_layers)));
     }
@@ -2448,15 +3180,28 @@ public class nnn {
                 nhead(nhead)));
     }
 
-    public static TransformerEncoderLayerImpl transformer_encoder_layer(String name, TransformerEncoderLayerOptions options) {
-        return register(name, new TransformerEncoderLayerImpl(options));
-    }
+
 
     public static TransformerEncoderLayerImpl transformer_encoder_layer(long d_model, long nhead, boolean batch_first) {
         return create(new TransformerEncoderLayerImpl(new TransformerEncoderLayerOptions(d_model, nhead).d_model(d_model).
                 nhead(nhead)));
     }
 
+    public static TransformerEncoderLayerImpl TransformerEncoderLayer(String name, long d_model, long nhead, boolean batch_first) {
+        return register(name, new TransformerEncoderLayerImpl(new TransformerEncoderLayerOptions(d_model, nhead).d_model(d_model).
+                nhead(nhead)));
+    }
+
+
+
+    public static TransformerEncoderLayerImpl TransformerEncoderLayer(long d_model, long nhead, boolean batch_first) {
+        return create(new TransformerEncoderLayerImpl(new TransformerEncoderLayerOptions(d_model, nhead).d_model(d_model).
+                nhead(nhead)));
+    }
+
+    public static TransformerEncoderLayerImpl transformer_encoder_layer(String name, TransformerEncoderLayerOptions options) {
+        return register(name, new TransformerEncoderLayerImpl(options));
+    }
     public static TransformerEncoderLayerImpl transformer_encoder_layer(TransformerEncoderLayerOptions options) {
         return create(new TransformerEncoderLayerImpl(options));
     }
@@ -2466,15 +3211,46 @@ public class nnn {
                 nhead(nhead)));
     }
 
-    public static TransformerDecoderLayerImpl transformer_decoder_layer(String name, TransformerDecoderLayerOptions options) {
-        return register(name, new TransformerDecoderLayerImpl(options));
-    }
+
 
     public static TransformerDecoderLayerImpl transformer_decoder_layer(long d_model, long nhead, boolean batch_first) {
-        return create(new TransformerDecoderLayerImpl(new TransformerDecoderLayerOptions(d_model, nhead).d_model(d_model).
+        TransformerDecoderLayerOptions decoder_layer_options = new TransformerDecoderLayerOptions(d_model, nhead);
+        decoder_layer_options.d_model(d_model);
+        decoder_layer_options.nhead(nhead);
+        var layer =  new TransformerDecoderLayerImpl(new TransformerDecoderLayerOptions(d_model, nhead).d_model(d_model).
+                nhead(nhead));
+//        if (batch_first) {
+//            // 标记给调用方/包装层用；原生 Impl 吃不到 flag
+//            layer.attr("batch_first", true); // 仅作文档/调试，不要指望它改 forward
+//        }
+//        layer.batch_first(batch_first);
+        return create(layer);
+    }
+
+    public static TransformerDecoderLayerImpl TransformerDecoderLayer(String name, long d_model, long nhead, boolean batch_first) {
+        return register(name, new TransformerDecoderLayerImpl(new TransformerDecoderLayerOptions(d_model, nhead).d_model(d_model).
                 nhead(nhead)));
     }
 
+
+
+    public static TransformerDecoderLayerImpl TransformerDecoderLayer(long d_model, long nhead, boolean batch_first) {
+        TransformerDecoderLayerOptions decoder_layer_options = new TransformerDecoderLayerOptions(d_model, nhead);
+        decoder_layer_options.d_model(d_model);
+        decoder_layer_options.nhead(nhead);
+        var layer =  new TransformerDecoderLayerImpl(new TransformerDecoderLayerOptions(d_model, nhead).d_model(d_model).
+                nhead(nhead));
+//        if (batch_first) {
+//            // 标记给调用方/包装层用；原生 Impl 吃不到 flag
+//            layer.attr("batch_first", true); // 仅作文档/调试，不要指望它改 forward
+//        }
+//        layer.batch_first(batch_first);
+        return create(layer);
+    }
+
+    public static TransformerDecoderLayerImpl transformer_decoder_layer(String name, TransformerDecoderLayerOptions options) {
+        return register(name, new TransformerDecoderLayerImpl(options));
+    }
     public static TransformerDecoderLayerImpl transformer_decoder_layer(TransformerDecoderLayerOptions options) {
         return create(new TransformerDecoderLayerImpl(options));
     }
@@ -2487,9 +3263,7 @@ public class nnn {
         return register(name, new MultiheadAttentionImpl(new MultiheadAttentionOptions(embed_dim, num_heads).embed_dim(embed_dim).num_heads(num_heads).dropout(dropout).bias(bias)));
     }
 
-    public static MultiheadAttentionImpl multihead_attention(String name, MultiheadAttentionOptions options) {
-        return register(name, new MultiheadAttentionImpl(options));
-    }
+
 
     public static MultiheadAttentionImpl multihead_attention(long embed_dim, long num_heads) {
         return create(new MultiheadAttentionImpl(new MultiheadAttentionOptions(embed_dim, num_heads)));
@@ -2499,6 +3273,28 @@ public class nnn {
         return create(new MultiheadAttentionImpl(new MultiheadAttentionOptions(embed_dim, num_heads).embed_dim(embed_dim).num_heads(num_heads).dropout(dropout).bias(bias)));
     }
 
+
+    public static MultiheadAttentionImpl MultiheadAttention(String name,long embed_dim, long num_heads) {
+        return register(name, new MultiheadAttentionImpl(new MultiheadAttentionOptions(embed_dim, num_heads)));
+    }
+
+    public static MultiheadAttentionImpl MultiheadAttention(String name,long embed_dim, long num_heads,float dropout, boolean bias) {
+        return register(name, new MultiheadAttentionImpl(new MultiheadAttentionOptions(embed_dim, num_heads).embed_dim(embed_dim).num_heads(num_heads).dropout(dropout).bias(bias)));
+    }
+
+
+
+    public static MultiheadAttentionImpl MultiheadAttention(long embed_dim, long num_heads) {
+        return create(new MultiheadAttentionImpl(new MultiheadAttentionOptions(embed_dim, num_heads)));
+    }
+
+    public static MultiheadAttentionImpl MultiheadAttention(long embed_dim, long num_heads,float dropout, boolean bias) {
+        return create(new MultiheadAttentionImpl(new MultiheadAttentionOptions(embed_dim, num_heads).embed_dim(embed_dim).num_heads(num_heads).dropout(dropout).bias(bias)));
+    }
+
+    public static MultiheadAttentionImpl multihead_attention(String name, MultiheadAttentionOptions options) {
+        return register(name, new MultiheadAttentionImpl(options));
+    }
     public static MultiheadAttentionImpl multihead_attention(MultiheadAttentionOptions options) {
         return create(new MultiheadAttentionImpl(options));
     }
@@ -2507,16 +3303,26 @@ public class nnn {
     // ADAPTIVE LOG SOFTMAX WITH LOSS
     // ========================================================================
 
+    public static AdaptiveLogSoftmaxWithLossImpl AdaptiveLogSoftmaxWithLoss(String name, long in_features, long n_classes, long[] cutoffs) {
+        return register(name, new AdaptiveLogSoftmaxWithLossImpl(new AdaptiveLogSoftmaxWithLossOptions(in_features, n_classes, new LongVector(cutoffs)).n_classes(n_classes).in_features(in_features).cutoffs(new LongVector(cutoffs))));
+    }
+
+
+    public static AdaptiveLogSoftmaxWithLossImpl AdaptiveLogSoftmaxWithLoss(long in_features, long n_classes, long[] cutoffs) {
+        return create(new AdaptiveLogSoftmaxWithLossImpl(new AdaptiveLogSoftmaxWithLossOptions(in_features, n_classes, new LongVector(cutoffs)).n_classes(n_classes).in_features(in_features).cutoffs(new LongVector(cutoffs))));
+    }
+
     public static AdaptiveLogSoftmaxWithLossImpl adaptive_log_softmax_with_loss(String name, long in_features, long n_classes, long[] cutoffs) {
         return register(name, new AdaptiveLogSoftmaxWithLossImpl(new AdaptiveLogSoftmaxWithLossOptions(in_features, n_classes, new LongVector(cutoffs)).n_classes(n_classes).in_features(in_features).cutoffs(new LongVector(cutoffs))));
     }
 
-    public static AdaptiveLogSoftmaxWithLossImpl adaptive_log_softmax_with_loss(String name, AdaptiveLogSoftmaxWithLossOptions options) {
-        return register(name, new AdaptiveLogSoftmaxWithLossImpl(options));
-    }
 
     public static AdaptiveLogSoftmaxWithLossImpl adaptive_log_softmax_with_loss(long in_features, long n_classes, long[] cutoffs) {
         return create(new AdaptiveLogSoftmaxWithLossImpl(new AdaptiveLogSoftmaxWithLossOptions(in_features, n_classes, new LongVector(cutoffs)).n_classes(n_classes).in_features(in_features).cutoffs(new LongVector(cutoffs))));
+    }
+
+    public static AdaptiveLogSoftmaxWithLossImpl adaptive_log_softmax_with_loss(String name, AdaptiveLogSoftmaxWithLossOptions options) {
+        return register(name, new AdaptiveLogSoftmaxWithLossImpl(options));
     }
 
     public static AdaptiveLogSoftmaxWithLossImpl adaptive_log_softmax_with_loss(AdaptiveLogSoftmaxWithLossOptions options) {
