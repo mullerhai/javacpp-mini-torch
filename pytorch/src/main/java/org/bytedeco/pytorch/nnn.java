@@ -44,9 +44,7 @@ import org.bytedeco.javacpp.BooleanPointer;
 import org.bytedeco.javacpp.LongPointer;
 import org.bytedeco.javacpp.Pointer;
 import org.bytedeco.javacpp.annotation.Cast;
-import org.bytedeco.pytorch.DoubleOptional;
-import org.bytedeco.pytorch.LongVector;
-import org.bytedeco.pytorch.LongVectorOptional;
+import org.bytedeco.pytorch.*;
 import org.bytedeco.pytorch.enumtype.Conv2dPadding;
 import org.bytedeco.pytorch.nn.modules.*;
 import org.bytedeco.pytorch.nn.modules.container.*;
@@ -209,11 +207,11 @@ public class nnn {
     // CONVOLUTION 1D
     // ========================================================================
 
-    public static Conv1dImpl conv1d(String name, long inChannels, long outChannels, long kernelSize) {
+    public static Conv1dImpl conv1d(String name, long inChannels, long outChannels, long... kernelSize) {
         return register(name, new Conv1dImpl(inChannels, outChannels, new LongPointer(kernelSize)));
     }
 
-    public static Conv1dImpl conv1d(String name, long inChannels, long outChannels, long kernelSize, long stride) {
+    public static Conv1dImpl conv1d(String name, long inChannels, long outChannels, long[] kernelSize, long[] stride) {
         return register(name, new Conv1dImpl(new Conv1dOptions(inChannels, outChannels, new LongPointer(kernelSize)).stride(new LongPointer(stride))));
     }
 
@@ -221,7 +219,7 @@ public class nnn {
         return register(name, new Conv1dImpl(inChannels, outChannels, new LongPointer(kernelSize)));
     }
 
-    public static Conv1dImpl Conv1d(String name, long inChannels, long outChannels, long kernelSize, long stride) {
+    public static Conv1dImpl Conv1d(String name, long inChannels, long outChannels, long[] kernelSize, long[] stride) {
         return register(name, new Conv1dImpl(new Conv1dOptions(inChannels, outChannels, new LongPointer(kernelSize)).stride(new LongPointer(stride))));
     }
 
@@ -230,12 +228,18 @@ public class nnn {
         return register(name, new Conv1dImpl(options));
     }
 
-    public static Conv1dImpl conv1d(long inChannels, long outChannels, long kernelSize) {
+    public static Conv1dImpl conv1d(long inChannels, long outChannels, long[] kernelSize) {
         return create(new Conv1dImpl(inChannels, outChannels, new LongPointer(kernelSize)));
     }
 
-    public static Conv1dImpl Conv1d(long inChannels, long outChannels, long kernelSize) {
-        return create(new Conv1dImpl(inChannels, outChannels, new LongPointer(kernelSize)));
+    public static Conv1dImpl Conv1d(long inChannels, long outChannels, long[] kernelSize, long[] stride) {
+        return create(new Conv1dImpl(new Conv1dOptions(inChannels, outChannels, new LongPointer(kernelSize)).stride(new LongPointer(stride))));
+    }
+
+    public static Conv1dImpl Conv1d(long inChannels, long outChannels, long[] kernelSize, long[] stride,long[] padding) {
+        var options = new Conv1dOptions(inChannels, outChannels, new LongPointer(kernelSize)).stride(new LongPointer(stride));
+        options.padding().put(new LongPointer(padding));
+        return create(new Conv1dImpl(options));
     }
 
     // ========================================================================
@@ -314,20 +318,20 @@ public class nnn {
     // CONV TRANSPOSE 1D
     // ========================================================================
 
-    public static ConvTranspose1dImpl conv_transpose1d(String name, long inChannels, long outChannels, long kernelSize) {
+    public static ConvTranspose1dImpl conv_transpose1d(String name, long inChannels, long outChannels, long... kernelSize) {
         return register(name, new ConvTranspose1dImpl(inChannels, outChannels, new LongPointer(kernelSize)));
     }
 
-    public static ConvTranspose1dImpl conv_transpose1d(String name, long inChannels, long outChannels, long kernelSize, long stride) {
+    public static ConvTranspose1dImpl conv_transpose1d(String name, long inChannels, long outChannels, long[] kernelSize, long... stride) {
         return register(name, new ConvTranspose1dImpl(new ConvTranspose1dOptions(inChannels, outChannels, new LongPointer(kernelSize))
                 .stride(new LongPointer(stride))));
     }
 
-    public static ConvTranspose1dImpl Conv_transpose1d(String name, long inChannels, long outChannels, long kernelSize) {
+    public static ConvTranspose1dImpl Conv_transpose1d(String name, long inChannels, long outChannels, long... kernelSize) {
         return register(name, new ConvTranspose1dImpl(inChannels, outChannels, new LongPointer(kernelSize)));
     }
 
-    public static ConvTranspose1dImpl Conv_transpose1d(String name, long inChannels, long outChannels, long kernelSize, long stride) {
+    public static ConvTranspose1dImpl Conv_transpose1d(String name, long inChannels, long outChannels, long[] kernelSize, long[] stride) {
         return register(name, new ConvTranspose1dImpl(new ConvTranspose1dOptions(inChannels, outChannels, new LongPointer(kernelSize))
                 .stride(new LongPointer(stride))));
     }
@@ -335,11 +339,11 @@ public class nnn {
         return register(name, new ConvTranspose1dImpl(options));
     }
 
-    public static ConvTranspose1dImpl conv_transpose1d(long inChannels, long outChannels, long kernelSize) {
+    public static ConvTranspose1dImpl conv_transpose1d(long inChannels, long outChannels, long... kernelSize) {
         return create(new ConvTranspose1dImpl(inChannels, outChannels, new LongPointer(kernelSize)));
     }
 
-    public static ConvTranspose1dImpl Conv_transpose1d(long inChannels, long outChannels, long kernelSize) {
+    public static ConvTranspose1dImpl Conv_transpose1d(long inChannels, long outChannels, long... kernelSize) {
         return create(new ConvTranspose1dImpl(inChannels, outChannels, new LongPointer(kernelSize)));
     }
     // ========================================================================
@@ -497,14 +501,14 @@ public class nnn {
         return create(new MaxUnpool1dImpl(options));
     }
 
-    public static AdaptiveAvgPool1dImpl adaptive_avg_pool1d(String name, long... outputSize) {
-        LongVector vec = new LongVector(outputSize);
-        return register(name, new AdaptiveAvgPool1dImpl(vec));
+    public static AdaptiveAvgPool1dImpl adaptive_avg_pool1d(String name, long outputSize) {
+
+        return register(name, new AdaptiveAvgPool1dImpl(new AdaptiveAvgPool1dOptions(new LongOptional(outputSize))));
     }
 
-    public static AdaptiveAvgPool1dImpl adaptive_avg_pool1d(long... outputSize) {
-        LongVector vec = new LongVector(outputSize);
-        return create(new AdaptiveAvgPool1dImpl(vec));
+    public static AdaptiveAvgPool1dImpl adaptive_avg_pool1d(long outputSize) {
+
+        return create(new AdaptiveAvgPool1dImpl(new AdaptiveAvgPool1dOptions(new LongOptional(outputSize))));
     }
 
     public static AdaptiveAvgPool1dImpl adaptive_avg_pool1d(String name, AdaptiveAvgPool1dOptions options) {
@@ -514,14 +518,14 @@ public class nnn {
         return create(new AdaptiveAvgPool1dImpl(options));
     }
 
-    public static AdaptiveMaxPool1dImpl adaptive_max_pool1d(String name, long... outputSize) {
-        LongVector vec = new LongVector(outputSize);
-        return register(name, new AdaptiveMaxPool1dImpl(vec));
+    public static AdaptiveMaxPool1dImpl adaptive_max_pool1d(String name, long outputSize) {
+
+        return register(name, new AdaptiveMaxPool1dImpl(new AdaptiveMaxPool1dOptions(new LongOptional(outputSize))));
     }
 
-    public static AdaptiveMaxPool1dImpl adaptive_max_pool1d(long... outputSize) {
-        LongVector vec = new LongVector(outputSize);
-        return create(new AdaptiveMaxPool1dImpl(vec));
+    public static AdaptiveMaxPool1dImpl adaptive_max_pool1d(long outputSize) {
+
+        return create(new AdaptiveMaxPool1dImpl(new AdaptiveMaxPool1dOptions(new LongOptional(outputSize))));
     }
 
     public static AdaptiveMaxPool1dImpl adaptive_max_pool1d(String name, AdaptiveMaxPool1dOptions options) {
@@ -627,14 +631,14 @@ public class nnn {
         return create(new MaxUnpool2dImpl(options));
     }
 
-    public static AdaptiveAvgPool2dImpl adaptive_avg_pool2d(String name, long... outputSize) {
-        LongVector vec = new LongVector(outputSize);
-        return register(name, new AdaptiveAvgPool2dImpl(vec));
+    public static AdaptiveAvgPool2dImpl adaptive_avg_pool2d(String name, long outputSize) {
+
+        return register(name, new AdaptiveAvgPool2dImpl(new AdaptiveAvgPool2dOptions(new LongOptional(outputSize))));
     }
 
-    public static AdaptiveAvgPool2dImpl adaptive_avg_pool2d(long... outputSize) {
-        LongVector vec = new LongVector(outputSize);
-        return create(new AdaptiveAvgPool2dImpl(vec));
+    public static AdaptiveAvgPool2dImpl adaptive_avg_pool2d(long outputSize) {
+
+        return create(new AdaptiveAvgPool2dImpl(new AdaptiveAvgPool2dOptions(new LongOptional(outputSize))));
     }
 
     public static AdaptiveAvgPool2dImpl adaptive_avg_pool2d(String name, AdaptiveAvgPool2dOptions options) {
@@ -644,14 +648,14 @@ public class nnn {
         return create(new AdaptiveAvgPool2dImpl(options));
     }
 
-    public static AdaptiveMaxPool2dImpl adaptive_max_pool2d(String name, long... outputSize) {
-        LongVector vec = new LongVector(outputSize);
-        return register(name, new AdaptiveMaxPool2dImpl(vec));
+    public static AdaptiveMaxPool2dImpl adaptive_max_pool2d(String name, long outputSize) {
+
+        return register(name, new AdaptiveMaxPool2dImpl(new AdaptiveMaxPool2dOptions(new LongOptional(outputSize))));
     }
 
-    public static AdaptiveMaxPool2dImpl adaptive_max_pool2d(long... outputSize) {
-        LongVector vec = new LongVector(outputSize);
-        return create(new AdaptiveMaxPool2dImpl(vec));
+    public static AdaptiveMaxPool2dImpl adaptive_max_pool2d(long outputSize) {
+
+        return create(new AdaptiveMaxPool2dImpl(new AdaptiveMaxPool2dOptions(new LongOptional(outputSize))));
     }
 
     public static AdaptiveMaxPool2dImpl adaptive_max_pool2d(String name, AdaptiveMaxPool2dOptions options) {
@@ -676,13 +680,13 @@ public class nnn {
         return create(new LPPool2dImpl(options));
     }
 
-    public static FractionalMaxPool2dImpl fractional_max_pool2d(String name, long kernelSize) {
-        return register(name, new FractionalMaxPool2dImpl(new LongPointer(kernelSize, kernelSize)));
-    }
-
-    public static FractionalMaxPool2dImpl fractional_max_pool2d(long kernelSize) {
-        return create(new FractionalMaxPool2dImpl(new LongPointer(kernelSize, kernelSize)));
-    }
+//    public static FractionalMaxPool2dImpl fractional_max_pool2d(String name, long kernelSize) {
+//        return register(name, new FractionalMaxPool2dImpl(new LongPointer(kernelSize, kernelSize)));
+//    }
+//
+//    public static FractionalMaxPool2dImpl fractional_max_pool2d(long kernelSize) {
+//        return create(new FractionalMaxPool2dImpl(new LongPointer(kernelSize, kernelSize)));
+//    }
 
     public static FractionalMaxPool2dImpl fractional_max_pool2d(String name, FractionalMaxPool2dOptions options) {
         return register(name, new FractionalMaxPool2dImpl(options));
@@ -772,14 +776,14 @@ public class nnn {
         return create(new MaxUnpool3dImpl(options));
     }
 
-    public static AdaptiveAvgPool3dImpl adaptive_avg_pool3d(String name, long... outputSize) {
-        LongVector vec = new LongVector(outputSize);
-        return register(name, new AdaptiveAvgPool3dImpl(vec));
+    public static AdaptiveAvgPool3dImpl adaptive_avg_pool3d(String name, long outputSize) {
+
+        return register(name, new AdaptiveAvgPool3dImpl(new AdaptiveAvgPool3dOptions(new LongOptional(outputSize))));
     }
 
-    public static AdaptiveAvgPool3dImpl adaptive_avg_pool3d(long... outputSize) {
-        LongVector vec = new LongVector(outputSize);
-        return create(new AdaptiveAvgPool3dImpl(vec));
+    public static AdaptiveAvgPool3dImpl adaptive_avg_pool3d(long outputSize) {
+
+        return create(new AdaptiveAvgPool3dImpl(new AdaptiveAvgPool3dOptions(new LongOptional(outputSize))));
     }
 
     public static AdaptiveAvgPool3dImpl adaptive_avg_pool3d(String name, AdaptiveAvgPool3dOptions options) {
@@ -789,14 +793,14 @@ public class nnn {
         return create(new AdaptiveAvgPool3dImpl(options));
     }
 
-    public static AdaptiveMaxPool3dImpl adaptive_max_pool3d(String name, long... outputSize) {
-        LongVector vec = new LongVector(outputSize);
-        return register(name, new AdaptiveMaxPool3dImpl(vec));
+    public static AdaptiveMaxPool3dImpl adaptive_max_pool3d(String name, long outputSize) {
+
+        return register(name, new AdaptiveMaxPool3dImpl(new AdaptiveMaxPool3dOptions(new LongOptional(outputSize))));
     }
 
-    public static AdaptiveMaxPool3dImpl adaptive_max_pool3d(long... outputSize) {
-        LongVector vec = new LongVector(outputSize);
-        return create(new AdaptiveMaxPool3dImpl(vec));
+    public static AdaptiveMaxPool3dImpl adaptive_max_pool3d(long outputSize) {
+
+        return create(new AdaptiveMaxPool3dImpl(new AdaptiveMaxPool3dOptions(new LongOptional(outputSize))));
     }
 
     public static AdaptiveMaxPool3dImpl adaptive_max_pool3d(String name, AdaptiveMaxPool3dOptions options) {
@@ -821,12 +825,12 @@ public class nnn {
         return create(new LPPool3dImpl(options));
     }
 
-    public static FractionalMaxPool3dImpl fractional_max_pool3d(String name, long kernelSize) {
-        return register(name, new FractionalMaxPool3dImpl(new LongPointer(kernelSize, kernelSize, kernelSize)));
+    public static FractionalMaxPool3dImpl fractional_max_pool3d(String name, long kernelSize, long ... outputSize) {
+        return register(name, new FractionalMaxPool3dImpl(new FractionalMaxPool3dOptions(new LongPointer(kernelSize, kernelSize, kernelSize)).output_size(new LongExpandingArrayOptional(new LongPointer(outputSize)))));
     }
 
-    public static FractionalMaxPool3dImpl fractional_max_pool3d(long kernelSize) {
-        return create(new FractionalMaxPool3dImpl(new LongPointer(kernelSize, kernelSize, kernelSize)));
+    public static FractionalMaxPool3dImpl fractional_max_pool3d(long kernelSize, long ... outputSize) {
+        return create(new FractionalMaxPool3dImpl(new FractionalMaxPool3dOptions(new LongPointer(kernelSize, kernelSize, kernelSize)).output_size(new LongExpandingArrayOptional(new LongPointer(outputSize)))));
     }
 
     public static FractionalMaxPool3dImpl fractional_max_pool3d(String name, FractionalMaxPool3dOptions options) {
@@ -835,6 +839,21 @@ public class nnn {
     public static FractionalMaxPool3dImpl fractional_max_pool3d(FractionalMaxPool3dOptions options) {
         return create(new FractionalMaxPool3dImpl(options));
     }
+
+    public static FractionalMaxPool2dImpl fractional_max_pool2d(String name, long kernelSize, long ... outputSize) {
+        return register(name, new FractionalMaxPool2dImpl(new FractionalMaxPool2dOptions(new LongPointer(kernelSize, kernelSize)).output_size(new LongExpandingArrayOptional(new LongPointer(outputSize)))));
+    }
+
+    public static FractionalMaxPool2dImpl fractional_max_pool2d(long kernelSize, long ... outputSize) {
+        return create(new FractionalMaxPool2dImpl(new FractionalMaxPool2dOptions(new LongPointer(kernelSize, kernelSize)).output_size(new LongExpandingArrayOptional(new LongPointer(outputSize)))));
+    }
+
+//    public static FractionalMaxPool2dImpl fractional_max_pool2d(String name, FractionalMaxPool2dOptions options) {
+//        return register(name, new FractionalMaxPool2dImpl(options));
+//    }
+//    public static FractionalMaxPool2dImpl fractional_max_pool2d(FractionalMaxPool2dOptions options) {
+//        return create(new FractionalMaxPool2dImpl(options));
+//    }
 
     // ========================================================================
     // PADDING
