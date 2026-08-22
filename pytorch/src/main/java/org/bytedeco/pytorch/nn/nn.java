@@ -43,8 +43,10 @@ package org.bytedeco.pytorch.nn;
 import org.bytedeco.javacpp.BooleanPointer;
 import org.bytedeco.javacpp.LongPointer;
 import org.bytedeco.javacpp.Pointer;
+import org.bytedeco.javacpp.annotation.Cast;
 import org.bytedeco.pytorch.DoubleOptional;
 import org.bytedeco.pytorch.LongVector;
+import org.bytedeco.pytorch.LongVectorOptional;
 import org.bytedeco.pytorch.enumtype.Conv2dPadding;
 import org.bytedeco.pytorch.nn.modules.*;
 import org.bytedeco.pytorch.nn.modules.container.*;
@@ -208,15 +210,15 @@ public class nn {
     // ========================================================================
 
     public static Conv2dImpl conv2d(String name, long inChannels, long outChannels, long kernelSize) {
-        return register(name, new Conv2dImpl(inChannels, outChannels, new LongPointer(kernelSize)));
+        return register(name, new Conv2dImpl(inChannels, outChannels, new LongPointer(kernelSize, kernelSize)));
     }
 
     public static Conv2dImpl conv2d(String name, long inChannels, long outChannels, long kernelSize, long stride) {
-        return register(name, new Conv2dImpl(new Conv2dOptions(inChannels, outChannels, new LongPointer(kernelSize)).stride(new LongPointer(stride))));
+        return register(name, new Conv2dImpl(new Conv2dOptions(inChannels, outChannels, new LongPointer(kernelSize, kernelSize)).stride(new LongPointer(stride, stride))));
     }
 
     public static Conv2dImpl conv2d(String name, long inChannels, long outChannels, long kernelSize, long stride, long padding) {
-        return register(name, new Conv2dImpl(new Conv2dOptions(inChannels, outChannels, new LongPointer(kernelSize)).stride(new LongPointer(stride)).padding(new Conv2dPadding(new LongPointer(padding)))));
+        return register(name, new Conv2dImpl(new Conv2dOptions(inChannels, outChannels, new LongPointer(kernelSize, kernelSize)).stride(new LongPointer(stride, stride)).padding(new Conv2dPadding(new LongPointer(padding, padding)))));
     }
 
     public static Conv2dImpl conv2d(String name, Conv2dOptions options) {
@@ -224,7 +226,7 @@ public class nn {
     }
 
     public static Conv2dImpl conv2d(long inChannels, long outChannels, long kernelSize) {
-        return create(new Conv2dImpl(inChannels, outChannels, new LongPointer(kernelSize)));
+        return create(new Conv2dImpl(inChannels, outChannels, new LongPointer(kernelSize, kernelSize)));
     }
 
     // ========================================================================
@@ -232,11 +234,11 @@ public class nn {
     // ========================================================================
 
     public static Conv3dImpl conv3d(String name, long inChannels, long outChannels, long kernelSize) {
-        return register(name, new Conv3dImpl(inChannels, outChannels, new LongPointer(kernelSize)));
+        return register(name, new Conv3dImpl(inChannels, outChannels, new LongPointer(kernelSize, kernelSize, kernelSize)));
     }
 
     public static Conv3dImpl conv3d(String name, long inChannels, long outChannels, long kernelSize, long stride) {
-        return register(name, new Conv3dImpl(new Conv3dOptions(inChannels, outChannels, new LongPointer(kernelSize)).stride(new LongPointer(stride))));
+        return register(name, new Conv3dImpl(new Conv3dOptions(inChannels, outChannels, new LongPointer(kernelSize, kernelSize, kernelSize)).stride(new LongPointer(stride, stride, stride))));
     }
 
     public static Conv3dImpl conv3d(String name, Conv3dOptions options) {
@@ -244,7 +246,7 @@ public class nn {
     }
 
     public static Conv3dImpl conv3d(long inChannels, long outChannels, long kernelSize) {
-        return create(new Conv3dImpl(inChannels, outChannels, new LongPointer(kernelSize)));
+        return create(new Conv3dImpl(inChannels, outChannels, new LongPointer(kernelSize, kernelSize, kernelSize)));
     }
 
     // ========================================================================
@@ -255,6 +257,10 @@ public class nn {
         return register(name, new ConvTranspose1dImpl(inChannels, outChannels, new LongPointer(kernelSize)));
     }
 
+    public static ConvTranspose1dImpl conv_transpose1d(String name, long inChannels, long outChannels, long kernelSize, long stride) {
+        return register(name, new ConvTranspose1dImpl(new ConvTranspose1dOptions(inChannels, outChannels, new LongPointer(kernelSize))
+                .stride(new LongPointer(stride))));
+    }
     public static ConvTranspose1dImpl conv_transpose1d(String name, ConvTranspose1dOptions options) {
         return register(name, new ConvTranspose1dImpl(options));
     }
@@ -268,11 +274,12 @@ public class nn {
     // ========================================================================
 
     public static ConvTranspose2dImpl conv_transpose2d(String name, long inChannels, long outChannels, long kernelSize) {
-        return register(name, new ConvTranspose2dImpl(inChannels, outChannels, new LongPointer(kernelSize)));
+        return register(name, new ConvTranspose2dImpl(inChannels, outChannels, new LongPointer(kernelSize, kernelSize)));
     }
 
     public static ConvTranspose2dImpl conv_transpose2d(String name, long inChannels, long outChannels, long kernelSize, long stride) {
-        return register(name, new ConvTranspose2dImpl(new ConvTranspose2dOptions(inChannels, outChannels, new LongPointer(kernelSize)).stride(new LongPointer(stride))));
+        return register(name, new ConvTranspose2dImpl(new ConvTranspose2dOptions(inChannels, outChannels, new LongPointer(kernelSize, kernelSize))
+                .stride(new LongPointer(stride, stride))));
     }
 
     public static ConvTranspose2dImpl conv_transpose2d(String name, ConvTranspose2dOptions options) {
@@ -280,7 +287,7 @@ public class nn {
     }
 
     public static ConvTranspose2dImpl conv_transpose2d(long inChannels, long outChannels, long kernelSize) {
-        return create(new ConvTranspose2dImpl(inChannels, outChannels, new LongPointer(kernelSize)));
+        return create(new ConvTranspose2dImpl(inChannels, outChannels, new LongPointer(kernelSize, kernelSize)));
     }
 
     public static ConvTranspose2dImpl conv_transpose2d(ConvTranspose2dOptions options) {
@@ -292,7 +299,7 @@ public class nn {
     // ========================================================================
 
     public static ConvTranspose3dImpl conv_transpose3d(String name, long inChannels, long outChannels, long kernelSize) {
-        return register(name, new ConvTranspose3dImpl(inChannels, outChannels, new LongPointer(kernelSize)));
+        return register(name, new ConvTranspose3dImpl(inChannels, outChannels, new LongPointer(kernelSize, kernelSize, kernelSize)));
     }
 
     public static ConvTranspose3dImpl conv_transpose3d(String name, ConvTranspose3dOptions options) {
@@ -300,13 +307,17 @@ public class nn {
     }
 
     public static ConvTranspose3dImpl conv_transpose3d(long inChannels, long outChannels, long kernelSize) {
-        return create(new ConvTranspose3dImpl(inChannels, outChannels, new LongPointer(kernelSize)));
+        return create(new ConvTranspose3dImpl(inChannels, outChannels, new LongPointer(kernelSize, kernelSize, kernelSize)));
     }
 
     public static ConvTranspose3dImpl conv_transpose3d(ConvTranspose3dOptions options) {
         return create(new ConvTranspose3dImpl(options));
     }
 
+    public static ConvTranspose3dImpl conv_transpose3d(String name, long inChannels, long outChannels, long kernelSize, long stride) {
+        return register(name, new ConvTranspose3dImpl(new ConvTranspose3dOptions(inChannels, outChannels, new LongPointer(kernelSize, kernelSize, kernelSize))
+                .stride(new LongPointer(stride, stride, stride))));
+    }
     // ========================================================================
     // POOLING 1D
     // ========================================================================
@@ -399,11 +410,11 @@ public class nn {
     }
 
     public static LPPool1dImpl lp_pool1d(String name, long kernelSize, double normType) {
-        return register(name, new LPPool1dImpl(normType,new LongPointer(kernelSize)));
+        return register(name, new LPPool1dImpl(normType, new LongPointer(kernelSize)));
     }
 
     public static LPPool1dImpl lp_pool1d(long kernelSize, double normType) {
-        return create(new LPPool1dImpl(normType,new LongPointer(kernelSize)));
+        return create(new LPPool1dImpl(normType, new LongPointer(kernelSize)));
     }
 
     public static LPPool1dImpl lp_pool1d(String name, LPPool1dOptions options) {
@@ -418,15 +429,15 @@ public class nn {
     // ========================================================================
 
     public static AvgPool2dImpl avg_pool2d(String name, long kernelSize) {
-        return register(name, new AvgPool2dImpl(new LongPointer(kernelSize)));
+        return register(name, new AvgPool2dImpl(new LongPointer(kernelSize, kernelSize)));
     }
 
     public static AvgPool2dImpl avg_pool2d(String name, long kernelSize, long stride) {
-        return register(name, new AvgPool2dImpl(new AvgPool2dOptions(new LongPointer(kernelSize)).stride(new LongPointer(stride))));
+        return register(name, new AvgPool2dImpl(new AvgPool2dOptions(new LongPointer(kernelSize, kernelSize)).stride(new LongPointer(stride, stride))));
     }
 
     public static AvgPool2dImpl avg_pool2d(long kernelSize) {
-        return create(new AvgPool2dImpl(new LongPointer(kernelSize)));
+        return create(new AvgPool2dImpl(new LongPointer(kernelSize, kernelSize)));
     }
 
     public static AvgPool2dImpl avg_pool2d(String name, AvgPool2dOptions options) {
@@ -437,15 +448,15 @@ public class nn {
     }
 
     public static MaxPool2dImpl max_pool2d(String name, long kernelSize) {
-        return register(name, new MaxPool2dImpl(new LongPointer(kernelSize)));
+        return register(name, new MaxPool2dImpl(new LongPointer(kernelSize, kernelSize)));
     }
 
     public static MaxPool2dImpl max_pool2d(String name, long kernelSize, long stride) {
-        return register(name, new MaxPool2dImpl(new MaxPool2dOptions(new LongPointer(kernelSize)).stride(new LongPointer(stride))));
+        return register(name, new MaxPool2dImpl(new MaxPool2dOptions(new LongPointer(kernelSize, kernelSize)).stride(new LongPointer(stride, stride))));
     }
 
     public static MaxPool2dImpl max_pool2d(long kernelSize) {
-        return create(new MaxPool2dImpl(new LongPointer(kernelSize)));
+        return create(new MaxPool2dImpl(new LongPointer(kernelSize, kernelSize)));
     }
 
     public static MaxPool2dImpl max_pool2d(String name, MaxPool2dOptions options) {
@@ -456,11 +467,11 @@ public class nn {
     }
 
     public static MaxUnpool2dImpl max_unpool2d(String name, long kernelSize) {
-        return register(name, new MaxUnpool2dImpl(new LongPointer(kernelSize)));
+        return register(name, new MaxUnpool2dImpl(new LongPointer(kernelSize, kernelSize)));
     }
 
     public static MaxUnpool2dImpl max_unpool2d(long kernelSize) {
-        return create(new MaxUnpool2dImpl(new LongPointer(kernelSize)));
+        return create(new MaxUnpool2dImpl(new LongPointer(kernelSize, kernelSize)));
     }
 
     public static MaxUnpool2dImpl max_unpool2d(String name, MaxUnpool2dOptions options) {
@@ -505,11 +516,11 @@ public class nn {
     }
 
     public static LPPool2dImpl lp_pool2d(String name, long kernelSize, double normType) {
-        return register(name, new LPPool2dImpl(normType, new LongPointer(kernelSize)));
+        return register(name, new LPPool2dImpl(normType, new LongPointer(kernelSize, kernelSize)));
     }
 
     public static LPPool2dImpl lp_pool2d(long kernelSize, double normType) {
-        return create(new LPPool2dImpl(normType, new LongPointer(kernelSize)));
+        return create(new LPPool2dImpl(normType, new LongPointer(kernelSize, kernelSize)));
     }
 
     public static LPPool2dImpl lp_pool2d(String name, LPPool2dOptions options) {
@@ -520,11 +531,11 @@ public class nn {
     }
 
     public static FractionalMaxPool2dImpl fractional_max_pool2d(String name, long kernelSize) {
-        return register(name, new FractionalMaxPool2dImpl(new LongPointer(kernelSize)));
+        return register(name, new FractionalMaxPool2dImpl(new LongPointer(kernelSize, kernelSize)));
     }
 
     public static FractionalMaxPool2dImpl fractional_max_pool2d(long kernelSize) {
-        return create(new FractionalMaxPool2dImpl(new LongPointer(kernelSize)));
+        return create(new FractionalMaxPool2dImpl(new LongPointer(kernelSize, kernelSize)));
     }
 
     public static FractionalMaxPool2dImpl fractional_max_pool2d(String name, FractionalMaxPool2dOptions options) {
@@ -539,15 +550,15 @@ public class nn {
     // ========================================================================
 
     public static AvgPool3dImpl avg_pool3d(String name, long kernelSize) {
-        return register(name, new AvgPool3dImpl(new LongPointer(kernelSize)));
+        return register(name, new AvgPool3dImpl(new LongPointer(kernelSize, kernelSize, kernelSize)));
     }
 
     public static AvgPool3dImpl avg_pool3d(String name, long kernelSize, long stride) {
-        return register(name, new AvgPool3dImpl(new AvgPool3dOptions(new LongPointer(kernelSize)).stride(new LongPointer(stride))));
+        return register(name, new AvgPool3dImpl(new AvgPool3dOptions(new LongPointer(kernelSize, kernelSize, kernelSize)).stride(new LongPointer(stride, stride, stride))));
     }
 
     public static AvgPool3dImpl avg_pool3d(long kernelSize) {
-        return create(new AvgPool3dImpl(new LongPointer(kernelSize)));
+        return create(new AvgPool3dImpl(new LongPointer(kernelSize, kernelSize, kernelSize)));
     }
 
     public static AvgPool3dImpl avg_pool3d(String name, AvgPool3dOptions options) {
@@ -558,15 +569,15 @@ public class nn {
     }
 
     public static MaxPool3dImpl max_pool3d(String name, long kernelSize) {
-        return register(name, new MaxPool3dImpl(new LongPointer(kernelSize)));
+        return register(name, new MaxPool3dImpl(new LongPointer(kernelSize, kernelSize, kernelSize)));
     }
 
     public static MaxPool3dImpl max_pool3d(String name, long kernelSize, long stride) {
-        return register(name, new MaxPool3dImpl(new MaxPool3dOptions(new LongPointer(kernelSize)).stride(new LongPointer(stride))));
+        return register(name, new MaxPool3dImpl(new MaxPool3dOptions(new LongPointer(kernelSize, kernelSize, kernelSize)).stride(new LongPointer(stride, stride, stride))));
     }
 
     public static MaxPool3dImpl max_pool3d(long kernelSize) {
-        return create(new MaxPool3dImpl(new LongPointer(kernelSize)));
+        return create(new MaxPool3dImpl(new LongPointer(kernelSize, kernelSize, kernelSize)));
     }
 
     public static MaxPool3dImpl max_pool3d(String name, MaxPool3dOptions options) {
@@ -577,11 +588,11 @@ public class nn {
     }
 
     public static MaxUnpool3dImpl max_unpool3d(String name, long kernelSize) {
-        return register(name, new MaxUnpool3dImpl(new LongPointer(kernelSize)));
+        return register(name, new MaxUnpool3dImpl(new LongPointer(kernelSize, kernelSize, kernelSize)));
     }
 
     public static MaxUnpool3dImpl max_unpool3d(long kernelSize) {
-        return create(new MaxUnpool3dImpl(new LongPointer(kernelSize)));
+        return create(new MaxUnpool3dImpl(new LongPointer(kernelSize, kernelSize, kernelSize)));
     }
 
     public static MaxUnpool3dImpl max_unpool3d(String name, MaxUnpool3dOptions options) {
@@ -626,11 +637,11 @@ public class nn {
     }
 
     public static LPPool3dImpl lp_pool3d(String name, long kernelSize, double normType) {
-        return register(name, new LPPool3dImpl(normType, new LongPointer(kernelSize)));
+        return register(name, new LPPool3dImpl(normType, new LongPointer(kernelSize, kernelSize, kernelSize)));
     }
 
     public static LPPool3dImpl lp_pool3d(long kernelSize, double normType) {
-        return create(new LPPool3dImpl(normType, new LongPointer(kernelSize)));
+        return create(new LPPool3dImpl(normType, new LongPointer(kernelSize, kernelSize, kernelSize)));
     }
 
     public static LPPool3dImpl lp_pool3d(String name, LPPool3dOptions options) {
@@ -641,11 +652,11 @@ public class nn {
     }
 
     public static FractionalMaxPool3dImpl fractional_max_pool3d(String name, long kernelSize) {
-        return register(name, new FractionalMaxPool3dImpl(new LongPointer(kernelSize)));
+        return register(name, new FractionalMaxPool3dImpl(new LongPointer(kernelSize, kernelSize, kernelSize)));
     }
 
     public static FractionalMaxPool3dImpl fractional_max_pool3d(long kernelSize) {
-        return create(new FractionalMaxPool3dImpl(new LongPointer(kernelSize)));
+        return create(new FractionalMaxPool3dImpl(new LongPointer(kernelSize, kernelSize, kernelSize)));
     }
 
     public static FractionalMaxPool3dImpl fractional_max_pool3d(String name, FractionalMaxPool3dOptions options) {
@@ -661,11 +672,11 @@ public class nn {
 
     // ReflectionPad
     public static ReflectionPad1dImpl reflection_pad1d(String name, long padding) {
-        return register(name, new ReflectionPad1dImpl(new LongPointer(padding)));
+        return register(name, new ReflectionPad1dImpl(new LongPointer(padding, padding)));
     }
 
     public static ReflectionPad1dImpl reflection_pad1d(long padding) {
-        return create(new ReflectionPad1dImpl(new LongPointer(padding)));
+        return create(new ReflectionPad1dImpl(new LongPointer(padding, padding)));
     }
 
     public static ReflectionPad1dImpl reflection_pad1d(String name, ReflectionPad1dOptions options) {
@@ -676,16 +687,15 @@ public class nn {
     }
 
     public static ReflectionPad2dImpl reflection_pad2d(String name, long padding) {
-        return register(name, new ReflectionPad2dImpl(new LongPointer(padding)));
+        return register(name, new ReflectionPad2dImpl(new LongPointer(padding, padding, padding, padding)));
     }
 
     public static ReflectionPad2dImpl reflection_pad2d(String name, long... padding) {
-        LongVector vec = new LongVector(padding);
-        return register(name, new ReflectionPad2dImpl(vec));
+        return register(name, new ReflectionPad2dImpl(new LongPointer(padding)));
     }
 
     public static ReflectionPad2dImpl reflection_pad2d(long padding) {
-        return create(new ReflectionPad2dImpl(new LongPointer(padding)));
+        return create(new ReflectionPad2dImpl(new LongPointer(padding, padding, padding, padding)));
     }
 
     public static ReflectionPad2dImpl reflection_pad2d(String name, ReflectionPad2dOptions options) {
@@ -695,14 +705,20 @@ public class nn {
         return create(new ReflectionPad2dImpl(options));
     }
 
+    public static ReflectionPad3dImpl reflection_pad3d(String name, long padding) {
+        return register(name, new ReflectionPad3dImpl(new LongPointer(padding, padding, padding, padding, padding, padding)));
+    }
+
     public static ReflectionPad3dImpl reflection_pad3d(String name, long... padding) {
-        LongVector vec = new LongVector(padding);
-        return register(name, new ReflectionPad3dImpl(vec));
+        return register(name, new ReflectionPad3dImpl(new LongPointer(padding)));
+    }
+
+    public static ReflectionPad3dImpl reflection_pad3d(long padding) {
+        return create(new ReflectionPad3dImpl(new LongPointer(padding, padding, padding, padding, padding, padding)));
     }
 
     public static ReflectionPad3dImpl reflection_pad3d(long... padding) {
-        LongVector vec = new LongVector(padding);
-        return create(new ReflectionPad3dImpl(vec));
+        return create(new ReflectionPad3dImpl(new LongPointer(padding)));
     }
 
     public static ReflectionPad3dImpl reflection_pad3d(String name, ReflectionPad3dOptions options) {
@@ -714,11 +730,11 @@ public class nn {
 
     // ReplicationPad
     public static ReplicationPad1dImpl replication_pad1d(String name, long padding) {
-        return register(name, new ReplicationPad1dImpl(new LongPointer(padding)));
+        return register(name, new ReplicationPad1dImpl(new LongPointer(padding, padding)));
     }
 
     public static ReplicationPad1dImpl replication_pad1d(long padding) {
-        return create(new ReplicationPad1dImpl(new LongPointer(padding)));
+        return create(new ReplicationPad1dImpl(new LongPointer(padding, padding)));
     }
 
     public static ReplicationPad1dImpl replication_pad1d(String name, ReplicationPad1dOptions options) {
@@ -729,16 +745,15 @@ public class nn {
     }
 
     public static ReplicationPad2dImpl replication_pad2d(String name, long padding) {
-        return register(name, new ReplicationPad2dImpl(new LongPointer(padding)));
+        return register(name, new ReplicationPad2dImpl(new LongPointer(padding, padding, padding, padding)));
     }
 
     public static ReplicationPad2dImpl replication_pad2d(String name, long... padding) {
-        LongVector vec = new LongVector(padding);
-        return register(name, new ReplicationPad2dImpl(vec));
+        return register(name, new ReplicationPad2dImpl(new LongPointer(padding)));
     }
 
     public static ReplicationPad2dImpl replication_pad2d(long padding) {
-        return create(new ReplicationPad2dImpl(new LongPointer(padding)));
+        return create(new ReplicationPad2dImpl(new LongPointer(padding, padding, padding, padding)));
     }
 
     public static ReplicationPad2dImpl replication_pad2d(String name, ReplicationPad2dOptions options) {
@@ -748,14 +763,20 @@ public class nn {
         return create(new ReplicationPad2dImpl(options));
     }
 
+    public static ReplicationPad3dImpl replication_pad3d(String name, long padding) {
+        return register(name, new ReplicationPad3dImpl(new LongPointer(padding, padding, padding, padding, padding, padding)));
+    }
+
     public static ReplicationPad3dImpl replication_pad3d(String name, long... padding) {
-        LongVector vec = new LongVector(padding);
-        return register(name, new ReplicationPad3dImpl(vec));
+        return register(name, new ReplicationPad3dImpl(new LongPointer(padding)));
+    }
+
+    public static ReplicationPad3dImpl replication_pad3d(long padding) {
+        return create(new ReplicationPad3dImpl(new LongPointer(padding, padding, padding, padding, padding, padding)));
     }
 
     public static ReplicationPad3dImpl replication_pad3d(long... padding) {
-        LongVector vec = new LongVector(padding);
-        return create(new ReplicationPad3dImpl(vec));
+        return create(new ReplicationPad3dImpl(new LongPointer(padding)));
     }
 
     public static ReplicationPad3dImpl replication_pad3d(String name, ReplicationPad3dOptions options) {
@@ -767,11 +788,11 @@ public class nn {
 
     // ConstantPad
     public static ConstantPad1dImpl constant_pad1d(String name, long padding, float value) {
-        return register(name, new ConstantPad1dImpl(new LongPointer(padding), value));
+        return register(name, new ConstantPad1dImpl(new LongPointer(padding, padding), value));
     }
 
     public static ConstantPad1dImpl constant_pad1d(long padding, float value) {
-        return create(new ConstantPad1dImpl(new LongPointer(padding), value));
+        return create(new ConstantPad1dImpl(new LongPointer(padding, padding), value));
     }
 
     public static ConstantPad1dImpl constant_pad1d(String name, ConstantPad1dOptions options) {
@@ -782,16 +803,15 @@ public class nn {
     }
 
     public static ConstantPad2dImpl constant_pad2d(String name, long padding, float value) {
-        return register(name, new ConstantPad2dImpl(new LongPointer(padding), value));
+        return register(name, new ConstantPad2dImpl(new LongPointer(padding, padding, padding, padding), value));
     }
 
     public static ConstantPad2dImpl constant_pad2d(String name, long... padding) {
-        LongVector vec = new LongVector(padding);
-        return register(name, new ConstantPad2dImpl(new LongPointer(vec), 0)); // value defaults to 0
+        return register(name, new ConstantPad2dImpl(new LongPointer(padding), 0));
     }
 
     public static ConstantPad2dImpl constant_pad2d(long padding, float value) {
-        return create(new ConstantPad2dImpl(new LongPointer(padding), value));
+        return create(new ConstantPad2dImpl(new LongPointer(padding, padding, padding, padding), value));
     }
 
     public static ConstantPad2dImpl constant_pad2d(String name, ConstantPad2dOptions options) {
@@ -802,17 +822,15 @@ public class nn {
     }
 
 //    public static ConstantPad3dImpl constant_pad3d(String name, long... padding) {
-//        LongVector vec = new LongVector(padding);
-//        return register(name, new ConstantPad3dImpl(new LongPointer(vec), 0));
+//        return register(name, new ConstantPad3dImpl(new LongPointer(padding), 0));
 //    }
 
     public static ConstantPad3dImpl constant_pad3d(String name, long... padding) {
-        LongVector vec = new LongVector(padding);
-        return register(name, new ConstantPad3dImpl(new LongPointer(vec), 0));
+        return register(name, new ConstantPad3dImpl(new LongPointer(padding), 0));
     }
 
     public static ConstantPad3dImpl constant_pad3d(long padding, float value) {
-        return create(new ConstantPad3dImpl(new LongPointer(padding), value));
+        return create(new ConstantPad3dImpl(new LongPointer(padding, padding, padding, padding, padding, padding), value));
     }
 
     public static ConstantPad3dImpl constant_pad3d(String name, ConstantPad3dOptions options) {
@@ -824,11 +842,11 @@ public class nn {
 
     // ZeroPad
     public static ZeroPad1dImpl zero_pad1d(String name, long padding) {
-        return register(name, new ZeroPad1dImpl(new LongPointer(padding)));
+        return register(name, new ZeroPad1dImpl(new LongPointer(padding, padding)));
     }
 
     public static ZeroPad1dImpl zero_pad1d(long padding) {
-        return create(new ZeroPad1dImpl(new LongPointer(padding)));
+        return create(new ZeroPad1dImpl(new LongPointer(padding, padding)));
     }
 
     public static ZeroPad1dImpl zero_pad1d(String name, ZeroPad1dOptions options) {
@@ -839,11 +857,11 @@ public class nn {
     }
 
     public static ZeroPad2dImpl zero_pad2d(String name, long padding) {
-        return register(name, new ZeroPad2dImpl(new LongPointer(padding)));
+        return register(name, new ZeroPad2dImpl(new LongPointer(padding, padding, padding, padding)));
     }
 
     public static ZeroPad2dImpl zero_pad2d(long padding) {
-        return create(new ZeroPad2dImpl(new LongPointer(padding)));
+        return create(new ZeroPad2dImpl(new LongPointer(padding, padding, padding, padding)));
     }
 
     public static ZeroPad2dImpl zero_pad2d(String name, ZeroPad2dOptions options) {
@@ -854,11 +872,11 @@ public class nn {
     }
 
     public static ZeroPad3dImpl zero_pad3d(String name, long padding) {
-        return register(name, new ZeroPad3dImpl(new LongPointer(padding)));
+        return register(name, new ZeroPad3dImpl(new LongPointer(padding, padding, padding, padding, padding, padding)));
     }
 
     public static ZeroPad3dImpl zero_pad3d(long padding) {
-        return create(new ZeroPad3dImpl(new LongPointer(padding)));
+        return create(new ZeroPad3dImpl(new LongPointer(padding, padding, padding, padding, padding, padding)));
     }
 
     public static ZeroPad3dImpl zero_pad3d(String name, ZeroPad3dOptions options) {
@@ -874,7 +892,7 @@ public class nn {
 
     // BatchNorm
     public static BatchNorm1dImpl batch_norm1d(String name, long numFeatures) {
-        return register(name, new BatchNorm1dImpl(new LongPointer(numFeatures)));
+        return register(name, new BatchNorm1dImpl(new BatchNormOptions(numFeatures)));
     }
 
     public static BatchNorm1dImpl batch_norm1d(String name, long numFeatures, float momentum, float eps) {
@@ -882,7 +900,7 @@ public class nn {
     }
 
     public static BatchNorm1dImpl batch_norm1d(long numFeatures) {
-        return create(new BatchNorm1dImpl(new LongPointer(numFeatures)));
+        return create(new BatchNorm1dImpl(new BatchNormOptions(numFeatures)));
     }
 
     public static BatchNorm1dImpl batch_norm1d(String name, BatchNormOptions options) {
@@ -893,7 +911,7 @@ public class nn {
     }
 
     public static BatchNorm2dImpl batch_norm2d(String name, long numFeatures) {
-        return register(name, new BatchNorm2dImpl(new LongPointer(numFeatures)));
+        return register(name, new BatchNorm2dImpl(new BatchNormOptions(numFeatures)));
     }
 
     public static BatchNorm2dImpl batch_norm2d(String name, long numFeatures, float momentum, float eps) {
@@ -901,7 +919,7 @@ public class nn {
     }
 
     public static BatchNorm2dImpl batch_norm2d(long numFeatures) {
-        return create(new BatchNorm2dImpl(new LongPointer(numFeatures)));
+        return create(new BatchNorm2dImpl(new BatchNormOptions(numFeatures)));
     }
 
     public static BatchNorm2dImpl batch_norm2d(String name, BatchNormOptions options) {
@@ -912,7 +930,7 @@ public class nn {
     }
 
     public static BatchNorm3dImpl batch_norm3d(String name, long numFeatures) {
-        return register(name, new BatchNorm3dImpl(new LongPointer(numFeatures)));
+        return register(name, new BatchNorm3dImpl(new BatchNormOptions(numFeatures)));
     }
 
     public static BatchNorm3dImpl batch_norm3d(String name, long numFeatures, float momentum, float eps) {
@@ -920,7 +938,7 @@ public class nn {
     }
 
     public static BatchNorm3dImpl batch_norm3d(long numFeatures) {
-        return create(new BatchNorm3dImpl(new LongPointer(numFeatures)));
+        return create(new BatchNorm3dImpl(new BatchNormOptions(numFeatures)));
     }
 
     public static BatchNorm3dImpl batch_norm3d(String name, BatchNormOptions options) {
@@ -932,11 +950,11 @@ public class nn {
 
     // InstanceNorm
     public static InstanceNorm1dImpl instance_norm1d(String name, long numFeatures) {
-        return register(name, new InstanceNorm1dImpl(new LongPointer(numFeatures)));
+        return register(name, new InstanceNorm1dImpl(new InstanceNormOptions(numFeatures)));
     }
 
     public static InstanceNorm1dImpl instance_norm1d(long numFeatures) {
-        return create(new InstanceNorm1dImpl(new LongPointer(numFeatures)));
+        return create(new InstanceNorm1dImpl(new InstanceNormOptions(numFeatures)));
     }
 
     public static InstanceNorm1dImpl instance_norm1d(String name, InstanceNormOptions options) {
@@ -947,11 +965,11 @@ public class nn {
     }
 
     public static InstanceNorm2dImpl instance_norm2d(String name, long numFeatures) {
-        return register(name, new InstanceNorm2dImpl(new LongPointer(numFeatures)));
+        return register(name, new InstanceNorm2dImpl(new InstanceNormOptions(numFeatures)));
     }
 
     public static InstanceNorm2dImpl instance_norm2d(long numFeatures) {
-        return create(new InstanceNorm2dImpl(new LongPointer(numFeatures)));
+        return create(new InstanceNorm2dImpl(new InstanceNormOptions(numFeatures)));
     }
 
     public static InstanceNorm2dImpl instance_norm2d(String name, InstanceNormOptions options) {
@@ -962,11 +980,11 @@ public class nn {
     }
 
     public static InstanceNorm3dImpl instance_norm3d(String name, long numFeatures) {
-        return register(name, new InstanceNorm3dImpl(new LongPointer(numFeatures)));
+        return register(name, new InstanceNorm3dImpl(new InstanceNormOptions(numFeatures)));
     }
 
     public static InstanceNorm3dImpl instance_norm3d(long numFeatures) {
-        return create(new InstanceNorm3dImpl(new LongPointer(numFeatures)));
+        return create(new InstanceNorm3dImpl(new InstanceNormOptions(numFeatures)));
     }
 
     public static InstanceNorm3dImpl instance_norm3d(String name, InstanceNormOptions options) {
@@ -2006,7 +2024,7 @@ public class nn {
 
     public static UpsampleImpl upsample(String name, long... size) {
         LongVector vec = new LongVector(size);
-        return register(name, new UpsampleImpl(vec));
+        return register(name, new UpsampleImpl(new UpsampleOptions().size(new LongVectorOptional(vec))));
     }
 
     public static UpsampleImpl upsample(String name, UpsampleOptions options) {
@@ -2015,21 +2033,25 @@ public class nn {
 
     public static UpsampleImpl upsample(long... size) {
         LongVector vec = new LongVector(size);
-        return create(new UpsampleImpl(vec));
+        UpsampleOptions options = new UpsampleOptions().size(new LongVectorOptional(vec));
+        return create(new UpsampleImpl(options));
     }
 
     public static UpsampleImpl upsample(UpsampleOptions options) {
         return create(new UpsampleImpl(options));
     }
 
-    public static FoldImpl fold(String name, long... outputSize) {
+    public static FoldImpl fold(String name, long[] outputSize, long... kernelSize) {
         LongVector vec = new LongVector(outputSize);
-        return register(name, new FoldImpl(vec));
+        return register(name, new FoldImpl(new FoldOptions(new LongPointer(outputSize),new LongPointer(kernelSize)).
+                output_size(new LongPointer(outputSize)).output_size(new LongPointer(kernelSize))));
     }
 
-    public static FoldImpl fold(long... outputSize) {
+    public static FoldImpl fold(long[] outputSize, long... kernelSize) {
         LongVector vec = new LongVector(outputSize);
-        return create(new FoldImpl(vec));
+        FoldOptions options = new FoldOptions(new LongPointer(outputSize),new LongPointer(kernelSize)).
+                output_size(new LongPointer(outputSize)).output_size(new LongPointer(kernelSize));
+        return create(new FoldImpl(options));
     }
 
     public static FoldImpl fold(String name, FoldOptions options) {
@@ -2040,13 +2062,17 @@ public class nn {
     }
 
     public static UnfoldImpl unfold(String name, long... kernelSize) {
-        LongVector vec = new LongVector(kernelSize);
-        return register(name, new UnfoldImpl(vec));
+        if (kernelSize.length == 1) {
+            return register(name, new UnfoldImpl(new UnfoldOptions(new LongPointer(kernelSize)).kernel_size(new LongPointer(kernelSize))));
+        }
+        return register(name, new UnfoldImpl(new UnfoldOptions(new LongPointer(kernelSize)).kernel_size(new LongPointer(kernelSize))));
     }
 
     public static UnfoldImpl unfold(long... kernelSize) {
-        LongVector vec = new LongVector(kernelSize);
-        return create(new UnfoldImpl(vec));
+        if (kernelSize.length == 1) {
+            return create(new UnfoldImpl(new UnfoldOptions(new LongPointer(kernelSize)).kernel_size(new LongPointer(kernelSize))));
+        }
+        return create(new UnfoldImpl(new UnfoldOptions(new LongPointer(kernelSize)).kernel_size(new LongPointer(kernelSize))));
     }
 
     public static UnfoldImpl unfold(String name, UnfoldOptions options) {
@@ -2320,96 +2346,163 @@ public class nn {
     // TRANSFORMER
     // ========================================================================
 
-    public static TransformerImpl transformer(String name) {
-        return register(name, new TransformerImpl(new Pointer()));
+    public static TransformerImpl transformer(String name,
+                                              long d_model,
+                                              long nhead,
+                                              long num_encoder_layers,
+                                              long num_decoder_layers) {
+        return register(name, new TransformerImpl(new TransformerOptions(d_model, nhead, num_encoder_layers, num_decoder_layers).
+                d_model(d_model).
+                nhead(nhead).
+                num_encoder_layers(num_encoder_layers).
+                num_decoder_layers(num_decoder_layers)));
     }
 
     public static TransformerImpl transformer(String name, TransformerOptions options) {
         return register(name, new TransformerImpl(options));
     }
 
-    public static TransformerImpl transformer() {
-        return create(new TransformerImpl(new Pointer()));
+    public static TransformerImpl transformer(long d_model,
+                                              long nhead,
+                                              long num_encoder_layers,
+                                              long num_decoder_layers) {
+        return create(new TransformerImpl(new TransformerOptions(d_model, nhead, num_encoder_layers, num_decoder_layers).
+                d_model(d_model).
+                nhead(nhead).
+                num_encoder_layers(num_encoder_layers).
+                num_decoder_layers(num_decoder_layers)));
     }
 
     public static TransformerImpl transformer(TransformerOptions options) {
         return create(new TransformerImpl(options));
     }
 
-    public static TransformerEncoderImpl transformer_encoder(String name) {
-        return register(name, new TransformerEncoderImpl(new Pointer()));
+    public static TransformerEncoderImpl transformer_encoder(String name, long d_model, long nhead,long num_layers) {
+        return register(name, new TransformerEncoderImpl(
+                new TransformerEncoderOptions(new TransformerEncoderLayerOptions(d_model, nhead).d_model(d_model).
+                nhead(nhead),num_layers).
+                num_layers(num_layers)));
+    }
+
+    public static TransformerEncoderImpl transformer_encoder(String name, TransformerEncoderLayerOptions layerOptions,long num_layers) {
+        return register(name, new TransformerEncoderImpl(new TransformerEncoderOptions(layerOptions,num_layers).
+                        num_layers(num_layers)));
     }
 
     public static TransformerEncoderImpl transformer_encoder(String name, TransformerEncoderOptions options) {
         return register(name, new TransformerEncoderImpl(options));
     }
 
-    public static TransformerEncoderImpl transformer_encoder() {
-        return create(new TransformerEncoderImpl(new Pointer()));
+    public static TransformerEncoderImpl transformer_encoder(long d_model, long nhead,long num_layers) {
+        return create(new TransformerEncoderImpl(new TransformerEncoderOptions(new TransformerEncoderLayerOptions(d_model, nhead).d_model(d_model).
+                        nhead(nhead),num_layers).
+                        num_layers(num_layers)));
+    }
+
+    public static TransformerEncoderImpl transformer_encoder(TransformerEncoderLayerOptions layerOptions,long num_layers) {
+        return create(new TransformerEncoderImpl(new TransformerEncoderOptions(layerOptions ,num_layers).
+                num_layers(num_layers)));
     }
 
     public static TransformerEncoderImpl transformer_encoder(TransformerEncoderOptions options) {
         return create(new TransformerEncoderImpl(options));
     }
 
-    public static TransformerDecoderImpl transformer_decoder(String name) {
-        return register(name, new TransformerDecoderImpl(new Pointer()));
+    public static TransformerDecoderImpl transformer_decoder(String name,TransformerDecoderLayerOptions decoder_layer_options,
+                                                              long num_layers) {
+        return register(name, new TransformerDecoderImpl(new TransformerDecoderOptions(decoder_layer_options,num_layers)));
+    }
+
+    public static TransformerDecoderImpl transformer_decoder(String name,long d_model, long nhead,
+                                                             long num_layers) {
+        TransformerDecoderLayerOptions decoder_layer_options = new TransformerDecoderLayerOptions(d_model, nhead);
+        decoder_layer_options.d_model(d_model);
+        decoder_layer_options.nhead(nhead);
+        return register(name, new TransformerDecoderImpl(new TransformerDecoderOptions(decoder_layer_options,num_layers)));
     }
 
     public static TransformerDecoderImpl transformer_decoder(String name, TransformerDecoderOptions options) {
         return register(name, new TransformerDecoderImpl(options));
     }
 
-    public static TransformerDecoderImpl transformer_decoder() {
-        return create(new TransformerDecoderImpl(new Pointer()));
+    public static TransformerDecoderImpl transformer_decoder(TransformerDecoderLayerOptions decoder_layer_options,
+                                                             long num_layers) {
+        return create(new TransformerDecoderImpl(new TransformerDecoderOptions(decoder_layer_options,num_layers)));
+    }
+
+    public static TransformerDecoderImpl transformer_decoder(long d_model, long nhead,
+                                                             long num_layers) {
+        TransformerDecoderLayerOptions decoder_layer_options = new TransformerDecoderLayerOptions(d_model, nhead);
+        return create(new TransformerDecoderImpl(new TransformerDecoderOptions(decoder_layer_options,num_layers)));
     }
 
     public static TransformerDecoderImpl transformer_decoder(TransformerDecoderOptions options) {
         return create(new TransformerDecoderImpl(options));
     }
 
-    public static TransformerEncoderLayerImpl transformer_encoder_layer(String name) {
-        return register(name, new TransformerEncoderLayerImpl(new Pointer()));
+    public static TransformerEncoderLayerImpl transformer_encoder_layer(String name, long d_model, long nhead, boolean batch_first) {
+        return register(name, new TransformerEncoderLayerImpl(new TransformerEncoderLayerOptions(d_model, nhead).d_model(d_model).
+                        nhead(nhead)));
     }
 
     public static TransformerEncoderLayerImpl transformer_encoder_layer(String name, TransformerEncoderLayerOptions options) {
         return register(name, new TransformerEncoderLayerImpl(options));
     }
 
-    public static TransformerEncoderLayerImpl transformer_encoder_layer() {
-        return create(new TransformerEncoderLayerImpl(new Pointer()));
+    public static TransformerEncoderLayerImpl transformer_encoder_layer(long d_model, long nhead, boolean batch_first) {
+        return create(new TransformerEncoderLayerImpl(new TransformerEncoderLayerOptions(d_model, nhead).d_model(d_model).
+                        nhead(nhead)));
     }
 
     public static TransformerEncoderLayerImpl transformer_encoder_layer(TransformerEncoderLayerOptions options) {
         return create(new TransformerEncoderLayerImpl(options));
     }
 
-    public static TransformerDecoderLayerImpl transformer_decoder_layer(String name) {
-        return register(name, new TransformerDecoderLayerImpl(new Pointer()));
+    public static TransformerDecoderLayerImpl transformer_decoder_layer(String name, long d_model, long nhead, boolean batch_first) {
+        return register(name, new TransformerDecoderLayerImpl(new TransformerDecoderLayerOptions(d_model, nhead).d_model(d_model).
+                        nhead(nhead)));
     }
 
     public static TransformerDecoderLayerImpl transformer_decoder_layer(String name, TransformerDecoderLayerOptions options) {
         return register(name, new TransformerDecoderLayerImpl(options));
     }
 
-    public static TransformerDecoderLayerImpl transformer_decoder_layer() {
-        return create(new TransformerDecoderLayerImpl(new Pointer()));
+    public static TransformerDecoderLayerImpl transformer_decoder_layer(long d_model, long nhead, boolean batch_first) {
+        TransformerDecoderLayerOptions decoder_layer_options = new TransformerDecoderLayerOptions(d_model, nhead);
+        decoder_layer_options.d_model(d_model);
+        decoder_layer_options.nhead(nhead);
+        var layer =  new TransformerDecoderLayerImpl(new TransformerDecoderLayerOptions(d_model, nhead).d_model(d_model).
+                nhead(nhead));
+//        if (batch_first) {
+//            // 标记给调用方/包装层用；原生 Impl 吃不到 flag
+//            layer.attr("batch_first", true); // 仅作文档/调试，不要指望它改 forward
+//        }
+//        layer.batch_first(batch_first);
+        return create(layer);
     }
 
     public static TransformerDecoderLayerImpl transformer_decoder_layer(TransformerDecoderLayerOptions options) {
         return create(new TransformerDecoderLayerImpl(options));
     }
 
-    public static MultiheadAttentionImpl multihead_attention(String name) {
-        return register(name, new MultiheadAttentionImpl(new Pointer()));
+    public static MultiheadAttentionImpl multihead_attention(String name,long embed_dim, long num_heads) {
+        return register(name, new MultiheadAttentionImpl(new MultiheadAttentionOptions(embed_dim, num_heads)));
+    }
+
+    public static MultiheadAttentionImpl multihead_attention(String name,long embed_dim, long num_heads,float dropout, boolean bias) {
+        return register(name, new MultiheadAttentionImpl(new MultiheadAttentionOptions(embed_dim, num_heads).embed_dim(embed_dim).num_heads(num_heads).dropout(dropout).bias(bias)));
     }
 
     public static MultiheadAttentionImpl multihead_attention(String name, MultiheadAttentionOptions options) {
         return register(name, new MultiheadAttentionImpl(options));
     }
 
-    public static MultiheadAttentionImpl multihead_attention() {
-        return create(new MultiheadAttentionImpl(new Pointer()));
+    public static MultiheadAttentionImpl multihead_attention(long embed_dim, long num_heads) {
+        return create(new MultiheadAttentionImpl(new MultiheadAttentionOptions(embed_dim, num_heads)));
+    }
+
+    public static MultiheadAttentionImpl multihead_attention(long embed_dim, long num_heads,float dropout, boolean bias) {
+        return create(new MultiheadAttentionImpl(new MultiheadAttentionOptions(embed_dim, num_heads).embed_dim(embed_dim).num_heads(num_heads).dropout(dropout).bias(bias)));
     }
 
     public static MultiheadAttentionImpl multihead_attention(MultiheadAttentionOptions options) {
@@ -2420,16 +2513,16 @@ public class nn {
     // ADAPTIVE LOG SOFTMAX WITH LOSS
     // ========================================================================
 
-    public static AdaptiveLogSoftmaxWithLossImpl adaptive_log_softmax_with_loss(String name, long nClasses, long nIn, long[] cutoffs) {
-        return register(name, new AdaptiveLogSoftmaxWithLossImpl(new AdaptiveLogSoftmaxWithLossOptions(nClasses, nIn, new LongVector(cutoffs)).n_classes(nClasses).in_features(nIn).cutoffs(new LongVector(cutoffs))));
+    public static AdaptiveLogSoftmaxWithLossImpl adaptive_log_softmax_with_loss(String name, long in_features, long n_classes, long[] cutoffs) {
+        return register(name, new AdaptiveLogSoftmaxWithLossImpl(new AdaptiveLogSoftmaxWithLossOptions(in_features, n_classes, new LongVector(cutoffs)).n_classes(n_classes).in_features(in_features).cutoffs(new LongVector(cutoffs))));
     }
 
     public static AdaptiveLogSoftmaxWithLossImpl adaptive_log_softmax_with_loss(String name, AdaptiveLogSoftmaxWithLossOptions options) {
         return register(name, new AdaptiveLogSoftmaxWithLossImpl(options));
     }
 
-    public static AdaptiveLogSoftmaxWithLossImpl adaptive_log_softmax_with_loss(long nClasses, long nIn, long[] cutoffs) {
-        return create(new AdaptiveLogSoftmaxWithLossImpl(new AdaptiveLogSoftmaxWithLossOptions(nClasses, nIn, new LongVector(cutoffs)).n_classes(nClasses).in_features(nIn).cutoffs(new LongVector(cutoffs))));
+    public static AdaptiveLogSoftmaxWithLossImpl adaptive_log_softmax_with_loss(long in_features, long n_classes, long[] cutoffs) {
+        return create(new AdaptiveLogSoftmaxWithLossImpl(new AdaptiveLogSoftmaxWithLossOptions(in_features, n_classes, new LongVector(cutoffs)).n_classes(n_classes).in_features(in_features).cutoffs(new LongVector(cutoffs))));
     }
 
     public static AdaptiveLogSoftmaxWithLossImpl adaptive_log_softmax_with_loss(AdaptiveLogSoftmaxWithLossOptions options) {
